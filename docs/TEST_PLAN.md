@@ -231,13 +231,13 @@ Honest list of what this plan does **not** prove:
 Godot 4.7.2-mono). The two skips are D1/D2, which need a display; both were run
 separately (`--self-test=click`, `--self-test=dragpath`) and **PASS**.
 
-Grown by `docs/BUILD_FLOW_PLAN.md`: C28 (the build loop).
+Grown by `docs/history/BUILD_FLOW_PLAN.md`: C28 (the build loop).
 
-Grown by `docs/LINE_PRIMITIVES_PLAN.md`: C27 (the five line primitives, two of
+Grown by `docs/history/LINE_PRIMITIVES_PLAN.md`: C27 (the five line primitives, two of
 them checked against the solver rather than the dispatch) and an eighth scene
 exercise in H.
 
-Grown by `docs/COMPONENTS_AND_POLISH_PLAN.md`: C26 (the nine new parts, asserted
+Grown by `docs/history/COMPONENTS_AND_POLISH_PLAN.md`: C26 (the nine new parts, asserted
 by effect) and H6/H7 (the two new scene exercises). The seven scene exercises:
 
 ```
@@ -283,16 +283,16 @@ a display) and F (needs the sidecar's driver stack); nothing behaved differently
 between the two engine builds. `project.godot` asks for feature `4.7`, so either
 patch release runs the project.
 
-Then again after `docs/LOOSE_ENDS_PLAN.md` landed, which added A6 and C21:
+Then again after `docs/history/LOOSE_ENDS_PLAN.md` landed, which added A6 and C21:
 `--only A,B,C,E,G,H` — **43 passed, 0 failed, 344s**.
 
-And after `UX_PLAN.md` Phase 0, which added C22: `--only A,B,C,E,G,H` —
+And after `docs/history/UX_PLAN.md` Phase 0, which added C22: `--only A,B,C,E,G,H` —
 **44 passed, 0 failed, 437s**. Separately, `check_release.py` runs 21 of the C
 checks against the *exported Windows binary*, which is the gate a release has to
 pass and is not part of this count.
 
 Grown from the 2026-08-12 snapshot (20 passed) by Phases 2, 4, 5 and 6 of
-`docs/UX_PLAN.md` landing in between: ten more headless self-tests (C10…C19,
+`docs/history/UX_PLAN.md` landing in between: ten more headless self-tests (C10…C19,
 the per-scene demo profiles, Run-mode click and hover, "Try this scene", and
 the scene-tag-set fixture check), a pairwise Edit/Run self-test (C20), a
 second robustness check for non-bit forcing (G7), and a whole new section —

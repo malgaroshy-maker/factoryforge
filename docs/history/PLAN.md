@@ -2,7 +2,7 @@
 
 *Status: living document · Last updated: 2026-08-07*
 
-See [PRD.md](PRD.md) for why, [ROADMAP.md](ROADMAP.md) for when.
+See [PRD.md](../PRD.md) for why, [ROADMAP.md](../ROADMAP.md) for when.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ See [PRD.md](PRD.md) for why, [ROADMAP.md](ROADMAP.md) for when.
 most carefully specified, because it is what lets a contributor add a driver in
 Python without touching Godot, or a part in Godot without touching Python.
 
-Protocol: [tag-bus.md](tag-bus.md). **Two engine implementations already speak
+Protocol: [tag-bus.md](../tag-bus.md). **Two engine implementations already speak
 it** — `harness/engine_stub.py` (Python) and `engine/src/TagBus/TagBusServer.cs`
 (C#) — and the sidecar cannot tell them apart. Keep it that way.
 

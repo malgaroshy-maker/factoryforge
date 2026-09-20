@@ -269,7 +269,7 @@ most likely to slip.
       single largest gap between what this project is and what anyone can use.
 
 - [x] **Nine more parts, from fifteen to twenty-four** (CP-01…CP-09, see
-      [COMPONENTS_AND_POLISH_PLAN.md](COMPONENTS_AND_POLISH_PLAN.md)) — each one
+      [COMPONENTS_AND_POLISH_PLAN.md](history/COMPONENTS_AND_POLISH_PLAN.md)) — each one
       chosen for something the library could not previously teach: a
       **VFD conveyor** whose actual speed lags the reference you gave it, a
       **pivot diverter** that deflects a carton without stopping the line, a
@@ -298,7 +298,7 @@ most likely to slip.
       looking at a control panel.
 
 - [x] **Five more parts, from twenty-four to twenty-nine** (LP-01…LP-05, see
-      [LINE_PRIMITIVES_PLAN.md](LINE_PRIMITIVES_PLAN.md)) — chosen by asking
+      [LINE_PRIMITIVES_PLAN.md](history/LINE_PRIMITIVES_PLAN.md)) — chosen by asking
       what a student *could not build* rather than by counting what was already
       there: a **blade stop**, so product can accumulate on a belt that keeps
       running; a **turntable**, so a line can turn a corner; a **measuring
@@ -314,7 +314,7 @@ most likely to slip.
       second or two and could never be restarted by the belt underneath it.
       Found by the blade stop, but it was every accumulation the library can
       express.
-- [x] **The build loop** (BF-01…BF-06, see [BUILD_FLOW_PLAN.md](BUILD_FLOW_PLAN.md))
+- [x] **The build loop** (BF-01…BF-06, see [BUILD_FLOW_PLAN.md](history/BUILD_FLOW_PLAN.md))
       — twenty-nine parts, and putting six of them in a row was still six trips
       to the palette. The part now stays in your hand after you place it, with
       the palette button lit to say which one; `Ctrl+D` lands its copy clear of
@@ -322,7 +322,7 @@ most likely to slip.
       stacking parts in one cell; and the arrow keys nudge the selection a cell
       at a time, one undo step per press.
 - [x] **A shop, and a selection that is a group** (EN-01…EN-02, ES-01…ES-05,
-      see [SHOP_AND_SELECTION_PLAN.md](SHOP_AND_SELECTION_PLAN.md)) — the line
+      see [SHOP_AND_SELECTION_PLAN.md](history/SHOP_AND_SELECTION_PLAN.md)) — the line
       stands on poured concrete with a joint around every two-metre bay, inside
       clad walls five metres to the eaves, both generated in code; and Shift+click
       or a Ctrl+drag box selects several parts, which then move, nudge, rotate,
@@ -333,14 +333,14 @@ most likely to slip.
       underneath it. True for as long as dragging has existed, and the same
       collision was on the setpoint pot in Run mode.
 - [x] **Reading what you built, and getting around it** (NV-01…NV-04, see
-      [NAMES_AND_VIEWS_PLAN.md](NAMES_AND_VIEWS_PLAN.md)) — `N` floats every
+      [NAMES_AND_VIEWS_PLAN.md](history/NAMES_AND_VIEWS_PLAN.md)) — `N` floats every
       part's instance id over it, which is the tag prefix a PLC program is
       written against and previously took one click per part to read;
       `Ctrl+A`, `Ctrl+C` and `Ctrl+V` select everything and carry a section
       into another scene; and `1`-`4` snap the camera to iso, top, front and
       side without losing what was framed.
 - [x] **The tag inspector, for scenes with twenty-seven tags in them**
-      (TI-01…TI-04, see [TAG_INSPECTOR_PLAN.md](TAG_INSPECTOR_PLAN.md)) — a
+      (TI-01…TI-04, see [TAG_INSPECTOR_PLAN.md](history/TAG_INSPECTOR_PLAN.md)) — a
       search box, groups per machine that collapse, a filter for one half of
       the I/O at a time, and a forced tag that marks its own name with one
       button to release every one of them. That last is the one that matters:
@@ -348,7 +348,7 @@ most likely to slip.
       purpose, and it explains more "why is my program not working" than
       anything else here.
 - [x] **Every template says what it is asking you to build** (BR-01…BR-04, see
-      [TASK_BRIEFS_PLAN.md](TASK_BRIEFS_PLAN.md)) — eight scenes, each chosen
+      [TASK_BRIEFS_PLAN.md](history/TASK_BRIEFS_PLAN.md)) — eight scenes, each chosen
       to teach something specific, and the app never said what: the lesson
       lived in `tools/try_scene.py`, a Python test harness. `T` now opens the
       task, the tags to use and how you know it works, and every tag a brief

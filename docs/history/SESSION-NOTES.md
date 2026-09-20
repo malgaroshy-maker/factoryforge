@@ -1,6 +1,6 @@
 # Session notes
 
-New agents should read [`../AGENTS.md`](../AGENTS.md) first — it has the paths,
+New agents should read [`AGENTS.md`](../../AGENTS.md) first — it has the paths,
 commands, and the gotcha list. This file is the narrative of what happened and
 why, kept because the *reasoning* behind several decisions is not obvious from
 the code.
@@ -21,7 +21,7 @@ clean, verified end to end against a real S7-1500.
 | M5 — Siemens breadth | ✅ complete |
 | M6 — v1 release | ✅ complete |
 
-Post-v1 work is tracked in [`ROADMAP.md`](ROADMAP.md); the narrative below is
+Post-v1 work is tracked in [`ROADMAP.md`](../ROADMAP.md); the narrative below is
 kept per session because the *reasoning* is not obvious from the code.
 
 ---
@@ -120,7 +120,7 @@ Recommended: (1) now, (3) when M3 revisits the geometry anyway.
 
 ## Next
 
-See "Next steps" in [`../AGENTS.md`](../AGENTS.md).
+See "Next steps" in [`AGENTS.md`](../../AGENTS.md).
 
 
 ---

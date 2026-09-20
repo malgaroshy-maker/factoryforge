@@ -223,15 +223,13 @@ See [Getting Started](docs/GETTING_STARTED.md#-connecting-a-scene-you-built-your
 | 🛠️ **[PART_AUTHORING.md](docs/PART_AUTHORING.md)** | Guide & template for building custom 3D factory components |
 | 🔌 **[DRIVER_AUTHORING.md](docs/DRIVER_AUTHORING.md)** | Guide for adding custom Python protocol drivers |
 | ✅ **[TEST_PLAN.md](docs/TEST_PLAN.md)** | What is tested, what is not, and the last run's results |
-| 📦 **[PACKAGING.md](docs/PACKAGING.md)** | Building a distributable release — verified end to end |
-| 📋 **[PLAN.md](docs/PLAN.md)** | Architectural specifications, design choices, and status |
-| 🧹 **[LOOSE_ENDS_PLAN.md](docs/LOOSE_ENDS_PLAN.md)** | Claims without code, controls without effect — what a full sweep of the app found, and the plan to close it |
-| 🧩 **[COMPONENTS_AND_POLISH_PLAN.md](docs/COMPONENTS_AND_POLISH_PLAN.md)** | The nine parts that took the library from fifteen to twenty-four, why each one earns its place, and the presentation pass alongside them |
-| 🧱 **[LINE_PRIMITIVES_PLAN.md](docs/LINE_PRIMITIVES_PLAN.md)** | The five parts after those, chosen by what a student *could not build*: accumulation, a rotary index, distance instead of time, cooling, and a permissive a tie-down cannot defeat |
+| 📦 **[PACKAGING.md](docs/PACKAGING.md)** | Building a distributable release — verified end to end, never published |
+| 🔨 **[HARDENING_PLAN.md](docs/HARDENING_PLAN.md)** | The open work list, HP-01…HP-52, and the release gate inside it |
 | 🗺️ **[ROADMAP.md](docs/ROADMAP.md)** | Milestone completion tracking |
 | 📑 **[PRD.md](docs/PRD.md)** | Problem statement, target audience, and success criteria |
 | ⚡ **[tag-bus.md](docs/tag-bus.md)** | WebSocket tag bus protocol specification |
 | 🤖 **[AGENTS.md](AGENTS.md)** | Developer cheat sheet, paths, and hardware gotchas |
+| 📚 **[docs/history/](docs/history/)** | Thirteen completed plan documents — why each piece was built the way it was. History, not instructions |
 
 ---
 

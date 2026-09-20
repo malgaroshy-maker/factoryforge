@@ -1,7 +1,13 @@
 # AGENTS.md — handoff for the next agent
 
-Read this first, then [`docs/PLAN.md`](docs/PLAN.md) and
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+Read this first, then [`docs/HARDENING_PLAN.md`](docs/HARDENING_PLAN.md) for what
+is open and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
+
+The thirteen completed plan documents live in
+[`docs/history/`](docs/history/) — including `PLAN.md`, which this line used to
+send you to first. They are worth reading for *why* something was built the way
+it was, and they are not current instructions; the figures in them are the
+figures of their own day.
 
 **FactoryForge** is a free, open 3D factory simulator for learning PLC
 programming — a replacement for Factory I/O, which is stagnant, closed to custom
