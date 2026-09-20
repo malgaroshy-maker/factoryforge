@@ -1,0 +1,80 @@
+name: Driver request
+description: A protocol the sidecar does not speak yet
+labels: ["driver"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A driver is the cheap way into this project: one Python module and one
+        import line, no Godot, no C#, no 3D. `docs/DRIVER_AUTHORING.md` is the
+        whole guide and it is short.
+
+        Worth knowing before you ask: the OPC UA **server** driver already
+        exposes the scene to anything that speaks OPC UA client-side, which is
+        most SCADA and Node-RED. So a protocol reachable through a Node-RED flow
+        is already reachable — a new driver removes a hop rather than enabling
+        something impossible. Say below whether that hop is the problem.
+
+  - type: input
+    id: protocol
+    attributes:
+      label: Which protocol
+      placeholder: MQTT, EtherNet/IP, BACnet/IP, Beckhoff ADS...
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: What does it let somebody do that they cannot do today
+      description: >
+        The controller, course or piece of hardware this unblocks. If the answer
+        is "it would be more direct than going through Node-RED", that is a fine
+        answer — say it plainly and say what the hop costs you.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: How does it address things
+      description: >
+        The `Driver` ABC was written against request/response protocols over an
+        address space. A pub/sub protocol with no addressing at all is a
+        different shape, and if the ABC needs changing to fit yours, **that is the
+        finding** and it is worth knowing early — before contributors write more
+        drivers against it.
+      placeholder: |
+        Topic-based, no addressing. factoryforge/<scene>/tag/<tag_id>, retained
+        for simulator-owned inputs.
+
+  - type: input
+    id: library
+    attributes:
+      label: Python library it would use
+      description: >
+        Optional drivers guard their own third-party import and register anyway,
+        so they can explain themselves at connect time instead of vanishing from
+        the CLI. Name the package and its extra.
+      placeholder: aiomqtt, as sidecar[mqtt]
+
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who would write it
+      options:
+        - I would like to write it myself
+        - I would like to write it with some guidance
+        - I am suggesting it, not volunteering
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: hardware
+    attributes:
+      label: Testing
+      options:
+        - label: >
+            I have a controller or simulator that speaks this protocol and can
+            test against it. (Nobody on this project has physical PLC hardware,
+            so this genuinely matters.)

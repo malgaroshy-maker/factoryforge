@@ -1,0 +1,19 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/malgaroshy-maker/factory/security/advisories/new
+    about: >
+      Do not open a public issue for a vulnerability. Report it privately here.
+      SECURITY.md lists what is in scope and what is already known.
+  - name: Getting it running
+    url: https://github.com/malgaroshy-maker/factory/blob/master/docs/GETTING_STARTED.md
+    about: >
+      Setup, connecting a PLC, and the connect-vs-demo distinction that costs
+      people an afternoon. There is no release to download yet; you build from
+      source.
+  - name: What is already known to be broken
+    url: https://github.com/malgaroshy-maker/factory/blob/master/docs/HARDENING_PLAN.md
+    about: >
+      Fifty-two open items from three reviews, each with the file and line it
+      lives at. Worth a look before filing — your bug may already be in there
+      with a diagnosis.

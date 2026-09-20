@@ -1,0 +1,82 @@
+name: Part request
+description: A machine or device the library cannot teach yet
+labels: ["part"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Parts here are chosen by **what a student cannot currently build**, not by
+        what another simulator has. The five most recent ones came from asking
+        that question directly: there was no way to accumulate product on a
+        running belt, no way to turn a line a corner, no way to track product by
+        distance instead of by a timer.
+
+        So the question below that matters most is the second one. A part that
+        duplicates something the library already does, with different geometry,
+        is the drift the PRD calls out by name.
+
+        If you are willing to write it yourself, say so — and read
+        `docs/PART_AUTHORING.md` first, including its table of the eight shared
+        files a part has to touch today. That cost is real and CONTRIBUTING.md
+        does not hide it.
+
+  - type: input
+    id: part
+    attributes:
+      label: What is the part
+      placeholder: Rotary index table, ultrasonic level sensor, bowl feeder...
+    validations:
+      required: true
+
+  - type: textarea
+    id: cannot-build
+    attributes:
+      label: What can a student not build without it
+      description: >
+        The exercise or the control problem that is currently impossible or
+        dishonest to set up. Be specific about the *logic* it would let somebody
+        write, not the object it would put on screen.
+      placeholder: |
+        There is no way to build a merge — two lanes feeding one — so nothing in
+        the library can teach arbitration between two requests for the same
+        resource, which is most of what a real conveyor junction program is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tags
+    attributes:
+      label: What I/O would it have
+      description: >
+        The tags a PLC program would drive and read, with type and direction.
+        Direction is from the **controller's** point of view: an Output is
+        something the PLC writes, an Input is something the simulation writes.
+      placeholder: |
+        merge.allow_a   Bit   Output
+        merge.allow_b   Bit   Output
+        merge.at_a      Bit   Input
+        merge.at_b      Bit   Input
+        merge.count     Int   Input
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: How should it fail
+      description: >
+        Every part with a drive should be breakable, and it should fail *where it
+        stands* rather than somewhere safe — a jammed cylinder freezes mid-stroke,
+        a seized valve holds its opening. "Returns home" and "fails closed" teach
+        nothing. What is the instructive failure for this part?
+
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who would write it
+      options:
+        - I would like to write it myself
+        - I would like to write it with some guidance
+        - I am suggesting it, not volunteering
+    validations:
+      required: true

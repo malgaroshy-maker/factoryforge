@@ -1,0 +1,105 @@
+name: Bug report
+description: Something does not do what it says it does
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful bug report here is one that names the command you ran and
+        pastes what it printed. Several defects in this project's history looked
+        like one thing and were another — a run that produced no output was a
+        stale binary, an idle scene that looked like a hang was an exception in a
+        loop — so the raw output is worth more than your diagnosis of it.
+
+        **Not a bug report:** a security issue. See SECURITY.md and report it
+        privately instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what the app or the command did instead.
+      placeholder: |
+        Placed two conveyors end to end, ran the scene, and the cartons stopped
+        at the joint on a belt that was visibly still running.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce it
+      description: >
+        Numbered steps from a fresh start. If it is intermittent, say so and say
+        roughly how often — "about half of runs" is a useful fact, not a vague
+        one.
+      placeholder: |
+        1. python run.py
+        2. Open the "Sorting by height" template
+        3. Press F1 to enter Operate mode
+        4. Click Start
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Console output
+      description: >
+        Whatever the terminal printed. If the engine was launched from run.py,
+        that window has it. Trim it if it is enormous, but keep any stack trace
+        whole — the first line of one is rarely the useful line.
+      render: text
+
+  - type: input
+    id: scene
+    attributes:
+      label: Which scene
+      description: A template id, "a scene I built", or "the start screen".
+      placeholder: heat-treat-station
+
+  - type: dropdown
+    id: driver
+    attributes:
+      label: Was a driver connected
+      options:
+        - No driver — engine only
+        - opcua-client
+        - opcua-server
+        - plcsim-advanced
+        - s7-snap7
+        - modbus-tcp
+        - mock
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >
+        OS, Godot version, .NET SDK version, Python version. `python run.py`
+        prints the Godot build it found.
+      placeholder: |
+        Windows 11, Godot 4.7.2-stable_mono, .NET 8.0.x, Python 3.12.3
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: >
+            `dotnet build` in `engine/` succeeded. A failed build leaves the
+            previous binary in place and Godot runs it without complaint, which
+            looks exactly like a logic error.
+        - label: >
+            I ran `python -m pytest -q` and said above if anything failed.

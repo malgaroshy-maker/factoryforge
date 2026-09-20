@@ -233,6 +233,25 @@ See [Getting Started](docs/GETTING_STARTED.md#-connecting-a-scene-you-built-your
 
 ---
 
+## 🤝 Contributing
+
+Nobody outside the project has contributed yet, so
+[CONTRIBUTING.md](CONTRIBUTING.md) is written to tell you what it actually costs
+rather than to sell you on it. The short version: **a driver is cheap** — one
+Python module, no Godot and no C# — and **a part is not**, because it still
+touches eight shared files besides its own class. That is a design problem, it is
+written down, and HP-34 in the [hardening plan](docs/HARDENING_PLAN.md) is the
+work to reduce it to one file plus a catalog entry.
+
+Issue templates for a [bug](.github/ISSUE_TEMPLATE/bug_report.yml), a
+[part](.github/ISSUE_TEMPLATE/part_request.yml) and a
+[driver](.github/ISSUE_TEMPLATE/driver_request.yml). Security issues go through
+[SECURITY.md](SECURITY.md), not the issue tracker — it also lists what is already
+known, including a Modbus bind default that is wrong today and being fixed under
+HP-22. Behaviour here: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+---
+
 ## ⚖️ License
 
 Distributed under the **MIT License**. See `LICENSE` for more information.
