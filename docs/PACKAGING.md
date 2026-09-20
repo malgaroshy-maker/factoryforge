@@ -105,8 +105,11 @@ FactoryForge-windows/
   README.md, LICENSE
 ```
 
-The five scene templates are `res://` resources and travel **inside** the
-binary; they are deliberately not in that list.
+The scene templates — eight of them, listed in `engine/templates/manifest.json`
+— are `res://` resources and travel **inside** the binary; they are deliberately
+not in that list. (This line said "five" until 2026-09-21, which was the count
+when it was written and has been wrong since the sixth template landed. The
+manifest is the one place that knows.)
 
 ### One file, or one folder — one folder
 

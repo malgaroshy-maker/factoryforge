@@ -75,6 +75,7 @@ The templates each teach one thing:
 | **Light curtain sorting** | Sorting on a measurement rather than two bits |
 | **Roller line with weighing** | A checkweigher and an inductive sensor that sees metal only |
 | **Pick & place cell** | A gantry with three motions to sequence, on feedback rather than timers, and a grip that reports honestly when it caught nothing |
+| **Accumulation buffer** | Product piles up behind a blade stop on a belt that never stops, and is released a batch at a time — timed by encoder pulses, so the batch stays the same size when somebody turns the drive up. A timer would not. |
 | **Heat treat station** | A thermal plant with real inertia — proportional control alone visibly parks short of setpoint, and you can measure by how much |
 
 To skip the start screen — scripting a run, or grabbing a screenshot:
