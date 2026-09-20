@@ -112,9 +112,10 @@ and saying so here is cheaper than letting you click through to find out.
 
 The machinery is built and tested — `python tools/build_release.py` exports the
 engine and freezes the sidecar, and on Windows **`build_windows.bat`** does the
-same double-clickably and then runs the release gate: 25 headless self-tests
-against the *exported binary*, not against the checkout. It has been run end to
-end on Windows and Linux. What has never happened is a tag and a publish. See
+same double-clickably and then runs the release gate: every headless self-test
+in `tools/packaging/check_release.py` against the *exported binary*, not against
+the checkout. It has been run end to end on Windows and Linux, last on
+2026-09-02. What has never happened is a tag and a publish. See
 [PACKAGING.md](docs/PACKAGING.md).
 
 When the first tagged release lands, the block below becomes true and this

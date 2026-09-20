@@ -85,10 +85,18 @@ themselves worked fine. So end-to-end coverage is not optional here.
 
 ### C-release. The same self-tests, against a built binary
 
-`tools/packaging/check_release.py --target windows|linux` runs 21 of the C
-checks against `dist/<target>/FactoryForge*` instead of a source checkout, and
-is the gate on `.github/workflows/release.yml`. Green on both platforms on
-2026-08-24: Windows 109 MB, Linux 74 MB, 24 self-tests each.
+`tools/packaging/check_release.py --target windows|linux` runs the self-tests
+named in its own `SELF_TESTS` list against `dist/<target>/FactoryForge*` instead
+of a source checkout, and is the gate on `.github/workflows/release.yml`. That
+list is **27** entries today; read it there rather than from here, because it
+grows with every plan that adds a self-test and every figure written down
+elsewhere has gone stale.
+
+Green on both platforms on 2026-08-24 (Windows 109 MB, Linux 74 MB, 24
+self-tests each) and again on 2026-09-02 (25). **It has not been run since**,
+and `lineparts` and `buildflow` were added to the list afterwards — so the two
+newest checks in the release gate have never actually been run against an
+exported binary.
 
 The distinction is the point: a checkout can pass every C check while the
 exported binary fails. Two of them read checked-in fixtures, which used to sit
@@ -214,8 +222,9 @@ Honest list of what this plan does **not** prove:
 - **Long runs with a PLC.** The longest verified run is 45 seconds.
 - **Packaging — but not for the reason this line used to give.** It said no
   binary had ever been exported. That stopped being true: both platforms build
-  from clean runners and `check_release.py` runs 25 headless self-tests against
-  the **exported binary**, which is a stronger check than anything in this plan
+  from clean runners and `check_release.py` runs the whole self-test list
+  against the **exported binary**, which is a stronger check than anything in
+  this plan
   (`docs/PACKAGING.md`). What is still unproven is the *distribution* — nothing
   has ever been tagged, published or downloaded by anyone, so "the archive a
   stranger gets works on their machine" remains untested. HP-09.

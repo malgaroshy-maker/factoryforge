@@ -457,10 +457,13 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
    *Built and verified.* `python tools/build_release.py` exports the engine,
    freezes the sidecar with PyInstaller and writes
    `dist/FactoryForge-<platform>.zip`; on Windows `build_windows.bat` does the
-   same double-clickably and then runs the release gate — 25 headless self-tests
-   against the **exported binary**, not against the checkout. Verified end to
-   end locally on 2026-08-23, in CI on 2026-08-24, and again on 2026-09-02 after
-   the nine new parts, on Windows and Linux both. The question this entry once
+   same double-clickably and then runs the release gate — every self-test in
+   `check_release.py`'s `SELF_TESTS` list, headless, against the **exported
+   binary** rather than the checkout. Verified end to end locally on 2026-08-23,
+   in CI on 2026-08-24, and again on 2026-09-02 after the nine new parts, on
+   Windows and Linux both — 25 of them on that last run. The list is 27 now and
+   has not been run since, so `lineparts` and `buildflow` have never met an
+   exported binary. The question this entry once
    called unanswered — how to ship the Python sidecar — was answered by freezing
    it; see `docs/PACKAGING.md`.
 

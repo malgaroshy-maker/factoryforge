@@ -2,8 +2,14 @@
 
 *Verified end to end on 2026-08-23 locally, on 2026-08-24 in CI, and again on
 2026-09-02 after the nine new parts landed: both platforms build from scratch on
-clean runners and pass **25** headless self-tests against the exported binary.
-Windows 109 MB + 20 MB sidecar; Linux 74 MB + 31 MB sidecar.*
+clean runners and pass every headless self-test in the release gate against the
+exported binary — **25** of them on that last run. Windows 109 MB + 20 MB
+sidecar; Linux 74 MB + 31 MB sidecar.*
+
+*The gate is **27** today (`SELF_TESTS` in `tools/packaging/check_release.py`).
+`lineparts` and `buildflow` joined it after 2026-09-02 and **no release build
+has been run since**, so those two have never been exercised against an exported
+binary. Nothing suggests they will fail; nothing has checked.*
 
 Running FactoryForge from a checkout means installing Godot, the .NET 8 SDK and
 Python first — a real barrier for someone who wanted to learn ladder logic, not
@@ -179,7 +185,8 @@ them being headless:
 ./dist/windows/FactoryForge.exe --headless -- --self-test=scenes
 ```
 
-All 25 pass against the packaged Windows build, including the two that read
+All of them passed against the packaged Windows build on the last run —
+25 at that point, 27 in the list now — including the two that read
 checked-in fixtures. Those two used to fail in an export for two separate
 reasons, both now fixed: the fixtures lived outside `res://` at a path that does
 not exist beside a binary, and even once moved in, `System.IO.File` cannot read
