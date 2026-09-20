@@ -1,6 +1,0 @@
-
-DRIVERS = {
-    "sorting-by-height": drive_sorting_by_height,
-    "start-stop-station": drive_start_stop_station,
-    "tank-level-control": drive_tank_level_control,
-    "light-curtain-sorting": drive_light_curtain_sorting,
