@@ -57,6 +57,13 @@ public partial class Main : Node
     /// ask what a scene exposes without opening a WebSocket. See UX-14.</summary>
     private bool _printTags;
 
+    /// <summary>Tag bus port, overriding TagBusServer's 7411 default. Every
+    /// self-test binds the bus, so two engine runs on one machine collide on
+    /// the default port: the loser retries for three seconds, gives up, and
+    /// then simulates perfectly while listening on nothing. --bus-port=N lets
+    /// concurrent runs coexist. -1 means "leave the default alone".</summary>
+    private int _busPort = -1;
+
     public override void _Ready()
     {
         foreach (var arg in OS.GetCmdlineUserArgs())
@@ -83,6 +90,8 @@ public partial class Main : Node
                 _startPaused = true;
             else if (arg == "--print-tags")
                 _printTags = true;
+            else if (arg.StartsWith("--bus-port="))
+                _busPort = arg.Substring("--bus-port=".Length).ToInt();
         }
 
         // A fixed regression scene, not a template — the deterministic
@@ -114,6 +123,7 @@ public partial class Main : Node
         else SortingTags.Declare(tags);
 
         _bus = new TagBusServer { Name = "TagBus", Tags = tags, SceneName = SceneName };
+        if (_busPort > 0) _bus.Port = _busPort;
         AddChild(_bus);
 
         _sim = new SimulationControls { Name = "SimulationControls" };
@@ -147,7 +157,8 @@ public partial class Main : Node
         // template while the bus itself correctly told drivers otherwise (§2.10).
         GD.Print($"FactoryForge engine ready — {(_deterministic ? "DETERMINISTIC" : "PHYSICS")} " +
                  $"scene '{_bus.SceneName}', {tags.Count} tags" +
-                 (_bus.IsListening ? "" : "  [NO TAG BUS — port in use, drivers cannot connect]"));
+                 (_bus.IsListening ? $", bus on {_bus.Port}"
+                                   : "  [NO TAG BUS — port in use, drivers cannot connect]"));
 
         if (_printTags)
         {
