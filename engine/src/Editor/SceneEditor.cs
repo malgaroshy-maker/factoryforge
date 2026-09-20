@@ -2427,9 +2427,19 @@ public partial class SceneEditor : Node3D
         var data = new SceneData { Name = SceneName, Parts = CapturePartsSnapshot() };
         string json = data.ToJson();
 
-        var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write);
+        // Write somewhere else first (HP-47). Opening the destination for
+        // writing *truncates it*, so the old code destroyed the last good scene
+        // file before it had written a single byte of the new one: a crash, a
+        // full disk or a drive that goes away halfway through left a truncated
+        // file where a working scene used to be, and that file was usually the
+        // only copy. Nothing touches the destination until a complete, verified
+        // file exists beside it.
+        string partial = path + ".part";
+
+        var file = Godot.FileAccess.Open(partial, Godot.FileAccess.ModeFlags.Write);
         if (file is null)
-            return SaveDidNotLand(path, $"could not open it for writing ({Godot.FileAccess.GetOpenError()})");
+            return SaveDidNotLand(path, $"could not open {partial} for writing " +
+                                        $"({Godot.FileAccess.GetOpenError()})");
 
         file.StoreString(json);
         // Before Close(), because Close() clears the file's error state — and
@@ -2439,11 +2449,54 @@ public partial class SceneEditor : Node3D
         file.Close();
 
         if (wrote != Error.Ok)
+        {
+            Discard(partial);
             return SaveDidNotLand(path, $"the write failed ({wrote})");
+        }
+
+        // Read it back before believing it. A short write is what a disk that
+        // filled up during the save looks like, and on some filesystems it does
+        // not raise an error at all — the bytes simply are not there.
+        using (var check = Godot.FileAccess.Open(partial, Godot.FileAccess.ModeFlags.Read))
+        {
+            if (check is null)
+            {
+                Discard(partial);
+                return SaveDidNotLand(path, "the file it wrote could not be read back " +
+                                            $"({Godot.FileAccess.GetOpenError()})");
+            }
+
+            string readBack = check.GetAsText();
+            if (readBack != json)
+            {
+                Discard(partial);
+                return SaveDidNotLand(path,
+                    $"only {readBack.Length} of {json.Length} characters reached the disk");
+            }
+        }
+
+        var moved = Godot.DirAccess.RenameAbsolute(partial, path);
+        if (moved != Error.Ok)
+        {
+            // The destination is still whatever it was. Say so plainly: "could
+            // not replace" and "could not write" are different problems and
+            // send you to different places.
+            Discard(partial);
+            return SaveDidNotLand(path, $"the finished file could not be moved into place ({moved}); " +
+                                        "the previous scene file is untouched");
+        }
 
         IsDirty = false;
         GD.Print($"Saved scene to {path} ({_placedParts.Count} parts)");
         return true;
+    }
+
+    /// <summary>Drop a half-written file rather than leaving it beside the real
+    /// one, where the next person to look at the directory has to guess which of
+    /// the two is their scene.</summary>
+    private static void Discard(string partial)
+    {
+        if (Godot.FileAccess.FileExists(partial)) Godot.DirAccess.RemoveAbsolute(partial);
     }
 
     /// <summary>Report a save that did not happen. <see cref="IsDirty"/> is

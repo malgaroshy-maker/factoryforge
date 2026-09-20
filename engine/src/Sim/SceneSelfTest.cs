@@ -62,6 +62,7 @@ public partial class SceneSelfTest : Node
             CheckClearUndo();
             CheckRotateAndDuplicate();
             CheckASaveThatCannotLandSaysSo();
+            CheckAFailedSaveLeavesTheLastGoodFile();
         }
         catch (System.Exception ex)
         {
@@ -481,6 +482,76 @@ public partial class SceneSelfTest : Node
         Expect(Editor.SaveSceneToFile("user://selftest_scene_ok.json"),
                "a save to a writable path still reports success");
         Expect(!Editor.IsDirty, "and clears the unsaved marker");
+    }
+
+    /// <summary>
+    /// HP-47. A save that does not complete must leave the file that was
+    /// already there.
+    ///
+    /// Opening a file for writing truncates it, so the old code destroyed the
+    /// last good scene before writing a byte of the new one. Any interruption
+    /// after that point — a crash, a full disk, a drive pulled out — left a
+    /// truncated file where a working scene used to be, and for most people
+    /// that file is the only copy.
+    ///
+    /// The interruption is arranged by putting a *directory* where the
+    /// half-written file wants to go. It is a stand-in for "the write did not
+    /// complete", and what it proves is the ordering: the destination is not
+    /// opened for writing at all until a finished file exists beside it.
+    /// </summary>
+    private void CheckAFailedSaveLeavesTheLastGoodFile()
+    {
+        const string target = "user://selftest_scene_atomic.json";
+        const string partial = target + ".part";
+
+        Expect(Editor!.SaveSceneToFile(target), "the first save lands");
+        Expect(!Godot.FileAccess.FileExists(partial),
+               "and leaves no half-written file beside the real one");
+
+        string good = ReadAll(target);
+        Expect(good.Length > 0, "the saved scene has content to compare against");
+
+        // Make the scene genuinely different, so "the old file survived" cannot
+        // be satisfied by a save that wrote the same bytes back.
+        int wasCount = Editor.PlacedPartIds().Count;
+        Editor.SelectPartByIndex(0);
+        Editor.DeleteSelectedPart();
+        Expect(Editor.PlacedPartIds().Count == wasCount - 1,
+               "the scene changed between the two saves");
+
+        // Block the half-written file's path with a directory nothing can open
+        // as a file.
+        Expect(Godot.DirAccess.MakeDirAbsolute(partial) == Error.Ok,
+               "the interruption can be arranged");
+
+        bool landed = Editor.SaveSceneToFile(target);
+        Expect(!landed, "a save that cannot complete reports failure");
+        Expect(Editor.IsDirty, "and leaves the scene marked unsaved");
+
+        string after = ReadAll(target);
+        Expect(after == good,
+               $"and the scene file that was already there is untouched "
+               + $"({after.Length} characters, was {good.Length})");
+        Expect(SceneData.FromJson(after) is not null,
+               "so the last good scene is still loadable");
+
+        // Clear the blockage and save again: replacing a file that already
+        // exists is the ordinary case, and a rename-into-place that only worked
+        // onto an empty slot would break every save after the first.
+        Godot.DirAccess.RemoveAbsolute(partial);
+
+        Expect(Editor.SaveSceneToFile(target), "and a save over the existing file still lands");
+        string replaced = ReadAll(target);
+        Expect(replaced != good, "replacing it actually changed the file");
+        Expect(SceneData.FromJson(replaced)?.Parts.Count == wasCount - 1,
+               "with the scene as it now stands");
+        Expect(!Godot.FileAccess.FileExists(partial), "and no half-written file left over");
+    }
+
+    private static string ReadAll(string path)
+    {
+        using var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Read);
+        return file?.GetAsText() ?? "";
     }
 
     private void ExpectNear(IDictionary<string, string> props, string key, float want, string type)
