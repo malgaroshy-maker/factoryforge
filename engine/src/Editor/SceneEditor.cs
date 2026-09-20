@@ -61,6 +61,12 @@ public partial class SceneEditor : Node3D
     /// <see cref="SelectionRectUI"/>.</summary>
     [Signal] public delegate void SelectionRectChangedEventHandler(Rect2 rect, bool active);
 
+    /// <summary>A save that did not land, with the reason. Raised rather than
+    /// only logged: somebody who has just pressed Save is looking at the window,
+    /// not at the console, and the old code told them "Saved scene" either way
+    /// (HP-01).</summary>
+    [Signal] public delegate void SaveFailedEventHandler(string path, string problem);
+
     private string? _activePartType;
     private Node3D? _previewNode;
     private float _previewRotationY;
@@ -2394,7 +2400,23 @@ public partial class SceneEditor : Node3D
         LoadSceneFromFile(path);
     }
 
-    public void SaveSceneToFile(string path = "user://custom_scene.json")
+    /// <summary>
+    /// Write the scene to disk. Returns false if it did not land.
+    ///
+    /// It used to return nothing and report success unconditionally: the open
+    /// was <c>file?.StoreString(json)</c>, so a path that could not be opened at
+    /// all took the null-conditional branch and fell straight through to
+    /// <c>IsDirty = false</c> and "Saved scene to …". A read-only directory, a
+    /// removed USB stick or a full disk all printed the same cheerful line, and
+    /// the title bar stopped saying there was anything unsaved — which is the
+    /// one signal a person has that their afternoon is still only in memory
+    /// (HP-01).
+    ///
+    /// On failure <see cref="IsDirty"/> is left alone and
+    /// <see cref="SaveFailed"/> is raised, because the console is not where
+    /// somebody who just pressed Save is looking.
+    /// </summary>
+    public bool SaveSceneToFile(string path = "user://custom_scene.json")
     {
         // Name the scene after the file it lives in, so saving as "palletiser"
         // makes the bus report "palletiser" rather than every scene claiming to
@@ -2403,12 +2425,36 @@ public partial class SceneEditor : Node3D
         if (stem.Length > 0 && stem != "custom_scene") SceneName = stem;
 
         var data = new SceneData { Name = SceneName, Parts = CapturePartsSnapshot() };
-
         string json = data.ToJson();
-        using var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write);
-        file?.StoreString(json);
+
+        var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write);
+        if (file is null)
+            return SaveDidNotLand(path, $"could not open it for writing ({Godot.FileAccess.GetOpenError()})");
+
+        file.StoreString(json);
+        // Before Close(), because Close() clears the file's error state — and
+        // after StoreString, because that is the call that can fail on a full
+        // disk or a drive that has gone away mid-write.
+        var wrote = file.GetError();
+        file.Close();
+
+        if (wrote != Error.Ok)
+            return SaveDidNotLand(path, $"the write failed ({wrote})");
+
         IsDirty = false;
         GD.Print($"Saved scene to {path} ({_placedParts.Count} parts)");
+        return true;
+    }
+
+    /// <summary>Report a save that did not happen. <see cref="IsDirty"/> is
+    /// deliberately untouched: the work is still unsaved and the title has to
+    /// keep saying so.</summary>
+    private bool SaveDidNotLand(string path, string why)
+    {
+        GD.PushError($"Save failed: {path} — {why}");
+        GD.PrintErr($"Could not save scene to {path}: {why}");
+        EmitSignal(SignalName.SaveFailed, path, why);
+        return false;
     }
 
     public void LoadSceneFromFile(string path = "user://custom_scene.json")

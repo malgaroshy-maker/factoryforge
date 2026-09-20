@@ -61,6 +61,7 @@ public partial class SceneSelfTest : Node
             CheckDispatchSurvives();
             CheckClearUndo();
             CheckRotateAndDuplicate();
+            CheckASaveThatCannotLandSaysSo();
         }
         catch (System.Exception ex)
         {
@@ -445,6 +446,41 @@ public partial class SceneSelfTest : Node
         Editor.Undo();
         Expect(Editor.PlacedPartIds().ToHashSet().SetEquals(beforeDuplicate),
                "undoing a duplicate removes exactly the part it added");
+    }
+
+    /// <summary>
+    /// HP-01. A save that cannot land has to say so, and has to leave the title
+    /// bar saying there are unsaved changes.
+    ///
+    /// The old code was <c>file?.StoreString(json)</c> followed unconditionally
+    /// by <c>IsDirty = false</c> and "Saved scene to …", so a path that could
+    /// not be opened at all reported success and cleared the one indicator a
+    /// person has that their work is still only in memory.
+    ///
+    /// The unwritable path here is a file *inside* a file: `user://` exists, the
+    /// scene file in it exists, and nothing can be created underneath it on any
+    /// filesystem. No permissions to set up, no platform-specific read-only
+    /// directory, and it fails at the open rather than part-way through.
+    /// </summary>
+    private void CheckASaveThatCannotLandSaysSo()
+    {
+        Editor!.MarkDirty();
+        Expect(Editor.IsDirty, "the scene starts this check with unsaved changes");
+
+        string impossible = $"{ScenePath}/not_a_directory/scene.json";
+        bool reported = Editor.SaveSceneToFile(impossible);
+
+        Expect(!reported, "a save to a path that cannot be opened reports failure");
+        Expect(Editor.IsDirty,
+               "and leaves the scene marked unsaved, so the title bar still says so");
+        Expect(!Godot.FileAccess.FileExists(impossible),
+               "and wrote nothing");
+
+        // The ordinary path still works, or the check above would pass for a
+        // save that had simply stopped working.
+        Expect(Editor.SaveSceneToFile("user://selftest_scene_ok.json"),
+               "a save to a writable path still reports success");
+        Expect(!Editor.IsDirty, "and clears the unsaved marker");
     }
 
     private void ExpectNear(IDictionary<string, string> props, string key, float want, string type)

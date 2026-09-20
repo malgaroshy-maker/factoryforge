@@ -379,11 +379,17 @@ public partial class Main : Node
         AddChild(idleHint);
 
         var toolbarUI = new SceneToolbarUI { Name = "SceneToolbarUI" };
+        // A save that failed must not be remembered as a recent scene either:
+        // the start screen would then offer a file that is not there, or an
+        // older one wearing the name of work that never reached the disk.
         toolbarUI.SaveRequested += (path) =>
         {
-            editor.SaveSceneToFile(path);
-            StartScreenUI.Remember(path);
+            if (editor.SaveSceneToFile(path)) StartScreenUI.Remember(path);
         };
+        editor.SaveFailed += (path, problem) =>
+            EditorConfirm.Tell(this, "Could not save the scene",
+                $"'{path}' was not written: {problem}.\n\n" +
+                "Your scene is still open and still unsaved. Try another location.");
         toolbarUI.LoadRequested += (path) =>
         {
             void DoLoad()

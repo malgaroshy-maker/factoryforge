@@ -22,4 +22,21 @@ public static class EditorConfirm
         parent.AddChild(dialog);
         dialog.PopupCentered();
     }
+
+    /// <summary>Say something went wrong, where the person is actually looking.
+    /// The console is not it: a failed save printed "Saved scene to …" for as
+    /// long as this project has existed, and even once it printed the truth,
+    /// nobody who just pressed Save is reading stdout.</summary>
+    public static void Tell(Node parent, string title, string text)
+    {
+        var dialog = new AcceptDialog
+        {
+            Title = title,
+            DialogText = text,
+        };
+        dialog.Confirmed += dialog.QueueFree;
+        dialog.Canceled += dialog.QueueFree;
+        parent.AddChild(dialog);
+        dialog.PopupCentered();
+    }
 }
