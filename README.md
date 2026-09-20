@@ -1,7 +1,7 @@
 # FactoryForge 🏭
 
 [![Godot 4.7](https://img.shields.io/badge/Godot-v4.7.2--mono-blue?logo=godotengine)](https://godotengine.org/)
-[![Python 3.12](https://img.shields.io/badge/Python-3.12+-green?logo=python)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-green?logo=python)](https://www.python.org/)
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple?logo=dotnet)
 [![Tests](https://img.shields.io/badge/Tests-73%20Passed-brightgreen)](tests/)
 [![Siemens S7-1500](https://img.shields.io/badge/Siemens-S7--1500%20Verified-009999?logo=siemens)](examples/tia/)
@@ -100,26 +100,37 @@ rule, and it is what makes a scene you build addressable from a PLC.
 
 ## ⚡ Quick Start
 
-### Just want to run it? Download a release
+**You build it from source today.** That is what the steps below do, and it is
+the same path [GETTING_STARTED.md](docs/GETTING_STARTED.md) walks in detail. You
+need Godot 4.7 mono, the .NET 8 SDK and Python 3.11+.
 
-Grab the archive for your platform from
-[Releases](https://github.com/malgaroshy-maker/factory/releases), extract it,
-and run `FactoryForge`. **No Godot, no .NET SDK and no Python needed** — the
-sidecar that speaks every PLC protocol ships frozen alongside the engine, and
-F5's *Apply & Connect* finds it automatically.
+### Downloading a release — not yet
 
+There are **no published releases**. The
+[Releases page](https://github.com/malgaroshy-maker/factory/releases) is empty,
+and saying so here is cheaper than letting you click through to find out.
+
+The machinery is built and tested — `python tools/build_release.py` exports the
+engine and freezes the sidecar, and on Windows **`build_windows.bat`** does the
+same double-clickably and then runs the release gate: 25 headless self-tests
+against the *exported binary*, not against the checkout. It has been run end to
+end on Windows and Linux. What has never happened is a tag and a publish. See
+[PACKAGING.md](docs/PACKAGING.md).
+
+When the first tagged release lands, the block below becomes true and this
+heading comes off:
+
+> Grab the archive for your platform from Releases, extract it, and run
+> `FactoryForge`. **No Godot, no .NET SDK and no Python needed** — the sidecar
+> that speaks every PLC protocol ships frozen alongside the engine, and F5's
+> *Apply & Connect* finds it automatically.
+>
 > **Windows will warn you on first run.** These builds are not code-signed, so
 > SmartScreen shows "Windows protected your PC" — click *More info → Run
 > anyway*. That warning means the binary has no purchased certificate attached,
 > not that anything is wrong with it. See
 > [PACKAGING.md](docs/PACKAGING.md#code-signing--not-signed-and-the-download-page-says-so)
 > for why this project does not buy one.
-
-Everything below is for building from source instead. To *build* a release
-yourself: `python tools/build_release.py`, or on Windows double-click
-**`build_windows.bat`**, which also runs the release gate — 25 headless
-self-tests against the exported binary, not against the checkout. See
-[PACKAGING.md](docs/PACKAGING.md).
 
 ### 1. Installation
 
@@ -129,11 +140,14 @@ cd factory
 pip install -e "sidecar[dev,opcua]"
 ```
 
-### 2. Run Test Suite (73 Tests)
+### 2. Run the Test Suite
 
 ```bash
 python -m pytest -q
 ```
+
+73 pass as of 2026-09-21. Treat the command's output as the count, not this
+line — four files used to quote three different numbers between them.
 
 Or the full plan — build, the Python suite, the engine's own self-tests,
 determinism, the engine↔sidecar seam and robustness. No PLC needed:

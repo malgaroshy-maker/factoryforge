@@ -1,9 +1,14 @@
 # FactoryForge — Roadmap
 
-*Status: living document · Last updated: 2026-08-07*
+*Status: living document · Last updated: 2026-09-21*
 
 Pace assumption: **full-time solo**. Every milestone must be independently
 useful — nothing of value should be gated behind a distant v1.
+
+M0 through M6 are complete. What is open is no longer a milestone: it is
+`HARDENING_PLAN.md`, which is where the work that makes any of this survive
+contact with a second person now lives. The one thing M6 never did is publish a
+release — see *Beyond v1* below, and HP-09.
 
 ---
 
@@ -26,9 +31,14 @@ now. It is also the contract every future contributor codes against.
 
 ---
 
-## M1 — OPC UA *(next, ~2 weeks)*
+## M1 — OPC UA ✅ **complete but for two items**
 
 *The primary integration path, and the one that reaches beyond Siemens.*
+
+The two unchecked boxes below are the only ones left anywhere in M0–M6, and both
+are still genuinely open rather than quietly abandoned: the OpenPLC cross-check
+was deferred at the user's request and is tracked as HP-45, and the two
+PLCSIM-Advanced facts that need writing down are HP-46.
 
 Reference target is **S7-PLCSIM Advanced** — no physical hardware is available
 to this project. Everyday development runs against OpenPLC over the existing
@@ -158,7 +168,10 @@ becomes a *tool* rather than a demo.
 
 - [x] **PLCSIM Advanced Simulation Runtime API** driver via `pythonnet` (`plcsim_advanced.py`) — direct shared-memory I/O access, no OPC UA licence, no TCP latency.
 - [x] **S7 driver via `python-snap7`** (`s7_snap7.py`) — ISO-on-TCP direct S7 communication for physical S7-300, S7-400, S7-1200, S7-1500 PLCs.
-- [x] Driver unit tests — `tests/test_siemens.py` (41 tests passing)
+- [x] Driver unit tests — `tests/test_siemens.py`. (This line used to record the
+      whole suite's size at the time, 41, which then aged badly in four
+      documents at once. The suite is 73 today; `python -m pytest -q` is the
+      only place worth reading it from.)
 
 **Ships:** a Siemens user with PLCSIM Advanced needs no OPC UA licence at all.
 Deliberately after M1, because this path helps only PLCSIM Advanced owners
@@ -177,6 +190,12 @@ whereas OPC UA reaches every vendor.
 **Definition of done:** a student who has never seen the project goes from
 download to a PLCSIM-driven sorting scene in under 30 minutes, using only the
 written guide.
+
+**And that word "download" is still unearned.** The build and freeze machinery
+landed afterwards and is verified on both platforms (see *Beyond v1*), but no
+version has been tagged and no archive has been published, so the 30 minutes
+currently start with installing Godot and the .NET SDK. Closing this properly is
+HP-09.
 
 ---
 
@@ -212,6 +231,42 @@ most likely to slip.
       contacts (one scan per click, however long the mouse is held), plus a
       latching E-stop wired normally closed. The first inputs in the library a
       human drives rather than the simulation computing them for you.
+
+- [x] **All three Siemens paths verified driving the 3D scene** from a virtual
+      S7-1500 — PLCSIM Advanced's native API, OPC UA client, and snap7. Two of
+      the three had never been run at all: they called `TagTable.outputs()` and
+      `tag.kind.value`, neither of which exists, had no tag→symbol mapping, and
+      swallowed the resulting exceptions. Shipped, documented, and dead.
+- [x] **A test plan that covers the seam** — `docs/TEST_PLAN.md` and
+      `tools/test_plan.py`, one command, non-zero on failure. Written because
+      the two worst defects this project has had were both invisible to the
+      layer tests: Run-mode clicking was dead while every headless assertion
+      passed, and no real driver could reach the 3D engine at all while the
+      drivers themselves were fine.
+- [x] **A full-surface review of the app against its own claims**
+      (`UX_PLAN.md`, then `LOOSE_ENDS_PLAN.md` for what the first sweep left) —
+      a start screen with templates instead of cold-opening one demo, a
+      launcher that finds Godot on a machine that is not the author's
+      (`run.py`), a driver dialog that stays on screen when it has something to
+      say, and the removal of several controls that moved without changing
+      anything.
+- [x] **Breaking it on purpose.** Drives can fail and valves can seize, *while
+      the command is still on*. Until that existed, every actuator did exactly
+      what it was told, which makes half of real PLC work unteachable — an
+      interlock exists precisely because the plant does not always obey.
+- [x] **An honest exercise per scene** — `tools/try_scene.py` and the toolbar's
+      **🧪 Try**, which drive a scene the way a PLC would and report pass/fail.
+      The same sequence is the regression test, so the lesson and the check
+      cannot drift apart.
+- [x] **A release you can build, and a gate it has to pass.**
+      `tools/build_release.py` exports the engine and freezes the sidecar with
+      PyInstaller; `build_windows.bat` does it double-clickably and then runs 25
+      headless self-tests **against the exported binary**, because a build that
+      produced a binary is not the same as one that produced a working binary.
+      Verified on both platforms, three times, last on 2026-09-02 — see
+      [PACKAGING.md](PACKAGING.md). **Not published**: no tag, no GitHub
+      release, no archive anywhere but one machine. That is HP-09, and it is the
+      single largest gap between what this project is and what anyone can use.
 
 - [x] **Nine more parts, from fifteen to twenty-four** (CP-01…CP-09, see
       [COMPONENTS_AND_POLISH_PLAN.md](COMPONENTS_AND_POLISH_PLAN.md)) — each one
@@ -298,6 +353,15 @@ most likely to slip.
       lived in `tools/try_scene.py`, a Python test harness. `T` now opens the
       task, the tags to use and how you know it works, and every tag a brief
       names is checked against the scene it belongs to.
+
+**Next, and ahead of everything below it:**
+[HARDENING_PLAN.md](HARDENING_PLAN.md) — fifty-two items from three reviews run
+on 2026-09-20. None of them are features. The subset that matters is the
+*release gate*: a save that reports success after failing, opening a bad file
+destroying the good scene, an undo that hands back a part at factory defaults, a
+rename that quietly reassigns a PLC's tags. All four are on a student's first
+hour, and all four are invisible at the moment they happen. Nothing should ship
+over them.
 
 **Near:** part-to-part linking in the editor — the measuring encoder finds the
 belt under it by geometry, which is right for a wheel resting on a deck and

@@ -212,7 +212,13 @@ Honest list of what this plan does **not** prove:
 - **Any non-Siemens controller.** OpenPLC over Modbus is implemented and
   unit-tested, never run against the real thing.
 - **Long runs with a PLC.** The longest verified run is 45 seconds.
-- **Packaging.** No binary has ever been exported (`docs/PACKAGING.md`).
+- **Packaging — but not for the reason this line used to give.** It said no
+  binary had ever been exported. That stopped being true: both platforms build
+  from clean runners and `check_release.py` runs 25 headless self-tests against
+  the **exported binary**, which is a stronger check than anything in this plan
+  (`docs/PACKAGING.md`). What is still unproven is the *distribution* — nothing
+  has ever been tagged, published or downloaded by anyone, so "the archive a
+  stranger gets works on their machine" remains untested. HP-09.
 - **Visual correctness.** Screenshots are rendered and read by hand; nothing
   compares them automatically.
 - **Long-run stability.** Nothing runs for hours.

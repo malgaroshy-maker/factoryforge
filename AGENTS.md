@@ -66,7 +66,7 @@ sidecar/         Python package: bus client, drivers, minimal Modbus server
 examples/tia/    Sorting.scl, FF_IO DB spec, setup walkthrough
 examples/nodered/ flow that replaces the PLC entirely
 tools/           drive_engine.py (parity check), drv_trace.py (driver tracing)
-tests/           41 tests, no Siemens software or GPU required
+tests/           the pytest suite; no Siemens software and no GPU required
 ```
 
 ---
@@ -80,7 +80,8 @@ cd C:/Users/masal/source/factoryforge
 # engine/sidecar seam, robustness. Needs no PLC. See docs/TEST_PLAN.md.
 python tools/test_plan.py            # add --gui for the display-dependent check
 
-# Tests (41, ~37s)
+# The Python suite. 73 of them on 2026-09-21; the command is the authority and
+# this comment is not, which is how it came to say 41 long after it was 73.
 python -m pytest -q
 
 # Engine build
@@ -420,7 +421,8 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
 - Node-RED replacing the PLC entirely — **9 tall / 9 short, perfect split**
 - Godot C# engine with 3D geometry driven by tags, screenshot in README
 - The unchanged Python sidecar drives the C# engine (`tools/drive_engine.py`)
-- 41 tests passing; CI needs no Siemens software and no GPU
+- 73 of 73 Python tests passing (`python -m pytest -q`); CI needs no Siemens
+  software and no GPU
 
 **Resolved imperfection:** In SCL v0.3, ~12% of tall boxes slipped past the pusher due to timing margin (0.6s catch window vs ~100ms OPC UA round-trip jitter). Fixed in SCL v0.4 by setting `PUSH_HOLD` `T#500MS` → `T#1S500MS`, verified live on real S7-1500 (99 tall / 99 short).
 
@@ -442,15 +444,41 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
    ignored the DInt counters — it now takes a `DBX0.0` / `DBD2` mapping file.
    All three Siemens drivers are verified against a virtual S7-1500.
 6. **M6 — v1 Release**: student getting-started guide, part & driver authoring
-   guides — **Done**. **Packaging is not**: `engine/export_presets.cfg` now
-   exists but no binary has ever been produced from it (the export templates are
-   not installed on the dev machine), so running FactoryForge still means
-   installing Godot-mono and the .NET SDK and building from source. See
-   `docs/PACKAGING.md`, including the unanswered question of how to ship the
-   Python sidecar — without it the engine can render a factory and talk to
-   nothing. This entry previously claimed packaging was done; it was not.
+   guides — **Done**. **Packaging: the machinery is built and verified; nothing
+   has ever been published.** Those are two different things and this entry has
+   now been wrong about both of them, so read them separately.
+
+   *Built and verified.* `python tools/build_release.py` exports the engine,
+   freezes the sidecar with PyInstaller and writes
+   `dist/FactoryForge-<platform>.zip`; on Windows `build_windows.bat` does the
+   same double-clickably and then runs the release gate — 25 headless self-tests
+   against the **exported binary**, not against the checkout. Verified end to
+   end locally on 2026-08-23, in CI on 2026-08-24, and again on 2026-09-02 after
+   the nine new parts, on Windows and Linux both. The question this entry once
+   called unanswered — how to ship the Python sidecar — was answered by freezing
+   it; see `docs/PACKAGING.md`.
+
+   *Never published.* Zero GitHub releases, zero git tags. `release.yml`
+   triggers on `v*` and has only ever been fired by hand as a
+   `workflow_dispatch` dry run. The archives exist on one machine in the world,
+   so running FactoryForge still means installing Godot-mono and the .NET SDK
+   and building from source — for the reason a release would fix, and for none
+   of the reasons this entry used to give. Publishing one is HP-09 in
+   `docs/HARDENING_PLAN.md`.
+
+   The history is worth keeping: this entry first claimed packaging was done
+   when no binary had ever been exported, then claimed it was undone after the
+   machinery had been built and gated on two platforms. Both times the
+   correction was a whole sentence away from a claim nobody had rechecked.
 
 Deliberately skipped at the user's request: OpenPLC/Modbus cross-check.
+
+## What is open
+
+`docs/HARDENING_PLAN.md` (HP-01 … HP-52) is the live work list. Every *feature*
+plan in `docs/` is closed. Read the release gate in that file's Sequencing
+section before starting anything: it is the list of items that must land before a
+release, drawn from every phase rather than from the phase order.
 
 ## Working style the user expects
 

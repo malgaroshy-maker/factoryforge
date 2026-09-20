@@ -15,6 +15,12 @@ Welcome to **FactoryForge**, a free, open 3D factory simulator for learning PLC 
 
 ## ⚡ Quick Start (5 Minutes)
 
+**Building from source is currently the only way in.** There is no published
+release to download yet — the build and freeze machinery exists and is tested,
+but no version has ever been tagged and uploaded, so the Releases page is empty.
+See [PACKAGING.md](PACKAGING.md). That is why this guide starts with `git clone`
+and not with a download link.
+
 ### 1. Clone & Install Sidecar
 
 ```bash
@@ -25,11 +31,18 @@ pip install -e "sidecar[dev,opcua]"
 
 ### 2. Run the Test Suite
 
-Verify that all 71 unit & protocol driver tests pass:
+This checks the sidecar installed cleanly. It needs no PLC, no Godot and no
+Siemens software:
 
 ```bash
 python -m pytest -q
 ```
+
+73 pass as of 2026-09-21. The count is whatever `pytest` prints — it has grown
+steadily and every place that wrote it down went stale. What matters is that
+nothing **fails**, and that pytest *collects* the suite at all: a collection
+error rather than a test failure usually means an optional extra did not
+install.
 
 ### 3. Launch the 3D Engine
 
