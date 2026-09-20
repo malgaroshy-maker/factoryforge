@@ -54,6 +54,10 @@ public partial class BuildFlowSelfTest : Node
             CheckGroupEdits();
             CheckSelectAllAndClipboard();
             CheckPartNames();
+            CheckUndoOfDeleteKeepsSettings();
+            CheckUndoOfMovePutsItBack();
+            CheckRedoOfDuplicateKeepsIdentity();
+            CheckHistorySurvivesADeletedNode();
         }
         catch (System.Exception ex)
         {
@@ -418,6 +422,176 @@ public partial class BuildFlowSelfTest : Node
 
     private static string LabelTextOf(Node3D part) =>
         part.GetNodeOrNull<Label3D>("PartNameLabel")?.Text ?? "";
+
+    // ---------- HP-03, HP-04, HP-05, HP-20, HP-37: what undo gives back
+
+    /// <summary>Lay down one belt, tuned to something no default would be, and
+    /// return its id. 0.23 m/s is deliberately not a round number: a default
+    /// that happened to match would make every assertion below meaningless.</summary>
+    private const float TunedSpeed = 0.23f;
+
+    private string PlaceOneTunedBelt(Vector3 at)
+    {
+        Editor.ClearAllPlacedParts();
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(at);
+        Editor.CancelPlacement();
+
+        string id = Editor.PlacedPartIds()[0];
+        if (Editor.NodeFor(id) is ConveyorBelt belt)
+        {
+            Expect(!Mathf.IsEqualApprox(belt.Speed, TunedSpeed),
+                   "the tuned speed differs from the default, or this test proves nothing");
+            belt.Speed = TunedSpeed;
+        }
+        else
+        {
+            Expect(false, "the placed part is a ConveyorBelt");
+        }
+        return id;
+    }
+
+    private float SpeedOf(string id) =>
+        Editor.NodeFor(id) is ConveyorBelt belt ? belt.Speed : float.NaN;
+
+    /// <summary>
+    /// HP-03. The console prints "Ctrl+Z to put them back" when you delete, and
+    /// what came back was a factory-default part wearing the right name: the
+    /// command stored type, position, rotation and id, and respawned through a
+    /// path that never applied any properties. A belt you had slowed to a crawl
+    /// came back at full speed, which is the kind of loss you discover twenty
+    /// minutes later while wondering why the line behaves differently.
+    /// </summary>
+    private void CheckUndoOfDeleteKeepsSettings()
+    {
+        string id = PlaceOneTunedBelt(new Vector3(0, 0, 0));
+
+        Editor.SelectPartByIndex(0);
+        Editor.DeleteSelectedPart();
+        Expect(PartCount() == 0, "Del removes the belt");
+
+        Editor.Undo();
+        Expect(PartCount() == 1, "Ctrl+Z brings a belt back");
+        Expect(Editor.PlacedPartIds().Count == 1 && Editor.PlacedPartIds()[0] == id,
+               $"under the same instance id (got '{string.Join(",", Editor.PlacedPartIds())}', want '{id}')");
+        Expect(Mathf.IsEqualApprox(SpeedOf(id), TunedSpeed),
+               $"and still tuned to {TunedSpeed} m/s, not back at the factory default "
+               + $"(got {SpeedOf(id):0.000})");
+    }
+
+    /// <summary>
+    /// HP-04. M-move committed by destroying the part and recording a
+    /// *placement* at the destination, so Ctrl+Z removed the placement and
+    /// restored nothing: undoing a move you were only trying to adjust deleted
+    /// the part outright. The part now never leaves the scene, so the move undoes
+    /// as a move — same node, same id, same settings.
+    /// </summary>
+    private void CheckUndoOfMovePutsItBack()
+    {
+        var from = new Vector3(0, PartLayout.WorkPlaneY, 0);
+        string id = PlaceOneTunedBelt(from);
+
+        Editor.SelectPartByIndex(0);
+        Editor.StartMoveSelected();
+        Expect(Editor.HasPlacementPreview, "M picks the part up");
+        Editor.PlacePreviewAt(new Vector3(0, 0, 3.0f));
+
+        Expect(PartCount() == 1, $"a move leaves one part, not two (got {PartCount()})");
+        Expect(Editor.NodeFor(id) is { } moved && Mathf.IsEqualApprox(moved.Position.Z, 3.0f),
+               "and the part is at the new cell");
+
+        Editor.Undo();
+        Expect(PartCount() == 1,
+               $"Ctrl+Z after a move leaves the part in the scene rather than deleting it "
+               + $"(got {PartCount()} parts)");
+        Expect(Editor.NodeFor(id) is { } back && back.Position.IsEqualApprox(from),
+               "and puts it back where it started");
+        Expect(Mathf.IsEqualApprox(SpeedOf(id), TunedSpeed),
+               $"with its settings intact (got {SpeedOf(id):0.000})");
+    }
+
+    /// <summary>
+    /// HP-20, both halves. PartCommand already kept the id it minted across a
+    /// redo, with a comment saying why: a fresh id silently breaks driver wiring
+    /// pointing at the old one. Ctrl+D and Ctrl+V did not, and Ctrl+V goes
+    /// through the *group* command, which the first draft of the item missed.
+    /// </summary>
+    private void CheckRedoOfDuplicateKeepsIdentity()
+    {
+        PlaceOneTunedBelt(new Vector3(0, 0, 0));
+
+        Editor.SelectPartByIndex(0);
+        Editor.DuplicateSelectedPart();
+        string copyId = Editor.SelectedInstanceId ?? "";
+        Expect(copyId.Length > 0, "Ctrl+D selects the copy it made");
+
+        Editor.Undo();
+        Editor.Redo();
+        Expect(Editor.SelectedInstanceId == copyId,
+               $"redoing a duplicate restores the same instance id "
+               + $"(got '{Editor.SelectedInstanceId}', want '{copyId}')");
+
+        // Ctrl+V, which is the group path: one item, but DuplicateGroupCommand.
+        Editor.SelectEverything();
+        Editor.CopySelection();
+        Editor.PasteClipboard();
+        var pasted = new List<string>(Editor.SelectedInstanceIds());
+        Expect(pasted.Count > 0, "Ctrl+V puts something down");
+
+        Editor.Undo();
+        Editor.Redo();
+        var again = Editor.SelectedInstanceIds();
+        bool same = again.Count == pasted.Count;
+        for (int i = 0; same && i < again.Count; i++)
+        {
+            if (again[i] != pasted[i]) same = false;
+        }
+        Expect(same,
+               $"redoing a paste restores the same ids rather than minting new ones "
+               + $"(got [{string.Join(",", again)}], want [{string.Join(",", pasted)}])");
+    }
+
+    /// <summary>
+    /// HP-05 and HP-37 together, as the plan states the reproduction: nudge a
+    /// group, delete it, Ctrl+Z twice.
+    ///
+    /// The move commands held Node3D references. Undoing the delete rebuilt each
+    /// part as a *new* node, so the second Ctrl+Z wrote a position into an object
+    /// Godot had freed — and the history popped the entry before invoking it, so
+    /// the throw took the step with it. Resolving by part key instead means the
+    /// command written before the delete finds the part the undo brought back.
+    /// </summary>
+    private void CheckHistorySurvivesADeletedNode()
+    {
+        Editor.ClearAllPlacedParts();
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(new Vector3(0, 0, 0));
+        Editor.PlacePreviewAt(new Vector3(2.0f, 0, 0));
+        Editor.CancelPlacement();
+
+        Editor.SelectPartByIndex(0);
+        Editor.ToggleSelectionByIndex(1);
+        var before = new List<Vector3>(Editor.SelectedPositions());
+        var ids = new List<string>(Editor.SelectedInstanceIds());
+
+        Editor.NudgeSelectedPart(new Vector2(1, 0));
+        Editor.SelectPartByIndex(0);
+        Editor.ToggleSelectionByIndex(1);
+        Editor.DeleteSelectedPart();
+        Expect(PartCount() == 0, "Del removes the nudged group");
+
+        Editor.Undo();                       // undo the delete
+        Expect(PartCount() == 2, $"the first Ctrl+Z brings the group back (got {PartCount()})");
+
+        Editor.Undo();                       // undo the nudge, across the rebuild
+        for (int i = 0; i < ids.Count; i++)
+        {
+            var node = Editor.NodeFor(ids[i]);
+            Expect(node is not null && node.Position.IsEqualApprox(before[i]),
+                   $"the second Ctrl+Z reaches {ids[i]} through the rebuild "
+                   + $"(at {node?.Position}, want {before[i]})");
+        }
+    }
 
     // ---------- BF-01's exception
 

@@ -69,8 +69,14 @@ public partial class SceneEditor : Node3D
     /// editor registered tags for from one that is only a *view* of tags the
     /// simulation owns: deleting the default belt must not delete
     /// conveyor.rotate, which SortingScene writes on every tick.
+    ///
+    /// <paramref name="Key"/> is the part's identity as far as the undo history
+    /// is concerned — see <see cref="NextPartKey"/>. It is deliberately not the
+    /// node, not the instance id and not the type-and-position pair the commands
+    /// each used to pick for themselves.
     /// </summary>
-    private sealed record PlacedPart(Node3D Node, string InstanceId, string PartType, bool OwnsTags)
+    private sealed record PlacedPart(Node3D Node, string InstanceId, string PartType,
+                                     bool OwnsTags, long Key)
     {
         private Dictionary<string, string>? _tagIds;
 
@@ -161,6 +167,50 @@ public partial class SceneEditor : Node3D
 
     private PlacedPart? _selectedPart;
     private readonly List<PlacedPart> _placedParts = new();
+
+    /// <summary>
+    /// One definition of part identity, for every command in the history
+    /// (HP-37).
+    ///
+    /// The four command families each used to answer "which part?" differently
+    /// and all four answers were wrong somewhere. Placement and deletion matched
+    /// on type *and position* — so two overlapping conveyors were
+    /// indistinguishable, and undoing a delete could resurrect the wrong one.
+    /// Move and rotate held a <c>Node3D</c>, which does not survive a delete and
+    /// its undo, because that rebuilds the part as a new node and leaves the
+    /// earlier commands writing into a freed object. Duplicate held a snapshot
+    /// and minted a fresh instance id on every redo.
+    ///
+    /// The key is none of those. It is minted once per part, carried across a
+    /// rename (a record's <c>with</c> copies it), and restored by the command
+    /// that respawns a part it previously removed — so a command written before
+    /// a delete still finds the part after the undo that brought it back.
+    /// </summary>
+    private long _nextPartKey;
+
+    private long NextPartKey() => ++_nextPartKey;
+
+    /// <summary>The part a command is talking about, or null if it is gone.</summary>
+    private PlacedPart? FindPlaced(long key)
+    {
+        if (key == 0) return null;
+        int index = _placedParts.FindIndex(p => p.Key == key);
+        return index < 0 ? null : _placedParts[index];
+    }
+
+    /// <summary>Everything a command needs to rebuild a part: identity,
+    /// transform and every setting <see cref="PartProperties"/> knows about.
+    /// The same shape a scene file stores, rebuilt by the same call a scene
+    /// load uses, so "put it back" cannot mean something different here from
+    /// what it means there.</summary>
+    private static PartInstanceData Snapshot(PlacedPart part) => new()
+    {
+        Id = part.InstanceId,
+        Type = part.PartType,
+        Position = new[] { part.Node.Position.X, part.Node.Position.Y, part.Node.Position.Z },
+        Rotation = new[] { part.Node.Rotation.X, part.Node.Rotation.Y, part.Node.Rotation.Z },
+        Properties = PartProperties.Capture(part.Node),
+    };
 
     /// <summary>Whichever part the cursor is over in Run mode, for the hover
     /// outline (UX-39) -- so a click's own hit test is not the first time a
@@ -533,93 +583,76 @@ public partial class SceneEditor : Node3D
 
     /// <summary>
     /// Place and delete as undoable steps. A freed node cannot be revived, so a
-    /// command stores what the part *was* — type and transform — and rebuilds it
-    /// on demand. That makes place and delete exact inverses of each other.
+    /// command stores what the part *was* and rebuilds it on demand. That makes
+    /// place and delete exact inverses of each other.
+    ///
+    /// "What the part was" is a whole <see cref="PartInstanceData"/> — the same
+    /// record a scene file stores, rebuilt through <see cref="SpawnFromData"/>,
+    /// the same call a scene load uses. It used to be type, position, rotation
+    /// and id only, respawned through a separate <c>SpawnPart</c> that never
+    /// applied any properties, so deleting a conveyor tuned to 0.2 m/s and
+    /// pressing Ctrl+Z — which the console itself offers — brought back a
+    /// factory-default belt (HP-03). The settings were lost at the moment the
+    /// tool promised to put them back.
+    ///
+    /// The part key is remembered as well as the instance id, so a move command
+    /// recorded before the delete still resolves after the undo (HP-05).
     /// </summary>
     private sealed class PartCommand : IEditorCommand
     {
         private readonly SceneEditor _editor;
-        private readonly string _partType;
-        private readonly Vector3 _position;
-        private readonly Vector3 _rotation;
+        private readonly PartInstanceData _data;
         private readonly bool _isPlacement;
+        private long _key;
 
-        /// <summary>The id the part was given, remembered so undo/redo restores
-        /// the same identity. Without it a redo minted a fresh id and silently
-        /// broke any driver wiring pointing at the old one.</summary>
-        private string? _instanceId;
-
-        public PartCommand(SceneEditor editor, string partType, Vector3 position,
-                           Vector3 rotation, bool isPlacement, string? instanceId = null)
+        public PartCommand(SceneEditor editor, PartInstanceData data, bool isPlacement,
+                           long key = 0)
         {
             _editor = editor;
-            _partType = partType;
-            _position = position;
-            _rotation = rotation;
+            _data = data;
             _isPlacement = isPlacement;
-            _instanceId = instanceId;
+            _key = key;
         }
 
         public void Execute()
         {
             if (_isPlacement) Respawn();
-            else _editor.RemovePartAt(_partType, _position);
+            else _editor.RemovePart(_key);
         }
 
         public void Undo()
         {
-            if (_isPlacement) _editor.RemovePartAt(_partType, _position);
+            if (_isPlacement) _editor.RemovePart(_key);
             else Respawn();
         }
 
         private void Respawn()
         {
-            var placed = _editor.SpawnPart(_partType, _position, _rotation, _instanceId);
-            _instanceId ??= placed?.InstanceId;
+            var placed = _editor.SpawnFromData(_data, notify: true, reviveKey: _key);
+            if (placed is null) return;
+
+            // Remember the identity the first execute minted, so a redo restores
+            // the same one. Without it a redo minted a fresh id and silently
+            // broke any driver wiring pointing at the old one.
+            if (_data.Id.Length == 0) _data.Id = placed.InstanceId;
+            if (_key == 0) _key = placed.Key;
         }
     }
 
-    /// <summary>Build, parent and register a part. Returns null if the type is
-    /// unknown.</summary>
-    private PlacedPart? SpawnPart(string partType, Vector3 position, Vector3 rotation,
-                                  string? preferredId = null)
+    /// <summary>Undo counterpart to <see cref="SpawnFromData"/>: drop the part
+    /// with this key, if it is still there.
+    ///
+    /// It used to take a type and a position and remove the last part matching
+    /// both, which cannot tell two overlapping conveyors apart and is HP-37's
+    /// bug — undoing a placement could take away a part somebody had placed
+    /// deliberately in the same cell.</summary>
+    private void RemovePart(long key)
     {
-        var node = CreatePartNode(partType);
-        if (node is null) return null;
+        if (FindPlaced(key) is not { } part) return;
 
-        node.Position = position;
-        node.Rotation = rotation;
-        GetParent()?.AddChild(node);
-
-        string instanceId = "part";
-        bool owns = false;
-        if (Tags is not null)
-        {
-            (instanceId, owns) = PartTagManager.RegisterPartTags(node, partType, Tags, preferredId);
-            NotifyTagsChanged();
-        }
-
-        var placed = new PlacedPart(node, instanceId, partType, owns);
-        _placedParts.Add(placed);
-        PartNameLabel.Apply(node, instanceId, PartNamesVisible);
-        return placed;
-    }
-
-    /// <summary>Undo counterpart to <see cref="SpawnPart"/>: drops the most
-    /// recently added part of this type sitting at this position.</summary>
-    private void RemovePartAt(string partType, Vector3 position)
-    {
-        for (int i = _placedParts.Count - 1; i >= 0; i--)
-        {
-            var part = _placedParts[i];
-            if (part.PartType != partType) continue;
-            if (!part.Node.Position.IsEqualApprox(position)) continue;
-
-            if (_selectedPart == part) DeselectPart();
-            ForgetPart(part);
-            NotifyTagsChanged();
-            return;
-        }
+        if (_selectedPart == part) DeselectPart();
+        ForgetPart(part);
+        NotifyTagsChanged();
     }
 
     /// <summary>
@@ -975,10 +1008,10 @@ public partial class SceneEditor : Node3D
             {
                 if (!IsInstanceValid(entry.Node)) continue;
                 if (entry.Node.Position == origin) continue;
-                moves.Add(new MoveCommand(entry.Node, origin, entry.Node.Position));
+                moves.Add(new MoveCommand(this, entry.Key, origin, entry.Node.Position));
             }
             if (moves.Count == 0)
-                moves.Add(new MoveCommand(dragged.Node, _partDragOrigin, dragged.Node.Position));
+                moves.Add(new MoveCommand(this, dragged.Key, _partDragOrigin, dragged.Node.Position));
 
             _history.ExecuteCommand(CompositeCommand.Of(moves));
             MarkDirty();
@@ -1025,21 +1058,42 @@ public partial class SceneEditor : Node3D
         }
     }
 
+    /// <summary>
+    /// A move, remembered by the part's key rather than by its node (HP-05).
+    ///
+    /// The node is the wrong handle. Undoing a delete rebuilds the part as a new
+    /// <c>Node3D</c>, so a move recorded before that delete was writing a
+    /// position into an object Godot had already freed — which throws, and
+    /// <see cref="EditorCommandHistory"/> then lost the history entry along with
+    /// the exception. Nudge a group, delete it, let a frame pass, Ctrl+Z twice,
+    /// and the second Z did nothing with no sign of why.
+    /// </summary>
     private sealed class MoveCommand : IEditorCommand
     {
-        private readonly Node3D _node;
+        private readonly SceneEditor _editor;
+        private readonly long _key;
         private readonly Vector3 _from;
         private readonly Vector3 _to;
 
-        public MoveCommand(Node3D node, Vector3 from, Vector3 to)
+        public MoveCommand(SceneEditor editor, long key, Vector3 from, Vector3 to)
         {
-            _node = node;
+            _editor = editor;
+            _key = key;
             _from = from;
             _to = to;
         }
 
-        public void Execute() => _node.Position = _to;
-        public void Undo() => _node.Position = _from;
+        public void Execute() => MoveTo(_to);
+        public void Undo() => MoveTo(_from);
+
+        private void MoveTo(Vector3 at)
+        {
+            // A part that is genuinely gone is not an error: Clear drops the
+            // history that referred to it, but an ordinary delete does not, and
+            // undoing past a delete should skip the move rather than throw.
+            if (_editor.FindPlaced(_key) is { } part && GodotObject.IsInstanceValid(part.Node))
+                part.Node.Position = at;
+        }
     }
 
     /// <summary>The part being relocated, still in the scene until the move lands.</summary>
@@ -2117,9 +2171,10 @@ public partial class SceneEditor : Node3D
         var doomed = new List<IEditorCommand>(_selection.Count);
         foreach (var entry in _selection)
         {
-            doomed.Add(new PartCommand(this, entry.PartType, entry.Node.Position,
-                                       entry.Node.Rotation,
-                                       isPlacement: false, instanceId: entry.InstanceId));
+            // The whole part, settings included. Ctrl+Z has to return what was
+            // deleted, not another part of the same type standing in the same
+            // cell (HP-03).
+            doomed.Add(new PartCommand(this, Snapshot(entry), isPlacement: false, key: entry.Key));
         }
 
         GD.Print(doomed.Count == 1
@@ -2247,7 +2302,8 @@ public partial class SceneEditor : Node3D
         if (Tags is not null)
         {
             var (panelId, panelOwns) = PartTagManager.RegisterPartTags(panelNode, "ButtonPanel", Tags, "panel");
-            _placedParts.Add(new PlacedPart(panelNode, panelId, "ButtonPanel", panelOwns));
+            _placedParts.Add(new PlacedPart(panelNode, panelId, "ButtonPanel", panelOwns,
+                                            NextPartKey()));
         }
 
         // Only the rigid-body scene needs these: the deterministic scene creates
@@ -2286,7 +2342,8 @@ public partial class SceneEditor : Node3D
         CallDeferred(nameof(AnnounceSceneLoaded));
 
         void Adopt(Node3D node, string instanceId, string partType) =>
-            _placedParts.Add(new PlacedPart(node, instanceId, partType, OwnsTags: false));
+            _placedParts.Add(new PlacedPart(node, instanceId, partType, OwnsTags: false,
+                                            NextPartKey()));
     }
 
     /// <summary>
@@ -2450,7 +2507,10 @@ public partial class SceneEditor : Node3D
     /// difference between "rebuild ten parts" and "paste one part with its
     /// settings intact" is how many <see cref="PartInstanceData"/> you hand it.
     /// </summary>
-    private PlacedPart? SpawnFromData(PartInstanceData p, bool notify = true)
+    /// <param name="reviveKey">The part key to restore, when this respawn is an
+    /// undo of a delete rather than a new part. Zero mints a fresh one. See
+    /// <see cref="_nextPartKey"/>.</param>
+    private PlacedPart? SpawnFromData(PartInstanceData p, bool notify = true, long reviveKey = 0)
     {
         var node = CreatePartNode(p.Type);
         if (node is null) return null;
@@ -2461,7 +2521,8 @@ public partial class SceneEditor : Node3D
         GetParent()?.AddChild(node);
 
         var (instanceId, owns) = PartTagManager.RegisterPartTags(node, p.Type, Tags, p.Id);
-        var placed = new PlacedPart(node, instanceId, p.Type, owns);
+        var placed = new PlacedPart(node, instanceId, p.Type, owns,
+                                    reviveKey != 0 ? reviveKey : NextPartKey());
         _placedParts.Add(placed);
         // The name goes on here rather than in a pass afterwards, so a scene
         // loaded with names already on comes up labelled instead of needing
@@ -2539,35 +2600,50 @@ public partial class SceneEditor : Node3D
         GD.Print($"Duplicated {copies.Count} parts");
     }
 
+    /// <summary>
+    /// The group half of <see cref="DuplicateCommand"/>, and the one the first
+    /// draft of HP-20 missed. Ctrl+V goes through here too, so without the
+    /// captured identities a paste minted a fresh set of ids on every redo — a
+    /// whole section of line renaming itself behind a connected driver.
+    /// </summary>
     private sealed class DuplicateGroupCommand : IEditorCommand
     {
         private readonly SceneEditor _editor;
         private readonly List<PartInstanceData> _data;
-        private readonly List<PlacedPart> _placed = new();
+
+        /// <summary>One key per entry of <see cref="_data"/>, by index, so an
+        /// item whose type could not be built (a scene from a newer release)
+        /// does not shift every id after it onto the wrong part.</summary>
+        private readonly List<long> _keys;
 
         public DuplicateGroupCommand(SceneEditor editor, List<PartInstanceData> data)
         {
             _editor = editor;
             _data = data;
+            _keys = new List<long>(new long[data.Count]);
         }
 
         public void Execute()
         {
-            _placed.Clear();
-            foreach (var item in _data)
+            var placed = new List<PlacedPart>(_data.Count);
+            for (int i = 0; i < _data.Count; i++)
             {
-                if (_editor.SpawnFromData(item) is { } made) _placed.Add(made);
+                var made = _editor.SpawnFromData(_data[i], notify: true, reviveKey: _keys[i]);
+                if (made is null) continue;
+
+                if (_data[i].Id.Length == 0) _data[i].Id = made.InstanceId;
+                if (_keys[i] == 0) _keys[i] = made.Key;
+                placed.Add(made);
             }
             // The copies become the selection, so a second Ctrl+D walks the
             // whole group on again rather than repeating from the original.
-            _editor.SelectAll(_placed, add: false);
+            _editor.SelectAll(placed, add: false);
         }
 
         public void Undo()
         {
             _editor.DeselectPart();
-            foreach (var placed in _placed) _editor.ForgetPart(placed);
-            _placed.Clear();
+            foreach (long key in _keys) _editor.RemovePart(key);
         }
     }
 
@@ -2641,18 +2717,30 @@ public partial class SceneEditor : Node3D
         foreach (var entry in _selection)
         {
             Vector3 from = entry.Node.Position;
-            moves.Add(new MoveCommand(entry.Node, from, from + step));
+            moves.Add(new MoveCommand(this, entry.Key, from, from + step));
         }
 
         _history.ExecuteCommand(CompositeCommand.Of(moves));
         MarkDirty();
     }
 
+    /// <summary>
+    /// A duplicate, whose redo puts back the same part rather than a new one
+    /// (HP-20).
+    ///
+    /// <see cref="PartCommand"/> already carried its minted id across a redo,
+    /// with a comment explaining why: "without it a redo minted a fresh id and
+    /// silently broke any driver wiring pointing at the old one." The duplicate
+    /// path never got the same treatment — it respawned the same unchanged
+    /// <see cref="PartInstanceData"/>, whose <c>Id</c> is deliberately empty, so
+    /// every undo/redo cycle handed the part a new name and left a PLC program
+    /// addressing a tag prefix that no longer exists.
+    /// </summary>
     private sealed class DuplicateCommand : IEditorCommand
     {
         private readonly SceneEditor _editor;
         private readonly PartInstanceData _data;
-        private PlacedPart? _placed;
+        private long _key;
 
         public DuplicateCommand(SceneEditor editor, PartInstanceData data)
         {
@@ -2662,23 +2750,20 @@ public partial class SceneEditor : Node3D
 
         public void Execute()
         {
-            _placed = _editor.SpawnFromData(_data);
+            var placed = _editor.SpawnFromData(_data, notify: true, reviveKey: _key);
+            if (placed is null) return;
+
+            if (_data.Id.Length == 0) _data.Id = placed.InstanceId;
+            if (_key == 0) _key = placed.Key;
+
             // Selecting here rather than at the call site so a *redo* selects
             // it too: without that, redoing a duplicate leaves the gizmo on
             // whatever was selected before and the next Ctrl+D walks from the
             // wrong part.
-            if (_placed is { } made) _editor.SelectPlaced(made);
+            _editor.SelectPlaced(placed);
         }
 
-        public void Undo()
-        {
-            if (_placed is { } placed)
-            {
-                if (_editor._selectedPart == placed) _editor.DeselectPart();
-                _editor.ForgetPart(placed);
-            }
-            _placed = null;
-        }
+        public void Undo() => _editor.RemovePart(_key);
     }
 
     /// <summary>Rotate the selected part 90° in place, undoable. Before this,
@@ -2698,28 +2783,38 @@ public partial class SceneEditor : Node3D
         {
             var from = entry.Node.Rotation;
             var to = new Vector3(from.X, from.Y + Mathf.Pi / 2.0f, from.Z);
-            turns.Add(new RotateCommand(entry.Node, from, to));
+            turns.Add(new RotateCommand(this, entry.Key, from, to));
         }
 
         _history.ExecuteCommand(CompositeCommand.Of(turns));
         MarkDirty();
     }
 
+    /// <summary>A turn, resolved the same way <see cref="MoveCommand"/> resolves
+    /// a move, and for the same reason.</summary>
     private sealed class RotateCommand : IEditorCommand
     {
-        private readonly Node3D _node;
+        private readonly SceneEditor _editor;
+        private readonly long _key;
         private readonly Vector3 _from;
         private readonly Vector3 _to;
 
-        public RotateCommand(Node3D node, Vector3 from, Vector3 to)
+        public RotateCommand(SceneEditor editor, long key, Vector3 from, Vector3 to)
         {
-            _node = node;
+            _editor = editor;
+            _key = key;
             _from = from;
             _to = to;
         }
 
-        public void Execute() => _node.Rotation = _to;
-        public void Undo() => _node.Rotation = _from;
+        public void Execute() => TurnTo(_to);
+        public void Undo() => TurnTo(_from);
+
+        private void TurnTo(Vector3 to)
+        {
+            if (_editor.FindPlaced(_key) is { } part && GodotObject.IsInstanceValid(part.Node))
+                part.Node.Rotation = to;
+        }
     }
 
     /// <summary>Clear pushed onto the history as a single undoable step,
@@ -2889,14 +2984,40 @@ public partial class SceneEditor : Node3D
     {
         if (_previewNode is null || _activePartType is null) return;
 
-        // Committing a move: drop the original now that the new spot is chosen,
-        // and carry its id across so the wiring survives the relocation.
-        string? movedId = null;
+        Vector3 to = _previewNode.Position;
+        Vector3 facing = _previewNode.Rotation;
+
+        // Committing a move (HP-04).
+        //
+        // The part never leaves the scene. It is the same node, the same
+        // instance id, the same tags and the same settings, put down somewhere
+        // else — exactly what dragging it there would have been, and recorded as
+        // the same MoveCommand a drag records.
+        //
+        // It used to destroy the original and record a *placement* at the
+        // destination, so Ctrl+Z after an M-move deleted the part outright
+        // rather than putting it back, and what a redo rebuilt was a
+        // factory-default part wearing the old id.
         if (_movingPart is { } moving)
         {
-            movedId = moving.InstanceId;
-            ForgetPart(moving);
             _movingPart = null;
+            ClearPreview();
+
+            var steps = new List<IEditorCommand>(2);
+            if (!moving.Node.Position.IsEqualApprox(to))
+                steps.Add(new MoveCommand(this, moving.Key, moving.Node.Position, to));
+            if (!moving.Node.Rotation.IsEqualApprox(facing))
+                steps.Add(new RotateCommand(this, moving.Key, moving.Node.Rotation, facing));
+
+            // A move that went nowhere pushes nothing, the same way a drag that
+            // never moved the part pushes nothing: Ctrl+Z should undo whatever
+            // you did before, not a move that did not happen.
+            if (steps.Count == 0) return;
+
+            _history.ExecuteCommand(CompositeCommand.Of(steps));
+            MarkDirty();
+            GD.Print($"Moved '{moving.InstanceId}' to {to} (Ctrl+Z to put it back)");
+            return;
         }
 
         // Through the history, so Ctrl+Z can take it back. Nothing used to be
@@ -2904,13 +3025,20 @@ public partial class SceneEditor : Node3D
         string placedType = _activePartType;
         float placedRotation = _previewRotationY;
 
-        _history.ExecuteCommand(new PartCommand(this, _activePartType,
-                                                _previewNode.Position,
-                                                _previewNode.Rotation,
-                                                isPlacement: true,
-                                                instanceId: movedId));
+        _history.ExecuteCommand(new PartCommand(this, new PartInstanceData
+        {
+            // Empty, not a placeholder: RegisterPartTags only auto-numbers a
+            // fresh id when the preferred one is empty. The command fills this
+            // in from what the first execute minted, so a redo restores the same
+            // identity instead of a new one.
+            Id = "",
+            Type = placedType,
+            Position = new[] { to.X, to.Y, to.Z },
+            Rotation = new[] { facing.X, facing.Y, facing.Z },
+            Properties = PartProperties.Capture(_previewNode),
+        }, isPlacement: true));
         MarkDirty();
-        GD.Print($"Placed component '{placedType}' at {_previewNode.Position}");
+        GD.Print($"Placed component '{placedType}' at {to}");
         ClearPreview();
 
         // Keep the tool (BF-01). Six conveyors in a line used to be six trips
@@ -2920,7 +3048,8 @@ public partial class SceneEditor : Node3D
         // A committed *move* is the exception, and it has to be: a move is one
         // part going to one place, so re-arming there would leave a ghost of
         // what you just moved, ready to drop a second copy on the next click.
-        if (movedId is null) ArmPreview(placedType, placedRotation);
+        // That case returned above.
+        ArmPreview(placedType, placedRotation);
     }
 
     /// <summary>Below this, a carton has fallen off the world and is not
