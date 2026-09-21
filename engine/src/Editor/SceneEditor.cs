@@ -352,9 +352,58 @@ public partial class SceneEditor : Node3D
             _previewNode.Name = "PlacementPreview";
             _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
             AddChild(_previewNode);
+            // After AddChild, not before: a part builds its collision shapes and
+            // its Area3D in _Ready, which Godot runs as the node enters the
+            // tree, so there is nothing to switch off until it has.
+            MakeInert(_previewNode);
         }
 
         EmitSignal(SignalName.PlacementArmedChanged, _previewNode is null ? "" : partType);
+    }
+
+    /// <summary>
+    /// Take a preview out of the simulation entirely (HP-41).
+    ///
+    /// The ghost is an ordinary part -- that is what makes it an honest preview,
+    /// since it is built by the same factory and shows the real geometry -- and
+    /// it was added to the scene as one. So sweeping a remover preview over the
+    /// line *deleted cartons*: Remover connects BodyEntered in _Ready and calls
+    /// QueueFree on whatever arrives, and nothing about cancelling the placement
+    /// brings them back. The same is true in smaller ways of every part with a
+    /// collider: a belt ghost blocked cartons it was not yet part of.
+    ///
+    /// This has to reach into the part rather than tint the root node, because
+    /// the parts build these nodes themselves. Three things make a preview
+    /// inert, and all three are needed: an Area3D that is still monitoring fires
+    /// its signals whatever its layers say, a CollisionShape3D that is still
+    /// enabled keeps a physical body solid, and a RigidBody3D would otherwise
+    /// fall off the work plane while you are deciding where to put it.
+    /// </summary>
+    private static void MakeInert(Node node)
+    {
+        switch (node)
+        {
+            case Area3D area:
+                area.Monitoring = false;
+                area.Monitorable = false;
+                area.CollisionLayer = 0;
+                area.CollisionMask = 0;
+                break;
+            case RigidBody3D body:
+                body.Freeze = true;
+                body.CollisionLayer = 0;
+                body.CollisionMask = 0;
+                break;
+            case CollisionObject3D solid:
+                solid.CollisionLayer = 0;
+                solid.CollisionMask = 0;
+                break;
+            case CollisionShape3D shape:
+                shape.Disabled = true;
+                break;
+        }
+
+        foreach (var child in node.GetChildren()) MakeInert(child);
     }
 
     /// <summary>
@@ -3084,8 +3133,19 @@ public partial class SceneEditor : Node3D
     public void PlacePreviewAt(Vector3 position)
     {
         if (_previewNode is null) return;
-        _previewNode.Position = new Vector3(position.X, PartLayout.WorkPlaneY, position.Z);
+        MovePreviewTo(position);
         PlaceCurrentPart();
+    }
+
+    /// <summary>Slide the ghost to a cell without putting it down — what the
+    /// cursor does for the several seconds somebody spends deciding. Exposed
+    /// for the same reason as <see cref="PlacePreviewAt"/>: a headless run has
+    /// no camera for <see cref="UpdatePreviewPosition"/> to project through.
+    /// </summary>
+    public void MovePreviewTo(Vector3 position)
+    {
+        if (_previewNode is null) return;
+        _previewNode.Position = new Vector3(position.X, PartLayout.WorkPlaneY, position.Z);
     }
 
     /// <summary>The part type the placement tool is holding, or null. The
