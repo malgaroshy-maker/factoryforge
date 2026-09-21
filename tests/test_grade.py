@@ -439,6 +439,64 @@ def test_feeding_faster_than_the_deck_fails_the_roller_line(tmp_path):
     assert {"scale.singulated", "reject.matched_the_weight"} <= failed_ids(report)
 
 
+def test_the_buffer_passes_a_release_measured_in_encoder_pulses(tmp_path):
+    code, report = graded(tmp_path, "accumulation-buffer", "good", 78, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["escaped_a_raised_blade"] == []
+    # Gotcha 16 again, in the form this scene invites: "nothing got past the
+    # blade" is trivially true of a belt that was not running, so the plant
+    # counts the metres that ran underneath it.
+    assert evidence["belt_travel_while_held_m"] >= 3.0
+    # And the exam really did change the drive, or there was no second speed.
+    assert (evidence["second_speed"]["belt_m_per_s"]
+            > evidence["first_speed"]["belt_m_per_s"] * 1.5)
+
+
+def test_a_release_timed_in_seconds_fails_when_the_drive_speeds_up(tmp_path):
+    """The whole scene. Same command, same blade, a drive whose top speed the
+    run doubled -- and twice as much product out of a release timed on a
+    clock."""
+    code, report = graded(tmp_path, "accumulation-buffer", "timed", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "release.same_size_at_both_speeds" in failed_ids(report)
+    evidence = report["evidence"]
+    assert (evidence["second_speed"]["mean_cartons"]
+            > evidence["first_speed"]["mean_cartons"] + 1.0)
+    assert any("timed in seconds" in line for line in report["feedback"])
+
+
+def test_batch_dosing_passes_a_batch_that_ends_on_litres(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "good", 78, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    batches = report["evidence"]["batches"]
+    assert len(batches) == 2
+    # The same litres at two pump ratings, in about twice the time.
+    assert batches[0]["rated_flow"] == 2 * batches[1]["rated_flow"]
+    assert abs(batches[0]["delivered_L"] - batches[1]["delivered_L"]) <= 1.5
+    assert batches[1]["seconds"] > batches[0]["seconds"]
+
+
+def test_a_batch_timed_in_seconds_delivers_half_when_the_pump_is_re_rated(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "timed", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "dose2.on_the_number" in failed_ids(report)
+    first, second = report["evidence"]["batches"]
+    # Right once: the stopwatch answer is calibrated, and its first batch lands.
+    assert "dose1.on_the_number" not in failed_ids(report)
+    assert second["delivered_L"] < first["delivered_L"] * 0.65
+    assert any("ends on seconds cannot see that" in line
+               for line in report["feedback"])
+
+
+def test_not_zeroing_the_totaliser_ends_the_second_batch_before_it_starts(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "noreset", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "dose2.on_the_number" in failed_ids(report)
+    assert report["evidence"]["batches"][1]["delivered_L"] < 2.0
+    assert any("over before it started" in line for line in report["feedback"])
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""

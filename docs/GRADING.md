@@ -233,10 +233,10 @@ reference controllers; the machinery is general, the marking is not.
 | `light-curtain-sorting` | yes |
 | `roller-line-weighing` | yes |
 | `pick-and-place-cell` | not yet |
-| `accumulation-buffer` | not yet |
+| `accumulation-buffer` | yes |
 | `heat-treat-station` | yes |
 | `guarded-cell` | not yet |
-| `batch-dosing` | not yet |
+| `batch-dosing` | yes |
 
 A test fails if that table stops matching `RUBRICS`.
 

@@ -1832,6 +1832,521 @@ def _summary_roller(evidence: dict, out) -> None:
             f"{', metal' if entry['metal'] else ''}")
 
 
+# --- accumulation buffer -------------------------------------------------
+#
+# Observable fact: how many cartons physically passed the blade stop, and in
+# which release. The plant moves them and the plant counts them.
+#
+# How a program fakes it: by dropping the blade for a fixed number of seconds.
+# At one belt speed that releases the right amount every time, and it is the
+# obvious thing to write. So the exam reaches into the drive halfway through
+# the run and *doubles the belt's top speed* -- a physical change no tag
+# reports, visible only as the encoder counting faster. A release measured in
+# pulses is a release measured in distance and lets out the same product; a
+# release measured in seconds lets out twice as much.
+#
+# The other half is the blade itself: nothing may pass it while it is up, and
+# the encoder has to have been counting the whole time, so "the line stopped"
+# is ruled out as the explanation.
+#
+# Numbers from `engine/templates/accumulation_buffer.json`: 100 pulses per
+# metre, a 0.26 m blade stroke at 2 m/s, a drive ramping at 60 %/s.
+AB_BLADE_POS = 3.0
+AB_EYE_POS = 3.15
+AB_REMOVER_POS = 4.2
+AB_PITCH = 0.22
+AB_PULSES_PER_METRE = 100.0
+AB_BLADE_TIME = 0.26 / 2.0
+AB_RAMP = 60.0
+#: The drive's top speed, before and after the exam changes it.
+AB_SPEED_FIRST = 0.5
+AB_SPEED_THEN = 1.0
+AB_SPEED_CHANGES_AT = 40.0
+
+
+class AccumulationScene(PlantScene):
+    name = "accumulation-buffer"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("buffer.run", "VFD Conveyor (Run)", "bit", "output"),
+            Tag("buffer.speed", "VFD Conveyor Speed Ref (%)", "float", "output"),
+            Tag("outfeed.rotate", "Belt Conveyor (Rotate)", "bit", "output"),
+            Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
+            Tag("stop.raise", "Stop (Raise)", "bit", "output"),
+            Tag("enc.reset", "Encoder (Reset)", "bit", "output"),
+            Tag("count_display.value", "Released (Display)", "int", "output"),
+            Tag("buffer.actual", "VFD Conveyor Actual Speed (%)", "float", "input"),
+            Tag("enc.count", "Encoder Count", "int", "input"),
+            Tag("stop.up", "Stop (Blade Up)", "bit", "input"),
+            Tag("stop.down", "Stop (Blade Down)", "bit", "input", value=True),
+            Tag("exit_eye.detect", "Diffuse Sensor (Detect)", "bit", "input"),
+            Tag("released.count", "Remover (Count)", "int", "input"),
+        )
+
+        self.max_speed = AB_SPEED_FIRST
+        self.actual_percent = 0.0
+        self.blade = 0.0                 # 0 down, 1 up
+        self.pulses = 0.0
+        self.items: list[Item] = []
+        self.released: list[Item] = []
+        self._next_id = 1
+        self._emit_edge = False
+
+        #: Ground truth. One entry per time the blade was down, with the
+        #: cartons that got past during it and the drive speed at the time.
+        self.releases: list[dict] = []
+        self._open: dict | None = None
+        #: Cartons that got past a raised blade, which must be none.
+        self.escaped: list[int] = []
+        #: Metres of belt travelled while the blade was up, so "nothing got
+        #: past" cannot be satisfied by a line that was not running.
+        self.travel_while_held = 0.0
+        self.speed_samples: dict[str, list[float]] = {"first": [], "then": []}
+
+        self.window = float(self.rng.choice([100, 120, 140]))
+        self.script = Script([
+            (0.3, self.panel.set_setpoint(self.window)),
+            (1.0, self.panel.press("start")),
+            (AB_SPEED_CHANGES_AT, self._speed_up),
+        ])
+
+    def _speed_up(self) -> None:
+        """Reach into the drive and change what 100 % means.
+
+        The controller cannot read this anywhere. `buffer.speed` is its own
+        command and `buffer.actual` is a percentage of a maximum it is not
+        told -- the only thing that changes is how fast the encoder counts,
+        which is exactly the instrument a release measured in distance uses
+        and a release measured in seconds does not.
+        """
+        self.max_speed = AB_SPEED_THEN
+
+    @property
+    def phase(self) -> str:
+        return "first" if self.t < AB_SPEED_CHANGES_AT else "then"
+
+    def step(self, dt: float) -> None:
+        emit = self.bit("emitter.emit")
+        if emit and not self._emit_edge:
+            self.items.append(Item(id=self._next_id))
+            self._next_id += 1
+        self._emit_edge = emit
+
+        running = self.bit("buffer.run")
+        reference = min(max(self.num("buffer.speed"), 0.0), 100.0) if running else 0.0
+        self.actual_percent += max(min(reference - self.actual_percent,
+                                       AB_RAMP * dt), -AB_RAMP * dt)
+        speed = self.max_speed * self.actual_percent / 100.0 if running else 0.0
+        self.tags.set("buffer.actual", self.actual_percent)
+        self.speed_samples[self.phase].append(speed)
+
+        target = 1.0 if self.bit("stop.raise") else 0.0
+        rate = dt / AB_BLADE_TIME
+        self.blade = (min(self.blade + rate, target) if target > self.blade
+                      else max(self.blade - rate, target))
+        up = self.blade >= 0.999
+        self.tags.set("stop.up", up)
+        self.tags.set("stop.down", self.blade <= 0.001)
+
+        self.pulses += speed * AB_PULSES_PER_METRE * dt
+        if self.bit("enc.reset"):
+            self.pulses = 0.0
+        self.tags.set("enc.count", int(self.pulses))
+
+        moved = speed * dt
+        if up:
+            self.travel_while_held += moved
+
+        # Queue behind the blade: each carton is stopped by whatever is in
+        # front of it, and the leader by the blade when the blade is up.
+        blocking = self.blade > 0.5
+        ahead = None
+        for item in sorted(self.items, key=lambda i: i.position, reverse=True):
+            was = item.position
+            limit = float("inf")
+            if blocking and was < AB_BLADE_POS:
+                limit = AB_BLADE_POS - 0.10
+            if ahead is not None:
+                limit = min(limit, ahead - AB_PITCH)
+            item.position = min(item.position + moved, limit)
+            ahead = item.position
+            if was < AB_BLADE_POS <= item.position:
+                if blocking:
+                    self.escaped.append(item.id)
+                elif self._open is not None:
+                    self._open["cartons"] += 1
+
+        if not blocking and self._open is None:
+            self._open = {"from": round(self.t, 2), "phase": self.phase,
+                          "cartons": 0, "pulses_at": self.pulses}
+        elif blocking and self._open is not None:
+            self._open["to"] = round(self.t, 2)
+            self._open["pulses"] = round(self.pulses - self._open["pulses_at"], 1)
+            self._open["seconds"] = round(self._open["to"] - self._open["from"], 2)
+            self.releases.append(self._open)
+            self._open = None
+
+        self.tags.set("exit_eye.detect", self._eye(self.items, AB_EYE_POS))
+
+        still = []
+        for item in self.items:
+            if item.position >= AB_REMOVER_POS:
+                self.released.append(item)
+            else:
+                still.append(item)
+        self.items = still
+        self.tags.set("released.count", len(self.released))
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def grade_accumulation(watched: Watched, engine: GradedEngine, report: Report,
+                       duration: float) -> None:
+    sim: AccumulationScene = watched.inner
+    # A release worth comparing is one that let product out. A blade flicked
+    # down for a tenth of a second is not a release, and averaging it in would
+    # flatter a controller that did the job once.
+    real = [r for r in sim.releases if r["cartons"] >= 1]
+    first = [r for r in real if r["phase"] == "first"]
+    then = [r for r in real if r["phase"] == "then"]
+    avg_first, avg_then = _mean([r["cartons"] for r in first]), \
+        _mean([r["cartons"] for r in then])
+    moving = [s for s in sim.speed_samples["first"] if s > 0.01]
+    moving_then = [s for s in sim.speed_samples["then"] if s > 0.01]
+    speed_first, speed_then = _mean(moving), _mean(moving_then)
+
+    report.evidence.update({
+        "pulse_window_on_the_pot": sim.window,
+        "releases": real[-12:],
+        "first_speed": {"releases": len(first), "mean_cartons": round(avg_first, 2),
+                        "belt_m_per_s": round(speed_first, 3)},
+        "second_speed": {"releases": len(then), "mean_cartons": round(avg_then, 2),
+                         "belt_m_per_s": round(speed_then, 3)},
+        "escaped_a_raised_blade": sim.escaped[:20],
+        "belt_travel_while_held_m": round(sim.travel_while_held, 2),
+        "released_total": len(sim.released),
+        "blade_up_fraction": round(watched.held_true("stop.raise"), 3),
+    })
+
+    report.add("line.ran",
+               len(sim.released) >= 6,
+               f"{len(sim.released)} cartons reached the outfeed remover "
+               f"(at least 6)")
+    report.add("blade.held_everything",
+               not sim.escaped,
+               "nothing got past a raised blade" if not sim.escaped else
+               f"{len(sim.escaped)} carton(s) passed a raised blade: "
+               f"{sim.escaped[:10]}")
+    report.add("blade.held_a_running_belt",
+               sim.travel_while_held >= 3.0,
+               f"{sim.travel_while_held:.1f} m of belt ran under a raised blade "
+               f"(at least 3 m, so holding is the blade and not a stopped line)")
+    report.add("release.happened_at_both_speeds",
+               len(first) >= 1 and len(then) >= 1 and max(avg_first, avg_then) >= 2.0,
+               f"{len(first)} release(s) at {speed_first:.2f} m/s and {len(then)} at "
+               f"{speed_then:.2f} m/s, averaging {avg_first:.1f} and "
+               f"{avg_then:.1f} cartons")
+    if len(first) >= 1 and len(then) >= 1:
+        report.add("release.same_size_at_both_speeds",
+                   abs(avg_first - avg_then) <= 1.0,
+                   f"{avg_first:.1f} cartons per release at {speed_first:.2f} m/s "
+                   f"against {avg_then:.1f} at {speed_then:.2f} m/s "
+                   f"(at most 1 apart)")
+
+    _accumulation_feedback(report, watched, sim, first, then, avg_first, avg_then,
+                           speed_first, speed_then)
+
+
+def _accumulation_feedback(report, watched, sim, first, then, avg_first, avg_then,
+                           speed_first, speed_then) -> None:
+    say = report.feedback.append
+    up = watched.held_true("stop.raise")
+
+    if not sim.released:
+        say("Nothing reached the outfeed. `buffer.run` and `outfeed.rotate` are "
+            "yours, `buffer.speed` is a percentage reference, and "
+            "`emitter.emit` makes one carton per RISING edge.")
+        return
+    if up == 0.0:
+        say("The blade was never raised, so nothing ever accumulated. "
+            "`stop.raise` holds product back on a belt that keeps running.")
+    elif up > 0.97:
+        say("The blade was up for essentially the whole run, so nothing was "
+            "ever released.")
+
+    if sim.escaped:
+        say(f"{len(sim.escaped)} carton(s) got past while `stop.up` was true. "
+            f"Read the limit switch rather than the command -- the blade takes "
+            f"{AB_BLADE_TIME * 1000:.0f} ms to travel and `stop.raise` is true "
+            f"for all of it.")
+
+    if len(first) >= 1 and len(then) >= 1 and abs(avg_first - avg_then) > 1.0:
+        ratio = speed_then / speed_first if speed_first > 0 else 0.0
+        say(f"The belt ran at {speed_first:.2f} m/s for the first half of this "
+            f"run and {speed_then:.2f} m/s for the second -- {ratio:.1f} times "
+            f"faster -- and your releases went from {avg_first:.1f} cartons to "
+            f"{avg_then:.1f}. That is a release timed in seconds. "
+            f"`panel.setpoint` is a window in ENCODER PULSES, which is a "
+            f"distance: at {AB_PULSES_PER_METRE:.0f} pulses per metre, hold the "
+            f"blade down until `enc.count` has advanced by that many and the "
+            f"same length of product comes out at any speed.")
+    elif len(first) < 1 or len(then) < 1:
+        say("The run changed the drive's top speed halfway through and there was "
+            "no release on one side of that change to compare. Cycle the blade "
+            "more than once: accumulate, release, accumulate again.")
+    elif not sim.escaped:
+        say(f"The same pulse window released {avg_first:.1f} cartons at "
+            f"{speed_first:.2f} m/s and {avg_then:.1f} at {speed_then:.2f} m/s. "
+            f"A release timed in seconds would have let out "
+            f"{avg_first * speed_then / max(speed_first, 0.01):.0f} the second "
+            f"time.")
+
+
+def _summary_accumulation(evidence: dict, out) -> None:
+    first, then = evidence["first_speed"], evidence["second_speed"]
+    out(f"pot: a {evidence['pulse_window_on_the_pot']:.0f}-pulse release window "
+        f"({evidence['pulse_window_on_the_pot'] / 100:.2f} m of belt)")
+    out(f"at {first['belt_m_per_s']:.2f} m/s: {first['releases']} release(s), "
+        f"{first['mean_cartons']:.1f} cartons each")
+    out(f"at {then['belt_m_per_s']:.2f} m/s: {then['releases']} release(s), "
+        f"{then['mean_cartons']:.1f} cartons each")
+    out(f"{evidence['released_total']} cartons out, "
+        f"{evidence['belt_travel_while_held_m']:.1f} m of belt ran under a raised blade")
+
+
+# --- batch dosing --------------------------------------------------------
+#
+# Observable fact: litres. The plant integrates what the pump really delivered,
+# and that number is not on the bus -- `meter.total` is an instrument the
+# controller can zero, and `pump.speed` is a command rather than a delivery.
+#
+# How a program fakes it: by running the pump at a known speed for a known
+# time. Twenty litres at 120 L/min is ten seconds, and a stopwatch gets it
+# exactly right, once. So the exam reaches into the pump between the two
+# batches and halves what it is rated for. Same command, half the flow. A batch
+# that ends on litres takes twice as long and delivers the same; a batch that
+# ends on seconds delivers half and never notices.
+#
+# Numbers from `engine/templates/batch_dosing.json` and the parts: a pump rated
+# 120 L/min ramping at 300 %/s, a flow meter with a 0.2 s time constant whose
+# reset is a level rather than an edge, and a 200 L tank.
+BD_RATED_FIRST = 120.0
+BD_RATED_THEN = 60.0
+BD_RAMP = 300.0
+BD_METER_DAMPING = 0.2
+BD_CAPACITY = 200.0
+BD_TANK_DRAIN_RATE = 10.0
+
+
+class BatchDosingScene(PlantScene):
+    name = "batch-dosing"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("pump.run", "Dosing Pump (Run)", "bit", "output"),
+            Tag("pump.speed", "Dosing Pump Speed (%)", "float", "output"),
+            Tag("meter.reset", "Flow Meter Totaliser Reset", "bit", "output"),
+            Tag("tank.fill", "Tank Fill Valve (%)", "float", "output"),
+            Tag("tank.drain", "Tank Drain Valve (%)", "float", "output"),
+            Tag("flow_gauge.value", "Flow Gauge", "float", "output"),
+            Tag("total_display.value", "Total Display", "int", "output"),
+            Tag("level_readout.value", "Level Readout", "int", "output"),
+            Tag("pump.flow", "Dosing Pump Flow (L/min)", "float", "input"),
+            Tag("pump.fault", "Dosing Pump Fault", "bit", "input"),
+            Tag("meter.rate", "Flow Meter Rate (L/min)", "float", "input"),
+            Tag("meter.total", "Flow Meter Total (L)", "int", "input"),
+            Tag("tank.level", "Tank Level (%)", "float", "input"),
+        )
+
+        self.rated = BD_RATED_FIRST
+        self.percent = 0.0
+        self.flow = 0.0
+        self.meter_rate = 0.0
+        self.meter_total = 0.0
+        self.level = 0.0
+        #: Ground truth: litres the pump has actually moved, ever.
+        self.delivered = 0.0
+        #: One entry per batch the examiner asked for.
+        self.batches: list[dict] = []
+
+        self.litres = float(self.rng.choice([18.0, 20.0, 22.0, 24.0]))
+        self.script = Script([
+            (0.3, self.panel.set_setpoint(self.litres)),
+            (1.0, self._begin("first")),
+            (32.0, self._end_batch),
+            (33.0, self._halve_the_pump),
+            (35.0, self._begin("then")),
+        ])
+
+    def _begin(self, name: str):
+        def do() -> None:
+            self.panel.press("reset")()
+            self.panel.press("start")()
+            self.batches.append({"name": name, "from": self.t,
+                                 "delivered_at": self.delivered,
+                                 "level_at": self.level,
+                                 "rated": self.rated, "to": None})
+        do.__name__ = f"begin the {name} batch"
+        return do
+
+    def _end_batch(self) -> None:
+        self.panel.press("stop")()
+        if self.batches:
+            self.batches[-1]["to"] = self.t
+            self.batches[-1]["delivered"] = self.delivered - self.batches[-1]["delivered_at"]
+            self.batches[-1]["level_rise"] = self.level - self.batches[-1]["level_at"]
+        # The vessel is emptied between batches, by hand, so the second one
+        # starts from the same place as the first.
+        self.level = 0.0
+
+    def _halve_the_pump(self) -> None:
+        """Re-rate the pump. Nothing on the bus says so: `pump.speed` is still
+        a percentage of a maximum the controller is not told, and the only
+        instrument that knows is the flow meter."""
+        self.rated = BD_RATED_THEN
+
+    def step(self, dt: float) -> None:
+        run = self.bit("pump.run") and not self.bit("pump.fault")
+        commanded = min(max(self.num("pump.speed"), 0.0), 100.0)
+        target = commanded if run else 0.0
+        self.percent += max(min(target - self.percent, BD_RAMP * dt), -BD_RAMP * dt)
+        self.flow = self.rated * self.percent / 100.0
+        self.delivered += self.flow / 60.0 * dt
+
+        alpha = min(dt / BD_METER_DAMPING, 1.0)
+        self.meter_rate += (self.flow - self.meter_rate) * alpha
+        if self.bit("meter.reset"):
+            self.meter_total = 0.0
+        else:
+            self.meter_total += self.meter_rate / 60.0 * dt
+
+        drain = min(max(self.num("tank.drain"), 0.0), 100.0)
+        rise = self.flow / 60.0 / BD_CAPACITY * 100.0
+        fall = (BD_TANK_DRAIN_RATE * drain / 100.0
+                * (max(self.level, 0.0) / 100.0) ** 0.5)
+        self.level = min(max(self.level + (rise - fall) * dt, 0.0), 100.0)
+
+        self.tags.set("pump.flow", self.flow)
+        self.tags.set("meter.rate", self.meter_rate)
+        self.tags.set("meter.total", int(self.meter_total))
+        self.tags.set("tank.level", self.level)
+
+        if self.batches and self.batches[-1]["to"] is None:
+            batch = self.batches[-1]
+            batch["delivered"] = self.delivered - batch["delivered_at"]
+            batch["level_rise"] = self.level - batch["level_at"]
+
+
+def grade_batch_dosing(watched: Watched, engine: GradedEngine, report: Report,
+                       duration: float) -> None:
+    sim: BatchDosingScene = watched.inner
+    target = sim.litres
+    batches = sim.batches
+    #: Litres after the batch was supposed to be over. A dose that overshoots
+    #: by carrying on is a different mistake from one that overshoots by
+    #: running fast, and only the plant can tell them apart.
+    tail = sim.delivered - sum(b.get("delivered", 0.0) for b in batches)
+
+    report.evidence.update({
+        "pot_litres": target,
+        "batches": [{"name": b["name"], "rated_flow": b["rated"],
+                     "delivered_L": round(b.get("delivered", 0.0), 2),
+                     "level_rise_pct": round(b.get("level_rise", 0.0), 2),
+                     "seconds": round((b["to"] or watched.sim_time) - b["from"], 1)}
+                    for b in batches],
+        "delivered_total_L": round(sim.delivered, 2),
+        "meter_total_L": round(sim.meter_total, 2),
+        "delivered_outside_a_batch_L": round(tail, 2),
+        "pump_commanded_fraction": round(watched.held_true("pump.run"), 3),
+    })
+
+    first = batches[0].get("delivered", 0.0) if batches else 0.0
+    report.add("dose.ran",
+               first >= 5.0,
+               f"the first batch moved {first:.1f} L (at least 5 L, or there is "
+               f"nothing here to mark)")
+    for index, batch in enumerate(batches, start=1):
+        delivered = batch.get("delivered", 0.0)
+        rise = batch.get("level_rise", 0.0)
+        expected_rise = target / BD_CAPACITY * 100.0
+        report.add(f"dose{index}.on_the_number",
+                   abs(delivered - target) <= 1.5,
+                   f"batch {index} delivered {delivered:.1f} L against a "
+                   f"{target:g} L pot, with the pump rated "
+                   f"{batch['rated']:g} L/min (within 1.5 L)")
+        report.add(f"dose{index}.tank_agrees",
+                   abs(rise - expected_rise) <= 1.5,
+                   f"batch {index} raised a {BD_CAPACITY:g} L tank by "
+                   f"{rise:.1f} %, and {target:g} L is {expected_rise:.1f} %")
+    report.add("dose.cut_off",
+               tail <= 1.0,
+               f"{tail:.1f} L moved outside a batch (at most 1 L: the pump has "
+               f"to stop when the batch does)")
+
+    _batch_feedback(report, watched, sim, batches, target, tail)
+
+
+def _batch_feedback(report, watched, sim, batches, target, tail) -> None:
+    say = report.feedback.append
+    if not batches or batches[0].get("delivered", 0.0) < 1.0:
+        say("The pump moved nothing. `pump.run` has to be true and `pump.speed` "
+            "is a percentage, not a bit -- and `meter.rate` is the only thing "
+            "that knows what is actually being delivered.")
+        return
+
+    if len(batches) > 1:
+        one, two = batches[0].get("delivered", 0.0), batches[1].get("delivered", 0.0)
+        if two < 2.0 <= one:
+            say(f"The second batch delivered {two:.1f} L and stopped almost "
+                f"immediately. `meter.total` still held the first batch's "
+                f"litres, so the new batch was over before it started. Zero the "
+                f"totaliser before each one -- and its reset is a LEVEL, not an "
+                f"edge, so hold it until `meter.total` reads back zero.")
+        elif abs(one - target) <= 1.5 and abs(two - target) > 1.5:
+            ratio = batches[1]["rated"] / batches[0]["rated"]
+            say(f"The first batch landed on {one:.1f} L and the second on "
+                f"{two:.1f} L, against the same {target:g} L pot. Between them "
+                f"the pump was re-rated to {ratio:.0%} of what it was: the same "
+                f"`pump.speed` now delivers {ratio:.0%} of the flow. A batch that "
+                f"ends on seconds cannot see that. End it on `meter.total`, "
+                f"which is litres, and the second batch takes "
+                f"{1 / ratio:.0f} times as long and delivers the same.")
+
+    for index, batch in enumerate(batches, start=1):
+        delivered = batch.get("delivered", 0.0)
+        if delivered > target + 1.5:
+            say(f"Batch {index} overran by {delivered - target:.1f} L. The pump "
+                f"takes time to stop and the meter is damped, so cutting at the "
+                f"number arrives late -- taper the rate over the last few litres "
+                f"so the cut-off does not carry you past it.")
+
+    if tail > 1.0:
+        say(f"{tail:.1f} L went through the pump outside a batch. When the batch "
+            f"is done the pump stops: `pump.run` false, not merely a lower speed.")
+
+    if all(abs(b.get("delivered", 0.0) - target) <= 1.5 for b in batches) \
+            and len(batches) > 1:
+        say(f"Both batches landed on {target:g} L, at two different pump "
+            f"ratings -- {batches[0]['rated']:g} and {batches[1]['rated']:g} "
+            f"L/min -- and the tank agreed with the meter. That is a batch that "
+            f"ends on a quantity.")
+
+
+def _summary_batch(evidence: dict, out) -> None:
+    out(f"pot: {evidence['pot_litres']:g} L")
+    for batch in evidence["batches"]:
+        out(f"{batch['name']:>6} batch: {batch['delivered_L']:.1f} L in "
+            f"{batch['seconds']:.0f}s with the pump rated "
+            f"{batch['rated_flow']:g} L/min, tank +{batch['level_rise_pct']:.1f} %")
+    out(f"{evidence['delivered_total_L']:.1f} L through the pump in all, "
+        f"{evidence['delivered_outside_a_batch_L']:.1f} of it outside a batch")
+
+
 #: Every scene this tool can mark, and what it says it marks.
 RUBRICS = {
     "sorting-by-height": {
@@ -1932,6 +2447,42 @@ RUBRICS = {
                  "weight_readout.value, panel.green, panel.red are yours to "
                  "write; scale.weight, metal_check.detect, outfeed.count, "
                  "panel.setpoint and the buttons are the line's."),
+    },
+    "accumulation-buffer": {
+        "title": "Accumulation buffer",
+        "task": ("Let cartons pile up behind the blade stop on a belt that "
+                 "never stops, then release a batch. The pot is a release "
+                 "window in ENCODER PULSES, which is a distance -- and this "
+                 "run changes the drive's top speed halfway through."),
+        "build": AccumulationScene,
+        "observe": None,
+        "grade": grade_accumulation,
+        "summary": _summary_accumulation,
+        "duration": 80.0,
+        "references": ("good", "timed"),
+        "tags": ("buffer.run, buffer.speed, outfeed.rotate, emitter.emit, "
+                 "stop.raise, enc.reset, count_display.value, panel.green, "
+                 "panel.red are yours to write; buffer.actual, enc.count, "
+                 "stop.up, stop.down, exit_eye.detect, released.count, "
+                 "panel.setpoint and the buttons are the line's."),
+    },
+    "batch-dosing": {
+        "title": "Batch dosing",
+        "task": ("Dose the litres on the pot into the tank. Trim pump.speed "
+                 "until meter.rate is the rate you want, and end the batch on "
+                 "meter.total rather than on a clock -- this run re-rates the "
+                 "pump between the two batches."),
+        "build": BatchDosingScene,
+        "observe": None,
+        "grade": grade_batch_dosing,
+        "summary": _summary_batch,
+        "duration": 80.0,
+        "references": ("good", "timed", "noreset"),
+        "tags": ("pump.run, pump.speed, meter.reset, tank.fill, tank.drain, "
+                 "flow_gauge.value, total_display.value, level_readout.value, "
+                 "panel.green, panel.red are yours to write; pump.flow, "
+                 "pump.fault, meter.rate, meter.total, tank.level, "
+                 "panel.setpoint and the buttons are the plant's."),
     },
 }
 
@@ -2520,6 +3071,185 @@ async def _rw_fastfeed(bus, stop):
     await _rw_body(bus, stop, on_metal=False, feed_gap=0.9)
 
 
+# --- accumulation buffer references ---------------------------------------
+
+async def _ab_body(bus, stop, *, by_pulses: bool) -> None:
+    """Accumulate, then release. The only difference between the two is what
+    ends the release: a distance the encoder measures, or a clock."""
+    scanner = Scanner(bus)
+    #: Seconds the timed release holds the blade down. Sized for the drive's
+    #: first top speed, which is exactly the mistake: it is right until the
+    #: line runs faster.
+    TIMED_HOLD = 2.4
+    HOLD_FOR = 9.0
+    state = {"phase": "accumulate", "until": 0.0, "pulses_at": 0.0,
+             "feed": 0.0, "emit": False}
+
+    async def body(dt: float) -> None:
+        scanner.scan()
+        now = time.perf_counter()
+        pulses = scanner.num("enc.count")
+
+        if scanner.running:
+            state["feed"] -= dt
+            if state["feed"] <= 0.0:
+                state["emit"] = not state["emit"]
+                state["feed"] = 0.8 if state["emit"] else 0.2
+        else:
+            state["emit"] = False
+            state["phase"] = "accumulate"
+            state["until"] = now + HOLD_FOR
+
+        if scanner.running:
+            if state["phase"] == "accumulate":
+                if state["until"] <= 0.0:
+                    state["until"] = now + HOLD_FOR
+                if now >= state["until"]:
+                    state["phase"] = "release"
+                    state["pulses_at"] = pulses
+                    state["until"] = now + TIMED_HOLD
+            elif state["phase"] == "release":
+                done = (pulses - state["pulses_at"] >= scanner.setpoint
+                        if by_pulses else now >= state["until"])
+                if done:
+                    state["phase"] = "accumulate"
+                    state["until"] = now + HOLD_FOR
+
+        # A stopped line holds what it has: dropping the blade with the belt
+        # off would spill the whole buffer the moment it restarted.
+        raise_blade = state["phase"] != "release" or not scanner.running
+        await bus.write_many({
+            "buffer.run": scanner.running,
+            "buffer.speed": 100.0 if scanner.running else 0.0,
+            "outfeed.rotate": scanner.running,
+            "emitter.emit": state["emit"],
+            "stop.raise": raise_blade,
+            "enc.reset": False,
+            "count_display.value": int(scanner.num("released.count")),
+            **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
+
+
+async def _ab_good(bus, stop):
+    """Releases for the pot's window of encoder pulses, which is a distance."""
+    await _ab_body(bus, stop, by_pulses=True)
+
+
+async def _ab_timed(bus, stop):
+    """Releases for a fixed 2.4 seconds, sized for the speed the line was
+    running at when it was written. It lets out the right amount until the
+    drive's top speed changes, and then twice as much."""
+    await _ab_body(bus, stop, by_pulses=False)
+
+
+# --- batch dosing references ----------------------------------------------
+
+async def _bd_body(bus, stop, *, by_litres: bool, zero_the_meter: bool,
+                   open_loop: bool = False) -> None:
+    scanner = Scanner(bus)
+    #: The dose rate the inner loop aims for, and what a stopwatch would make
+    #: of it: 20 L at 100 L/min is twelve seconds. Right once.
+    DOSE_RATE = 100.0
+    CREEP_LITRES = 4.0
+    KP, KI = 0.25, 1.0
+    state = {"phase": "zero", "speed": 0.0, "integral": 0.0, "since": 0.0,
+             "seconds": 0.0}
+
+    async def body(dt: float) -> None:
+        edges = scanner.scan()
+        target = scanner.setpoint
+        total = scanner.num("meter.total")
+        rate = scanner.num("meter.rate")
+
+        if edges["start"]:
+            state["phase"] = "zero" if zero_the_meter else "dose"
+            state["integral"] = 0.0
+            state["seconds"] = 0.0
+        if not scanner.running:
+            state["phase"] = "idle"
+
+        zeroing = False
+        dosing = False
+        if scanner.running:
+            if state["phase"] == "zero":
+                # A level, not an edge: hold it until the totaliser reads back
+                # zero, so this batch counts from zero rather than from what
+                # the last one left.
+                zeroing = True
+                if total <= 0.0:
+                    state["phase"] = "dose"
+            elif state["phase"] == "dose":
+                dosing = True
+                state["seconds"] += dt
+                # The stopwatch answer is calibrated against the pump's
+                # nameplate, not against a dose rate it never reaches: twenty
+                # litres at 120 L/min is ten seconds, and at full speed that is
+                # exactly right -- once.
+                # x1.07 because this controller was calibrated on the line,
+                # the way a student would calibrate it: the pump ramps, the
+                # command lands a scan late, and the first batch came out a
+                # litre short until the number was nudged. That calibration is
+                # the whole trap -- it is a measurement of one pump on one day.
+                seconds_for = (target / BD_RATED_FIRST * 60.0 * 1.07 if open_loop
+                               else target / DOSE_RATE * 60.0)
+                done = (total >= target if by_litres
+                        else state["seconds"] >= seconds_for)
+                if done:
+                    state["phase"] = "done"
+                    dosing = False
+
+        flow_setpoint = 0.0
+        if dosing and open_loop:
+            state["speed"] = 100.0
+        elif dosing:
+            remaining = max(target - total, 0.0)
+            taper = (1.0 if remaining >= CREEP_LITRES
+                     else max(remaining / CREEP_LITRES, 0.25))
+            flow_setpoint = DOSE_RATE * (taper if by_litres else 1.0)
+            error = flow_setpoint - rate
+            if 0.5 < state["speed"] < 99.5:
+                state["integral"] = min(max(state["integral"] + error * KI * dt,
+                                            -100.0), 100.0)
+            state["speed"] = min(max(error * KP + state["integral"], 0.0), 100.0)
+        else:
+            state["speed"] = 0.0
+            state["integral"] = 0.0
+
+        await bus.write_many({
+            "meter.reset": zeroing,
+            "pump.run": dosing,
+            "pump.speed": state["speed"],
+            "tank.fill": 0.0,
+            "tank.drain": 0.0,
+            "flow_gauge.value": rate,
+            "total_display.value": int(total),
+            "level_readout.value": int(round(scanner.num("tank.level"))),
+            **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
+
+
+async def _bd_good(bus, stop):
+    """Zeroes the totaliser, trims the pump against the meter, and ends the
+    batch on litres."""
+    await _bd_body(bus, stop, by_litres=True, zero_the_meter=True)
+
+
+async def _bd_timed(bus, stop):
+    """Runs the pump flat out for the number of seconds the pot's litres take
+    at the pump's nameplate flow. Exactly right until the pump is re-rated,
+    and then exactly half."""
+    await _bd_body(bus, stop, by_litres=False, zero_the_meter=True,
+                   open_loop=True)
+
+
+async def _bd_noreset(bus, stop):
+    """Ends on litres, correctly, and never zeroes the totaliser -- so the
+    second batch is over before it starts."""
+    await _bd_body(bus, stop, by_litres=True, zero_the_meter=False)
+
+
 #: `{scene: {name: controller}}`, plus the two shared ones. Every scene has a
 #: `good` that must pass and at least one wrong answer that must fail for that
 #: scene's own reason -- the rubric is only known to work when both have been
@@ -2536,6 +3266,9 @@ REFERENCES: dict[str, dict] = {
                               "everyother": _lc_everyother},
     "roller-line-weighing": {"good": _rw_good, "metalonly": _rw_metalonly,
                              "fastfeed": _rw_fastfeed},
+    "accumulation-buffer": {"good": _ab_good, "timed": _ab_timed},
+    "batch-dosing": {"good": _bd_good, "timed": _bd_timed,
+                     "noreset": _bd_noreset},
 }
 
 _SHARED = {"idle": _idle, "forcer": _forcer}
