@@ -345,17 +345,45 @@ class S7Snap7Driver(Driver):
         # need the driver restarting.
         return max(end, 2)
 
+    def _furthest(self) -> tuple[str, int] | None:
+        """The mapped tag that reaches highest into the DB, and the byte after
+        it — which is the minimum length the DB has to have."""
+        best: tuple[str, int] | None = None
+        for tag_id, (kind, byte, _bit) in self._addresses.items():
+            end = byte + (1 if kind == "bit" else 4)
+            if best is None or end > best[1]:
+                best = (tag_id, end)
+        return best
+
     def _explain(self, err: Exception) -> None:
         """Turn snap7's terse errors into the thing you actually have to change."""
         text = str(err)
-        if "Invalid address" in text and "optimized" not in self._warned:
-            self._warned.add("optimized")
+        if "Invalid address" in text and "address" not in self._warned:
+            self._warned.add("address")
+            # This used to say, flatly, that the block was an optimized-access
+            # block, and hand out TIA instructions for unchecking it. AGENTS.md
+            # gotcha 19c records that diagnosis as wrong and as having cost
+            # real time: "Invalid address (0x05)" usually means the read
+            # overran the DB. FF_IO is 10 bytes and asking for 12 fails in
+            # exactly this way. So lead with the length, and offer optimized
+            # access second — which is what the evidence supports, and it
+            # names the numbers so the reader can check rather than believe.
+            furthest = self._furthest()
+            reach = (f"the furthest tag in your mapping is {furthest[0]!r}, which ends "
+                     f"at byte {furthest[1]}, so DB{self.db_number} must be at least "
+                     f"{furthest[1]} bytes long"
+                     if furthest else "no addresses are mapped at all")
             log.error(
-                "DB%d exists but has no absolute addresses — it is an "
-                "'optimized block access' block, which snap7 cannot read. In TIA, "
-                "right-click the DB -> Properties -> Attributes, uncheck "
-                "'Optimized block access', recompile and download. (%s)",
-                self.db_number, text.strip(),
+                "DB%d refused a %d-byte read from byte 0 (%s).\n"
+                "  Most likely the read ran past the end of the DB: %s. Check "
+                "its length in TIA and check every address in the mapping file "
+                "is inside it — FF_IO is 10 bytes, and asking for 12 fails in "
+                "exactly this way.\n"
+                "  If the length is right, the block may instead have "
+                "'optimized block access' set, which snap7 cannot read at all: "
+                "right-click the DB -> Properties -> Attributes, uncheck it, "
+                "recompile and download.",
+                self.db_number, self._span(), text.strip(), reach,
             )
             return
         if "does not exist" in text and "missing" not in self._warned:

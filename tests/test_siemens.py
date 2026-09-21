@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import struct
 import sys
 import threading
@@ -589,6 +590,38 @@ async def test_plcsim_seeds_when_the_description_arrives_after_the_attach(
         assert sim_instance.values.get('"FF_IO".pusher.retracted') is True
     finally:
         await driver.stop()
+
+
+async def test_a_read_past_the_end_of_the_db_blames_the_length_first(
+        plc, fake_bus, caplog):
+    """Gotcha 19c: snap7's "Invalid address (0x05)" usually means the read
+    overran the DB, not that the block is optimized. The driver asserted the
+    latter and handed out TIA instructions for unchecking it -- the exact
+    misdiagnosis the handoff document records as having cost real time.
+    """
+    # A mapping that reaches byte 12 of a DB that is 10 bytes long, which is
+    # gotcha 19c's own example.
+    mapping = dict(FF_IO, over_the_end="DBD8")
+    driver = make_snap7(fake_bus, mapping=mapping)
+    try:
+        with caplog.at_level(logging.ERROR, logger=s7_snap7.__name__):
+            await driver.start()
+            assert await settle(lambda: driver.connected.is_set())
+            await driver.rebuild("sorting", 1, sorting_table())
+            assert await settle(
+                lambda: any("Invalid address" in r.getMessage()
+                            for r in caplog.records)), "the failure was never explained"
+    finally:
+        await driver.stop()
+
+    message = next(r.getMessage() for r in caplog.records
+                   if "Invalid address" in r.getMessage())
+    assert "12-byte read" in message, "the message does not say what was asked for"
+    assert "over_the_end" in message and "at least 12 bytes" in message, \
+        "the message does not say which address is out of bounds, or by how much"
+    assert "optimized" in message, "optimized access is still worth mentioning second"
+    assert message.index("past the end") < message.index("optimized"), \
+        "optimized block access is still being given as the diagnosis"
 
 
 async def test_plcsim_never_touches_the_power_state(sim_instance, fake_bus):
