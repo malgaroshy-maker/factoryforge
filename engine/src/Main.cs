@@ -390,6 +390,14 @@ public partial class Main : Node
             EditorConfirm.Tell(this, "Could not save the scene",
                 $"'{path}' was not written: {problem}.\n\n" +
                 "Your scene is still open and still unsaved. Try another location.");
+        editor.LoadFailed += (path, problem) =>
+            EditorConfirm.Tell(this, "Could not open that scene",
+                $"'{path}' was not loaded: {problem}.\n\n" +
+                "The scene you had open is untouched.");
+        editor.SceneLoadIncomplete += (path, types) =>
+            EditorConfirm.Tell(this, "That scene is not all here",
+                $"'{path}' uses part types this build does not have: {types}.\n\n" +
+                "The rest of the scene loaded. Saving over the file would lose them.");
         toolbarUI.LoadRequested += (path) =>
         {
             void DoLoad()

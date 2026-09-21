@@ -67,6 +67,15 @@ public partial class SceneEditor : Node3D
     /// (HP-01).</summary>
     [Signal] public delegate void SaveFailedEventHandler(string path, string problem);
 
+    /// <summary>A scene file that was refused, with the reason. The open scene
+    /// is untouched when this is raised (HP-02).</summary>
+    [Signal] public delegate void LoadFailedEventHandler(string path, string problem);
+
+    /// <summary>A scene that opened but is not all there: it named part types
+    /// this build does not have, and they were left out. <paramref name="types"/>
+    /// is a comma-separated list.</summary>
+    [Signal] public delegate void SceneLoadIncompleteEventHandler(string path, string types);
+
     private string? _activePartType;
     private Node3D? _previewNode;
     private float _previewRotationY;
@@ -1861,6 +1870,11 @@ public partial class SceneEditor : Node3D
             return false;
         }
 
+        // A typed id is a claimed id: auto-numbering has to step over it, or the
+        // next placement of this type mints the name somebody just chose and
+        // adopts its tags (HP-15).
+        PartTagManager.NoteInstanceId(entry.PartType, newId);
+
         // Anything holding the old id has to follow it, or it points at a tag
         // that no longer exists: the remover's count tag, and any button pulse
         // waiting to be cleared on the next tick.
@@ -2510,20 +2524,52 @@ public partial class SceneEditor : Node3D
         return false;
     }
 
-    public void LoadSceneFromFile(string path = "user://custom_scene.json")
+    /// <summary>
+    /// Open a scene file. Returns false without touching the open scene if the
+    /// file cannot be used.
+    ///
+    /// The order here is the whole of HP-02. It used to be: clear the scene,
+    /// then open the file, then parse it — so every way a file could be bad cost
+    /// the user the scene they already had, and they found out by watching their
+    /// work disappear. Read, parse, validate, and only then clear.
+    /// </summary>
+    public bool LoadSceneFromFile(string path = "user://custom_scene.json")
     {
         if (!Godot.FileAccess.FileExists(path))
         {
             GD.Print($"No saved scene file found at {path}");
-            return;
+            return LoadRefused(path, "there is no file there");
         }
 
-        ClearAllPlacedParts();
+        string json;
+        using (var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Read))
+        {
+            if (file is null)
+                return LoadRefused(path, $"it could not be opened ({Godot.FileAccess.GetOpenError()})");
+            json = file.GetAsText();
+        }
 
-        using var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Read);
-        string json = file?.GetAsText() ?? "";
-        var data = SceneData.FromJson(json);
-        if (data is null) return;
+        if (!SceneData.TryParse(json, out var data, out string problem) || data is null)
+            return LoadRefused(path, problem);
+
+        // Part types this build does not have are dropped rather than refused,
+        // and *said out loud* rather than dropped silently — which is what
+        // happened before, because CreatePartNode returns null for an unknown
+        // type and SpawnFromData quietly returns null in turn. A scene from a
+        // newer build that added a part keeps its version number, so refusing
+        // the file would make every such scene unopenable; but a machine
+        // vanishing from somebody's line with no message is the same silent
+        // loss this whole phase is about.
+        var unknown = new List<string>();
+        foreach (var part in data.Parts)
+        {
+            if (!PartCatalog.IsKnownType(part.Type) && !unknown.Contains(part.Type))
+                unknown.Add(part.Type);
+        }
+
+        // Past this line the open scene is gone. Everything that could refuse
+        // the file has already had its turn.
+        ClearAllPlacedParts();
 
         if (data.Name is { Length: > 0 }) SceneName = data.Name;
 
@@ -2534,10 +2580,30 @@ public partial class SceneEditor : Node3D
 
         IsDirty = false;
         GD.Print($"Loaded scene from {path} ({_placedParts.Count} parts)");
+
+        if (unknown.Count > 0)
+        {
+            string types = string.Join(", ", unknown);
+            GD.PrintErr($"Scene {path} contains part types this build does not have: {types}. " +
+                        "They were left out. Saving over the file would lose them.");
+            EmitSignal(SignalName.SceneLoadIncomplete, path, types);
+        }
+
         // Deferred: the parts were added this frame and have not run _Ready, so
         // their geometry does not exist yet and anything measuring them now
         // would frame a set of empty boxes at their origins.
         CallDeferred(nameof(AnnounceSceneLoaded));
+        return true;
+    }
+
+    /// <summary>Refuse a scene file, leaving the open scene exactly as it was.
+    /// Reported through a signal as well as the console for the same reason a
+    /// failed save is: the person is looking at the window.</summary>
+    private bool LoadRefused(string path, string why)
+    {
+        GD.PrintErr($"Could not open scene {path}: {why}");
+        EmitSignal(SignalName.LoadFailed, path, why);
+        return false;
     }
 
     private void AnnounceSceneLoaded() => EmitSignal(SignalName.SceneLoaded);

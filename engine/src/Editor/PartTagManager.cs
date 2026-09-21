@@ -82,6 +82,28 @@ public static class PartTagManager
     /// rejected rename cannot half-apply and leave a part driven by a mixture of
     /// two prefixes.
     /// </summary>
+    /// <summary>
+    /// Keep a type's auto-numbering ahead of an id that was chosen rather than
+    /// minted — one that arrived in a scene file, or one a user typed into the
+    /// rename box.
+    ///
+    /// The rename case is the one that was missing (HP-15), and it is worth
+    /// saying why the part *key* added for HP-37 does not cover it: that key is
+    /// the undo history's idea of identity and is deliberately private to the
+    /// editor. An instance id is something else entirely — a tag prefix, shared
+    /// with every driver and every PLC program written against the scene. Two
+    /// parts may not share one, and nothing about a unique command key makes
+    /// that true.
+    /// </summary>
+    public static void NoteInstanceId(string partType, string instanceId)
+    {
+        if (!TypeCounters.ContainsKey(partType)) TypeCounters[partType] = 0;
+
+        int underscore = instanceId.LastIndexOf('_');
+        if (underscore >= 0 && int.TryParse(instanceId[(underscore + 1)..], out int used))
+            TypeCounters[partType] = System.Math.Max(TypeCounters[partType], used);
+    }
+
     public static bool RenameInstance(string oldId, string newId, TagTable tags)
     {
         if (oldId == newId) return true;
@@ -134,14 +156,31 @@ public static class PartTagManager
             instanceId = preferredId;
             // Keep auto-numbering ahead of ids that arrived from a file, so a
             // part placed after a load cannot collide with one from it.
-            int underscore = preferredId.LastIndexOf('_');
-            if (underscore >= 0 && int.TryParse(preferredId[(underscore + 1)..], out int loaded))
-                TypeCounters[partType] = System.Math.Max(TypeCounters[partType], loaded);
+            NoteInstanceId(partType, preferredId);
         }
         else
         {
-            TypeCounters[partType]++;
-            instanceId = $"{partType.ToLower()}_{TypeCounters[partType]}";
+            // Step over anything already taken (HP-15).
+            //
+            // The counter alone is not enough and never was: it is advanced when
+            // an id arrives from a file, and it was *not* advanced when a user
+            // renamed a part. Rename conveyorbelt_1 to conveyorbelt_2, place a
+            // new conveyor, and the counter still said 1 — so the new part minted
+            // conveyorbelt_2, found tags already under that prefix, and adopted
+            // them instead of creating its own. Two machines then answered one
+            // PLC output, with nothing on screen to say which.
+            //
+            // Adoption is a real feature (the default scene's belt is a *view* of
+            // tags SortingScene owns) but it is only ever right for an id the
+            // caller asked for by name. An auto-minted id that collides is always
+            // a bug, so this loop makes the collision impossible rather than
+            // relying on every future caller to remember the counter.
+            do
+            {
+                TypeCounters[partType]++;
+                instanceId = $"{partType.ToLower()}_{TypeCounters[partType]}";
+            }
+            while (HasTagsFor(instanceId, tags));
         }
 
         // Tags already under this prefix belong to whoever created them first —

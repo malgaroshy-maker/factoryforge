@@ -63,6 +63,8 @@ public partial class SceneSelfTest : Node
             CheckRotateAndDuplicate();
             CheckASaveThatCannotLandSaysSo();
             CheckAFailedSaveLeavesTheLastGoodFile();
+            CheckABadFileLeavesTheOpenSceneAlone();
+            CheckRenameDoesNotHandItsIdToTheNextPart();
         }
         catch (System.Exception ex)
         {
@@ -546,6 +548,153 @@ public partial class SceneSelfTest : Node
         Expect(SceneData.FromJson(replaced)?.Parts.Count == wasCount - 1,
                "with the scene as it now stands");
         Expect(!Godot.FileAccess.FileExists(partial), "and no half-written file left over");
+    }
+
+    /// <summary>
+    /// HP-02, HP-07 and HP-15's file half: one validation boundary, and every
+    /// way a scene file can be unusable has to be refused on the far side of it.
+    ///
+    /// The loader used to call ClearAllPlacedParts() *first* and parse
+    /// afterwards, so opening a corrupt file destroyed the scene you had before
+    /// it discovered it could not read the new one. Three shapes reached it and
+    /// "parse first" only covers the first: Deserialize throwing on malformed
+    /// JSON, returning null for a file containing `null`, and a part whose
+    /// position array is too short to build a Vector3 — which threw later still,
+    /// part-way through rebuilding, with some parts already placed and the rest
+    /// gone.
+    ///
+    /// Each case is asserted the same way, because the claim is the same one:
+    /// the scene that was open is still open, part for part.
+    /// </summary>
+    private void CheckABadFileLeavesTheOpenSceneAlone()
+    {
+        Editor!.LoadSceneFromFile(ScenePath);
+        var intact = Editor.PlacedPartIds().ToHashSet();
+        string sceneName = Editor.SceneName;
+        Expect(intact.Count > 1, "there is a real scene open to be destroyed");
+
+        RefuseAndKeepTheScene("malformed JSON", "{ \"name\": \"broken\", \"parts\": [",
+                              intact, sceneName);
+        RefuseAndKeepTheScene("a file that is only null", "null", intact, sceneName);
+        RefuseAndKeepTheScene("an empty file", "", intact, sceneName);
+
+        // HP-02's third shape: well-formed JSON, structurally unusable. This one
+        // did not throw at the parse at all -- it threw inside the rebuild, at
+        // new Vector3(p.Position[0], p.Position[1], p.Position[2]).
+        RefuseAndKeepTheScene("a part with a two-element position",
+            """
+            { "name": "short", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        RefuseAndKeepTheScene("a part with no type",
+            """
+            { "name": "typeless", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // HP-07: a format this build does not understand. Unknown *keys* are
+        // ignored on purpose, which is right for a forward-compatible field and
+        // wrong for a whole future format -- a version 2 scene would have loaded
+        // quietly and lost whatever it did not recognise.
+        RefuseAndKeepTheScene("a scene file from a newer format",
+            """
+            { "name": "from-the-future", "version": "9.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // HP-15's file half: an instance id is a tag prefix, so two parts under
+        // one id means two machines answering one PLC output. Adopting them is
+        // worse than refusing the file, because the second part registers no
+        // tags of its own and the pair silently drive each other's.
+        RefuseAndKeepTheScene("two parts sharing one instance id",
+            """
+            { "name": "colliding", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] },
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [3.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // And the boundary still lets a good file through, or every assertion
+        // above would be satisfied by a loader that had simply stopped working.
+        Expect(Editor.LoadSceneFromFile(ScenePath), "a valid scene file still opens");
+        Expect(Editor.PlacedPartIds().ToHashSet().SetEquals(intact),
+               "with all of its parts");
+    }
+
+    private void RefuseAndKeepTheScene(string what, string json,
+                                       HashSet<string> intact, string sceneName)
+    {
+        const string bad = "user://selftest_scene_bad.json";
+        using (var file = Godot.FileAccess.Open(bad, Godot.FileAccess.ModeFlags.Write))
+        {
+            Expect(file is not null, $"the {what} case can be written");
+            file?.StoreString(json);
+        }
+
+        bool opened = Editor!.LoadSceneFromFile(bad);
+        Expect(!opened, $"{what} is refused");
+
+        var now = Editor.PlacedPartIds().ToHashSet();
+        Expect(now.SetEquals(intact),
+               $"and the open scene survives {what} ({now.Count} parts, was {intact.Count})");
+        Expect(Editor.SceneName == sceneName,
+               $"and keeps its name through {what} (got '{Editor.SceneName}')");
+    }
+
+    /// <summary>
+    /// HP-15's editor half. Renaming did not advance the type's counter, so
+    /// renaming conveyorbelt_1 to conveyorbelt_2 and then placing a new conveyor
+    /// minted conveyorbelt_2 — which found tags already under that prefix and
+    /// *adopted* them rather than registering its own. Two parts, one tag set,
+    /// no sign anywhere.
+    ///
+    /// Note this is not the part key HP-37 added. That key is the undo history's
+    /// idea of identity and is private to the editor; an instance id is a tag
+    /// prefix, shared with every driver and every PLC program written against
+    /// the scene. A unique command key says nothing about tag uniqueness.
+    /// </summary>
+    private void CheckRenameDoesNotHandItsIdToTheNextPart()
+    {
+        Editor!.ClearAllPlacedParts();
+        PartTagManager.ResetCounters();
+
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(new Vector3(0, 0, 0));
+        Editor.CancelPlacement();
+
+        string first = Editor.PlacedPartIds()[0];
+        Editor.SelectPartByIndex(0);
+
+        // Rename it to the name the *next* placement would otherwise mint.
+        string wanted = $"conveyorbelt_{int.Parse(first.Split('_')[^1]) + 1}";
+        Expect(Editor.TryRenamePart(first, wanted, out string problem),
+               $"the part can be renamed to '{wanted}' ({problem})");
+
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(new Vector3(3.0f, 0, 0));
+        Editor.CancelPlacement();
+
+        var ids = Editor.PlacedPartIds();
+        Expect(ids.Count == 2, $"there are two conveyors (got {ids.Count})");
+        Expect(ids.ToHashSet().Count == ids.Count,
+               $"and they have different instance ids (got [{string.Join(",", ids)}])");
+
+        // The real damage, stated directly: each one has to own its own tags.
+        // The adopting part registered none, so deleting the renamed one took
+        // the survivor's `rotate` with it.
+        foreach (string id in ids)
+            Expect(PartTagManager.HasTagsFor(id, Tags), $"{id} has tags of its own");
+
+        Editor.SelectPartByIndex(0);
+        Editor.DeleteSelectedPart();
+        string survivor = Editor.PlacedPartIds()[0];
+        Expect(PartTagManager.HasTagsFor(survivor, Tags),
+               $"and deleting one leaves the other's tags alone ({survivor})");
     }
 
     private static string ReadAll(string path)
