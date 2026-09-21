@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import struct
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -24,7 +25,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from factoryforge_sidecar import drivers
-from factoryforge_sidecar.drivers import s7_snap7
+from factoryforge_sidecar.drivers import plcsim_advanced, s7_snap7
 from factoryforge_sidecar.tags import Tag, TagTable, TagValue
 
 
@@ -239,6 +240,58 @@ def make_snap7(fake_bus, **kwargs):
     return s7_snap7.S7Snap7Driver(fake_bus, **kwargs)
 
 
+# --- the fake PLCSIM Advanced instance ----------------------------------------
+
+#: What a TIA symbol map looks like: quotes are part of the identifier.
+PLCSIM_SYMBOLS = {tag_id: f'"FF_IO".{tag_id}' for tag_id in FF_IO}
+
+
+class FakeSimInstance:
+    """The .NET Simulation Runtime API surface this driver actually touches."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, TagValue] = {}
+        self.tag_list_updated = False
+        #: Gotcha 18: attaching to a CPU is not owning it. Nothing here should
+        #: ever be called, and a test asserts so.
+        self.power_calls: list[str] = []
+
+    def UpdateTagList(self) -> None:
+        self.tag_list_updated = True
+
+    def PowerOn(self) -> None: self.power_calls.append("PowerOn")
+    def PowerOff(self) -> None: self.power_calls.append("PowerOff")
+    def Run(self) -> None: self.power_calls.append("Run")
+
+    def WriteBool(self, symbol, value) -> None: self.values[symbol] = bool(value)
+    def WriteInt32(self, symbol, value) -> None: self.values[symbol] = int(value)
+    def WriteDouble(self, symbol, value) -> None: self.values[symbol] = float(value)
+
+    def ReadBool(self, symbol) -> bool: return bool(self.values.get(symbol, False))
+    def ReadInt32(self, symbol) -> int: return int(self.values.get(symbol, 0))
+    def ReadDouble(self, symbol) -> float: return float(self.values.get(symbol, 0.0))
+
+
+@pytest.fixture
+def sim_instance(monkeypatch) -> FakeSimInstance:
+    """Stand in for the Siemens assembly `start()` imports from."""
+    instance = FakeSimInstance()
+    module = SimpleNamespace(
+        SimulationRuntimeManager=SimpleNamespace(
+            CreateInterface=lambda name: instance))
+    for name in ("Siemens", "Siemens.Simatic", "Siemens.Simatic.Simulation",
+                 "Siemens.Simatic.Simulation.Runtime"):
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(plcsim_advanced, "HAS_PYTHONNET", True)
+    monkeypatch.setattr(plcsim_advanced, "_load_runtime_api", lambda: None)
+    return instance
+
+
+def make_plcsim(fake_bus, **kwargs):
+    kwargs.setdefault("mapping", dict(PLCSIM_SYMBOLS))
+    return plcsim_advanced.PLCSIMAdvancedDriver(fake_bus, **kwargs)
+
+
 def test_the_fake_agrees_with_real_snap7():
     """The fake's memory layout stands in for snap7.util everywhere these tests
     run. Where the real library is installed, check the substitution holds --
@@ -441,3 +494,109 @@ async def test_a_dead_plc_is_dropped_and_reconnected(plc, fake_bus):
             "the driver never tried to rebuild the session"
     finally:
         await driver.stop()
+
+
+# --- initial simulator inputs reach the PLC -----------------------------------
+#
+# The engine publishes deltas after the description, so an input that never
+# changes is never sent. `pusher.retracted` starts true and stays true, which
+# makes it the tag that can prove seeding happened: nothing else would ever
+# write it.
+
+def retracted(plc: FakePlc) -> bool:
+    return FakeUtil.get_bool(plc.memory, 1, 3)      # pusher.retracted, DBX1.3
+
+
+async def test_an_input_that_never_changes_is_established_on_connect(plc, fake_bus):
+    """The description arriving first is the ordinary case: the bus replays it
+    to a driver constructed after it, long before the PLC answers."""
+    plc.refuse = True
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: plc.connect_attempts >= 1)
+        assert not retracted(plc), "nothing should have reached an unreachable PLC"
+
+        plc.refuse = False
+        assert await settle(lambda: driver.connected.is_set())
+        assert await settle(lambda: retracted(plc)), \
+            "a stable-true input never reached the PLC"
+    finally:
+        await driver.stop()
+
+
+async def test_a_description_arriving_after_the_connection_also_seeds(plc, fake_bus):
+    """The other order, which is what a scene edit looks like."""
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        assert not retracted(plc)
+
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: retracted(plc)), \
+            "rebuild against a live connection never transferred initial state"
+    finally:
+        await driver.stop()
+
+
+async def test_a_reconnect_seeds_again_without_a_new_description(plc, fake_bus):
+    """A reconnect does not necessarily bring a new description with it, so
+    seeding cannot live only inside rebuild(). The CPU on the other side may
+    have been restarted, or downloaded to, while we were away."""
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: retracted(plc))
+
+        # The line drops, and the CPU comes back with that address cleared.
+        for client in plc.clients:
+            client._connected = False
+        plc.read_error = RuntimeError("connection reset")
+        assert await settle(lambda: not driver.connected.is_set())
+        plc.memory[:] = bytearray(len(plc.memory))
+        plc.read_error = None
+
+        assert await settle(lambda: driver.connected.is_set())
+        assert await settle(lambda: retracted(plc)), \
+            "the new session was left with whatever that address happened to hold"
+    finally:
+        await driver.stop()
+
+
+async def test_plcsim_seeds_initial_inputs_when_it_attaches(sim_instance, fake_bus):
+    driver = make_plcsim(fake_bus)
+    await driver.rebuild("sorting", 1, sorting_table())
+    try:
+        await driver.start()
+        assert sim_instance.values.get('"FF_IO".pusher.retracted') is True, \
+            "a stable-true input never reached the virtual CPU"
+    finally:
+        await driver.stop()
+
+
+async def test_plcsim_seeds_when_the_description_arrives_after_the_attach(
+        sim_instance, fake_bus):
+    driver = make_plcsim(fake_bus)
+    try:
+        await driver.start()
+        assert '"FF_IO".pusher.retracted' not in sim_instance.values
+
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert sim_instance.values.get('"FF_IO".pusher.retracted') is True
+    finally:
+        await driver.stop()
+
+
+async def test_plcsim_never_touches_the_power_state(sim_instance, fake_bus):
+    """Gotcha 18: attaching to a CPU somebody else started and downloaded a
+    program to is not owning it. stop() used to PowerOff(), so a 40-second run
+    switched off the user's PLC."""
+    driver = make_plcsim(fake_bus)
+    await driver.start()
+    await driver.rebuild("sorting", 1, sorting_table())
+    await driver.stop()
+    assert sim_instance.power_calls == []

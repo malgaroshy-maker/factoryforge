@@ -130,6 +130,7 @@ class PLCSIMAdvancedDriver(Driver):
             ) from err
 
         log.info("Connected to PLCSIM Advanced instance '%s'", self.instance_name)
+        await self._seed_inputs()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
@@ -149,6 +150,32 @@ class PLCSIMAdvancedDriver(Driver):
 
     async def rebuild(self, scene: str, epoch: int, table: TagTable) -> None:
         self._table = table
+        await self._seed_inputs()
+
+    async def _seed_inputs(self) -> None:
+        """Write the current value of every mapped simulator input once.
+
+        The engine publishes *deltas* after the description, so an input that
+        never changes is never sent: a healthy E-stop, a pusher that starts
+        retracted, a counter still at zero. Nothing ever establishes them, and
+        the CPU keeps whatever those symbols already held -- false, stale, or
+        left over from the last time somebody ran something against this
+        instance, which for an attached PLCSIM CPU is a very live possibility.
+
+        Hung off both ends deliberately: a connection and a table can arrive in
+        either order, and whichever is second is the one that has to fire.
+        rebuild() can precede the attach, and push() simply returns while there
+        is no instance.
+        """
+        table = self._table
+        if table is None or self._instance is None:
+            return
+        seed = {tag.id: table.visible(tag.id) for tag in table.by_kind("input")
+                if tag.id in self.mapping}
+        if not seed:
+            return
+        await self.push(seed)
+        log.info("seeded %d simulator inputs into '%s'", len(seed), self.instance_name)
 
     async def push(self, values: dict[str, TagValue]) -> None:
         if not self._instance or not self._table:

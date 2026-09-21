@@ -187,6 +187,7 @@ class S7Snap7Driver(Driver):
             "info", "plc_connected",
             f"connected to S7 PLC at {self.host} (rack {self.rack}, slot {self.slot})",
         )
+        await self._seed_inputs()
 
     async def _drop(self, why: str | None) -> None:
         """Let go of the session so the connect loop builds a new one."""
@@ -217,6 +218,35 @@ class S7Snap7Driver(Driver):
 
     async def rebuild(self, scene: str, epoch: int, table: TagTable) -> None:
         self._table = table
+        await self._seed_inputs()
+
+    async def _seed_inputs(self) -> None:
+        """Write the current value of every mapped simulator input once.
+
+        The engine publishes *deltas* after the description, so an input that
+        never changes is never sent: a healthy E-stop, a pusher that starts
+        retracted, a counter still at zero. Nothing ever establishes them, and
+        the PLC keeps whatever those addresses already held -- false, stale, or
+        left over from a previous run. The program then reads a tripped E-stop
+        on a line that is fine, and the fault is in neither the program nor the
+        scene.
+
+        This hangs off *both* ends deliberately. It has to fire whenever a
+        connection and a table are both in hand, and either can arrive second:
+        rebuild can precede the PLC being reachable, and a reconnect does not
+        necessarily bring a new description with it -- the bus replays the
+        description on its own schedule, and push() simply returns while
+        disconnected.
+        """
+        table = self._table
+        if table is None or self._client is None:
+            return
+        seed = {tag.id: table.visible(tag.id) for tag in table.by_kind("input")
+                if tag.id in self._addresses}
+        if not seed:
+            return
+        await self._write_inputs(seed)
+        log.info("seeded %d simulator inputs into DB%d", len(seed), self.db_number)
 
     async def push(self, values: dict[str, TagValue]) -> None:
         await self._write_inputs(values)
