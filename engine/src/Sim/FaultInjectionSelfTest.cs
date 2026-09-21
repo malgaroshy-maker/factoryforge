@@ -33,6 +33,7 @@ public partial class FaultInjectionSelfTest : Node
     private ConveyorBelt _belt = null!;
     private PusherMechanism _pusher = null!;
     private LevelTank _tank = null!;
+    private WeighingConveyor _scale = null!;
     private float _extensionWhenFaulted;
     private float _levelWhenSeized;
 
@@ -200,6 +201,51 @@ public partial class FaultInjectionSelfTest : Node
                 Expect(Mathf.Abs(_tank.Level - _levelWhenSeized) < 0.5f,
                        $"freeing the valve lets the standing shut command take effect "
                        + $"({_levelWhenSeized:0.#}% -> {_tank.Level:0.#}%)");
+                Editor.SetMode(EditorMode.Edit);
+                Editor.LoadTemplate("res://templates/roller_line_weighing.json");
+                return;
+
+            // --- the fault contact that did nothing (HP-35) ---------------
+            case 182:
+            {
+                var scale = Find<WeighingConveyor>();
+                if (scale is null) { Expect(false, "roller-line-weighing: no weigh deck"); Finish(); return; }
+                _scale = scale;
+
+                // The tag has existed all along -- PartTagManager registers
+                // <id>.fault for a WeighingConveyor exactly as it does for every
+                // other conveyor, so it appears in the inspector and can be
+                // forced. Nothing dispatched it, so forcing it did nothing at
+                // all: an advertised contact wired to no effect.
+                Expect(Tags.Contains("scale.fault"), "tag scale.fault exists");
+                Expect(Editor.CanFault("WeighingConveyor"), "and the tool offers to use it");
+
+                Tags.Set("scale.rotate", true);
+                return;
+            }
+
+            case 184:
+                Expect(_scale.IsRunning, "the weigh deck runs when commanded");
+                Tags.Force("scale.fault", true);
+                return;
+
+            case 186:
+                Expect(!_scale.IsRunning, "a faulted weigh deck stops");
+                Expect(_scale.IsFaulted, "and knows it is faulted");
+                // Asserting the effect, not the flag: SetFaulted is inherited
+                // from ConveyorBelt and was simply never called for this
+                // subclass, so a check on IsFaulted alone would have passed the
+                // moment the call appeared, whatever it did.
+                Expect(_scale.ConstantLinearVelocity.Length() < 0.001f,
+                       $"and the deck surface is actually still "
+                       + $"(v={_scale.ConstantLinearVelocity.Length():0.###})");
+                Expect(Bit("scale.rotate"),
+                       "with the command still on — the drive is disobeying, as every other conveyor does");
+                Tags.ClearForce("scale.fault");
+                return;
+
+            case 188:
+                Expect(_scale.IsRunning, "clearing it lets the standing command take effect again");
                 Finish();
                 return;
         }

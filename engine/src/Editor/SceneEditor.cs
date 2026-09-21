@@ -3563,6 +3563,23 @@ public partial class SceneEditor : Node3D
                 case "WeighingConveyor":
                     if (node is WeighingConveyor weighBelt)
                     {
+                        // Fault first, for the reason the ConveyorBelt case
+                        // gives: a faulted drive has to refuse the command
+                        // rather than obey it and be stopped again next tick.
+                        //
+                        // This line is HP-35, and its absence is what the drift
+                        // looks like. PartTagManager registers <id>.fault for a
+                        // WeighingConveyor exactly as it does for every other
+                        // conveyor, so the tag exists, shows up in the inspector
+                        // and can be forced -- and nothing dispatched it, so
+                        // forcing it did nothing at all. SetFaulted was
+                        // inherited from ConveyorBelt and simply never called
+                        // for this subclass. Registering a tag and acting on it
+                        // are edits to two different files, and one of them was
+                        // missed.
+                        if (ids.TryGetValue("fault", out var weighFaultId)
+                            && Tags.TryGetVisible(weighFaultId, out var weighFaultVal))
+                            weighBelt.SetFaulted((bool)weighFaultVal);
                         if (ids.TryGetValue("rotate", out var weighRotateId) && Tags.TryGetVisible(weighRotateId, out var weighRotateVal))
                             weighBelt.SetRunning((bool)weighRotateVal);
                         if (ids.TryGetValue("weight", out var weightId))
