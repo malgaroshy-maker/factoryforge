@@ -30,6 +30,68 @@ if _HARNESS.is_dir() and str(_HARNESS) not in sys.path:
     sys.path.insert(0, str(_HARNESS))
 
 
+# --- driver options ---
+
+_TRUE = {"true", "yes", "on", "1"}
+_FALSE = {"false", "no", "off", "0"}
+
+
+def coerce_options(driver: str, pairs) -> dict:
+    """Convert `-o KEY VALUE` strings to the types the driver's signature asks for.
+
+    Everything argparse hands over is a string. `-o db 1` gives `"1"`, and a
+    type hint of `db: int` does not make it one -- snap7 then failed with
+    "required argument is not an integer", which points at ctypes and says
+    nothing about where the string came from (AGENTS.md gotcha 19b). That was
+    fixed inside one driver and left as a pattern everywhere else:
+    `-o poll_interval 0.05` still reached asyncio.sleep as a string and raised
+    there, inside a task nobody observes, while the connection loop went on
+    reporting health; and `-o auto_map false` was a non-empty string, which is
+    true.
+
+    Coercing here rather than in each driver means it happens once, and it
+    follows the driver's own declared types, so a host, a URL or a PLC
+    instance name that happens to look numeric is left exactly as typed.
+    """
+    types = drivers_module().option_types(driver)
+    out: dict = {}
+    for key, raw in pairs or []:
+        out[key] = _coerce_option(key, raw, types.get(key, "str"))
+    return out
+
+
+def _coerce_option(key: str, raw: str, annotation: str):
+    text = annotation.replace(" ", "")
+    if text.startswith("bool"):
+        lowered = raw.strip().lower()
+        if lowered in _TRUE:
+            return True
+        if lowered in _FALSE:
+            return False
+        raise ValueError(
+            f"-o {key} {raw!r}: expected true or false "
+            f"({'/'.join(sorted(_TRUE))} or {'/'.join(sorted(_FALSE))})")
+    if text.startswith("int"):
+        try:
+            return int(raw)
+        except ValueError:
+            raise ValueError(f"-o {key} {raw!r}: expected a whole number") from None
+    if text.startswith("float"):
+        try:
+            return float(raw)
+        except ValueError:
+            raise ValueError(f"-o {key} {raw!r}: expected a number") from None
+    return raw
+
+
+def drivers_module():
+    """Imported lazily: the driver package pulls in asyncua and snap7, and
+    `--help` should not pay for that."""
+    from . import drivers
+
+    return drivers
+
+
 # --- browse ---
 
 async def browse(url: str, max_depth: int, timeout: float = 10.0) -> int:
@@ -104,6 +166,12 @@ async def demo(args) -> int:
     from . import drivers
     from .tagbus import TagBusClient
 
+    # Before the engine starts, so a bad option is refused rather than
+    # reported after a port has been bound and a scene is running.
+    config = coerce_options(args.driver, args.option)
+    if args.mapping:
+        config["mapping_file"] = args.mapping
+
     sim = SortingScene()
     engine = EngineStub(sim, host=args.host, port=args.port, tick_ms=args.tick)
     await engine.start()
@@ -114,9 +182,6 @@ async def demo(args) -> int:
     runner = asyncio.create_task(bus.run())
     await asyncio.wait_for(bus.connected.wait(), timeout=5)
 
-    config = dict(args.option or [])
-    if args.mapping:
-        config["mapping_file"] = args.mapping
     driver = drivers.create(args.driver, bus, **config)
     await driver.start()
     print(f"driver '{args.driver}' started: {config or 'defaults'}", flush=True)
@@ -161,6 +226,12 @@ async def connect(args) -> int:
     from . import drivers
     from .tagbus import TagBusClient
 
+    # Before anything else: an option that cannot be parsed should be refused
+    # now, not after fifteen seconds of waiting for an engine.
+    config = coerce_options(args.driver, args.option)
+    if args.mapping:
+        config["mapping_file"] = args.mapping
+
     url = f"ws://{args.host}:{args.port}/tagbus"
     bus = TagBusClient(url)
     # Shut the client down by asking it to stop rather than cancelling it
@@ -187,9 +258,6 @@ async def connect(args) -> int:
             break
         await asyncio.sleep(0.05)
 
-    config = dict(args.option or [])
-    if args.mapping:
-        config["mapping_file"] = args.mapping
     driver = drivers.create(args.driver, bus, **config)
     await driver.start()
 
@@ -346,6 +414,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "connect":
             return asyncio.run(connect(args))
         return asyncio.run(demo(args))
+    except ValueError as exc:
+        # A `-o` value the driver's signature cannot accept. Say which one and
+        # what was expected, and stop — rather than handing the string on and
+        # failing somewhere that names ctypes instead of argparse.
+        print(str(exc), file=sys.stderr)
+        return 2
     except KeyboardInterrupt:
         return 0
 
