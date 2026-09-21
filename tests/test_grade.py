@@ -539,6 +539,35 @@ def test_a_mute_held_past_the_scanners_limit_fails(tmp_path):
     assert report["evidence"]["longest_mute_s"] > grade.GC_MUTE_LIMIT
 
 
+def test_the_cell_passes_a_sequence_written_on_feedback(tmp_path):
+    code, report = graded(tmp_path, "pick-and-place-cell", "good", 72, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["dropped"] == [] and evidence["empty_carries_at"] == []
+    # Carried at both travel speeds, which is the only thing that separates
+    # this from a cell that happened to work at one.
+    assert evidence["placed_before_the_axis_slowed"] >= 1
+    assert evidence["placed_after_the_axis_slowed"] >= 1
+    # And the drive really is analog: a bit output wearing a float's clothes
+    # would report its own reference back instantly.
+    assert evidence["max_ramp_gap_percent"] > 1.0
+
+
+def test_a_sequence_on_timers_drops_cartons_when_the_axis_slows(tmp_path):
+    """Right at one travel speed, which is what makes it worth catching. The
+    plant records where on the rail the vacuum was released, so a cycle that
+    let go over the middle is a dropped carton and not a slow one."""
+    code, report = graded(tmp_path, "pick-and-place-cell", "timed", 72, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.nothing_dropped" in failed_ids(report)
+    dropped = report["evidence"]["dropped"]
+    assert dropped
+    assert all(entry["phase"] == "slow" for entry in dropped), (
+        "the timed sequence dropped cartons before the axis was even slowed, "
+        "so this proves nothing about timers")
+    assert all(20.0 < entry["position"] < 80.0 for entry in dropped)
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -586,6 +615,16 @@ def test_the_claim_in_the_docs_matches_the_rubrics_that_exist():
             assert scene_id in doc, (
                 f"{scene_id} ships and is not graded, and docs/GRADING.md does "
                 f"not admit it")
+
+
+def test_every_shipped_scene_has_a_rubric():
+    """The claim this work exists to make true. It is asserted against the
+    engine's own manifest rather than against a list here, so a scene added to
+    the start screen without a rubric fails this instead of quietly shipping
+    ungraded."""
+    assert set(grade.RUBRICS) == set(SHIPPED), (
+        f"not graded: {sorted(set(SHIPPED) - set(grade.RUBRICS))}; "
+        f"graded but not shipped: {sorted(set(grade.RUBRICS) - set(SHIPPED))}")
 
 
 def test_every_rubric_has_a_right_answer_and_a_wrong_one():

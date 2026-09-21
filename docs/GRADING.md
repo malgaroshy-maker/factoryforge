@@ -1,12 +1,11 @@
 # Grading a PLC program against a scene
 
-*One scene — sorting by height — graded end to end, headless, on the Python
-model of the line rather than the 3D engine. Verified on 2026-09-21 against
-five reference controllers: a correct one passes, a blind timer and a stuck
-pusher fail with the cartons that went wrong, an idle one cannot pass, and one
-that forces the counters is disqualified. **Nobody has graded a real student's
-program with it.** Those are two different claims and this file will say so
-until the second one is true.*
+*All ten shipped scenes, graded end to end, headless, on Python models of the
+plants rather than on the 3D engine. Verified on 2026-09-21: every scene's
+`good` controller passes and every scene's deliberately wrong one fails, each
+for that scene's own lesson. **Nobody has graded a real student's program with
+any of them.** Those are two different claims and this file will say so until
+the second one is true.*
 
 Marking a PLC exercise by hand means watching a line run and forming an
 opinion. It does not scale past a small class, it is not reproducible, and two
@@ -67,9 +66,9 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 
 | flag | |
 |---|---|
-| `--duration` | seconds to watch once the controller connects (default 60) |
+| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–80) |
 | `--wait` | seconds to wait for a controller before giving up (default 120) |
-| `--seed` | the feed pattern. Reported either way, so a mark is reproducible |
+| `--seed` | the feed pattern and the numbers the exam picks. Reported either way, so a mark is reproducible |
 | `--json PATH` | the whole run, machine-readable; `-` for stdout |
 | `--student` | a name for the report |
 | `--quiet` | the `RESULT` line and nothing else |
@@ -101,36 +100,67 @@ controller *can* touch — the counters, the sensor values, the actuator command
 — is recorded as **evidence**, because a student who fails needs it, but none
 of it is the criterion. A criterion you can reach is a criterion you can fake.
 
-For sorting by height:
+Every check on every scene is written down twice: once as a check id in
+`tools/grade.py`, and once here, as the plant fact it reads and the fake it
+shuts.
 
-| check | |
-|---|---|
-| `controller.stayed_connected` | one session, still up at the end |
-| `integrity.no_forced_tags` | nothing was pinned — see below |
-| `integrity.no_input_writes` | nothing tried to write a simulator-owned tag |
-| `line.ran` | at least 8 cartons reached a lane |
-| `line.both_lanes` | at least 3 in each |
-| `sort.tall_diverted` | no tall carton ran off the far end |
-| `sort.short_passed` | no short carton went down the chute |
-| `line.conservation` | everything fed is either sorted or still on the belt |
+| scene | the fact that decides the mark | how a program would fake it, and what stops that |
+|---|---|---|
+| `sorting-by-height` | which lane each carton ended in, against the height the scene gave it | pushing every second carton — the feed is shuffled pairs |
+| `start-stop-station` | cartons that broke the eye between the Start press and the line stopping itself; millimetres of belt that moved while tripped | running for about the right length of time — the batch size is drawn from the seed and set twice |
+| `tank-level-control` | the level trace: settled error, ripple and overshoot | "it reached the setpoint", true of float switches and of a valve slammed open — ripple and overshoot grade those, and the pot moves to a second level |
+| `light-curtain-sorting` | each carton's measured height and the lane it ended in, against the rule in force when it was measured | a threshold written into the program — the pot is set twice, and the feed is eight shuffled heights rather than two |
+| `roller-line-weighing` | each carton's true mass, whether it was weighed alone, and whether the program flagged it | rejecting on the inductive sensor — the limit moves below a tall cardboard carton, where metal and heavy stop agreeing |
+| `pick-and-place-cell` | which cartons the gantry carried to the outfeed, and the rail position it let go of the others at | a sequence on timers — the run slows the axis down, and a timed release drops cartons at half rail |
+| `accumulation-buffer` | cartons that physically passed the blade, per release | a release timed in seconds — the run doubles the drive's top speed |
+| `heat-treat-station` | the temperature trace: settled error, ripple and overshoot | proportional-only parks short by an offset the plant's own numbers predict; a thermostat reaches setpoint and swings 9 °C |
+| `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's |
+| `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
 
-The first two of the sorting checks are there because the last two are
-vacuously true of a line that never ran. A test that passes while the
-simulation does nothing is not a test (AGENTS.md gotcha 16), and a grader is a
-test with a student's mark attached to it.
+Every scene also carries `controller.stayed_connected`,
+`integrity.no_forced_tags` and `integrity.no_input_writes`, and every scene has
+at least one check whose only job is to refuse a verdict about a plant that did
+nothing — `line.ran`, `plant.moved`, `dose.ran`, `cell.cycled`. A test that
+passes while the simulation does nothing is not a test (AGENTS.md gotcha 16),
+and a grader is a test with a student's mark attached to it.
 
-### The feed pattern is shuffled, and that is the point
+`tools/grade.py --list` prints the same set, with each scene's window and its
+reference controllers.
+
+### The exam changes the plant while the program is running
+
+Six of the ten scenes are only gradeable because the run reaches in and changes
+something physical that no tag reports:
+
+* the **setpoint pot** moves, on the tank, the oven, the curtain and the scale
+* the **drive's top speed** doubles, on the accumulation buffer
+* the **gantry's travel speed** halves, on the pick and place cell
+* the **pump's rating** halves, between the two batches of the dosing exercise
+* the **gate** opens and shuts, on the guarded cell, with the operator taking
+  the part out as they go in
+
+None of those is visible as a value on the bus. The controller can only find
+out by measuring — the encoder counting faster, the flow meter reading less,
+the axis taking longer to arrive — which is exactly the difference between a
+program written on feedback and one written on a stopwatch. A rubric that never
+moved anything would mark both the same.
+
+### The feed patterns are shuffled, and that is the point
 
 A line that alternates tall, short, tall, short can be sorted perfectly by a
 program that pushes every second carton and never reads a sensor. It would pass
 a grader that fed a fixed pattern, and it would fail on any real line.
 
-So the grader feeds shuffled pairs: sixteen `[tall, short]` pairs, each pair
-shuffled, cycled. The order is unguessable, and any eight consecutive cartons
-still hold at least three of each height — so the per-lane minimums stay
-reachable however the shuffle lands. The seed is chosen at random unless you
-give one, and it is in the report either way, so a disputed mark can be re-run
-exactly.
+So the sorting line feeds sixteen `[tall, short]` pairs, each pair shuffled and
+cycled: unguessable, and any eight consecutive cartons still hold at least
+three of each height, so the per-lane minimums stay reachable however the
+shuffle lands. The curtain draws from eight heights shuffled in blocks, and the
+checkweigher from all four mass classes shuffled in blocks of four — the second
+of those also guarantees that the carton the two instruments disagree about
+actually turns up, so a metal-sensing program cannot pass on a lucky draw.
+
+The seed is chosen at random unless you give one, and it is in the report
+either way, so a disputed mark can be re-run exactly.
 
 ### Forcing is refused, not ignored
 
@@ -200,13 +230,41 @@ the second it landed. That file is the appeal record.
 
 A grader that fails everybody looks exactly like a cohort that cannot program.
 
+Every scene carries a `good` that must pass and at least one controller that is
+deliberately wrong about that scene's own lesson and must fail. Every one of
+them has been watched failing — a rubric only ever seen to pass is a rubric
+nobody knows the shape of (AGENTS.md gotcha 24).
+
 ```bash
-python tools/grade.py --reference good      # must PASS  (exit 0)
-python tools/grade.py --reference blind     # pushes on a timer      -> FAIL
-python tools/grade.py --reference greedy    # pusher held out        -> FAIL
-python tools/grade.py --reference idle      # connects, does nothing -> FAIL
-python tools/grade.py --reference forcer    # forces the counters    -> DISQUALIFIED
+python tools/grade.py --scene <id> --reference good    # must PASS  (exit 0)
+python tools/grade.py --scene <id> --reference idle    # does nothing -> FAIL
+python tools/grade.py --scene <id> --reference forcer  # forces counters -> DISQUALIFIED
 ```
+
+`idle` and `forcer` are shared, because a controller that does nothing and one
+that lies are wrong everywhere. The rest belong to their scene:
+
+| scene | wrong controller | what it fails on |
+|---|---|---|
+| `sorting-by-height` | `blind` | pushes on a timer — misrouted cartons |
+| | `greedy` | plate held out — short cartons in the chute |
+| `start-stop-station` | `noestop` | 1500 mm of belt through a struck mushroom, where 100 mm is the limit |
+| | `runon` | counts to thirteen against a pot of four |
+| `tank-level-control` | `bangbang` | a pair of float switches parks 5.5 % off |
+| | `fixedsp` | holds 70 % while the pot says 26 |
+| `light-curtain-sorting` | `fixed` | every misrouted carton was measured under one of the two thresholds |
+| | `everyother` | diverts on a count, never reads the height |
+| `roller-line-weighing` | `metalonly` | gets exactly the cartons the two instruments disagree about wrong |
+| | `fastfeed` | two on the deck read as one peak |
+| `pick-and-place-cell` | `timed` | correct at 80 %/s, six cartons on the floor at 48 % of the rail once it slows |
+| `accumulation-buffer` | `timed` | 5.7 cartons a release becomes 11.0 when the drive speeds up |
+| `heat-treat-station` | `ponly` | parks 8.3 °C short at one setpoint and 16.5 at the other |
+| | `thermostat` | mean error 2 °C, swing 8.8 °C |
+| `guarded-cell` | `autostart` | the motor starts at 28.18 s, the tick the relay closed on Reset |
+| | `writesbelt` | writes `belt.rotate`, the motor's own tag |
+| | `tapedmute` | holds the bridge 6.1 s past a 6 s limit |
+| `batch-dosing` | `timed` | 22.1 L and then 11.0 L against the same pot |
+| | `noreset` | the second batch is over before it starts |
 
 These are built-in controllers that connect over a real websocket through the
 same `TagBusClient` the sidecar uses, so they cross the same seam a real one
@@ -220,49 +278,69 @@ session; they are also what `tests/test_grade.py` asserts against.
 
 Read this part before promising it to a class.
 
-**Not every shipped scene.** `--list` shows what is really implemented and
-nothing else. The rubric table in `tools/grade.py` is keyed by scene id, and
-adding one means writing its plant model, its `grade` function and its
-reference controllers; the machinery is general, the marking is not.
+**All ten scenes, and a test asserts it** against the engine's own manifest, so
+a scene added to the start screen without a rubric fails CI rather than quietly
+shipping ungraded. What that sentence does *not* mean is that every scene is
+marked on everything its brief describes; see the next three paragraphs.
 
-| scene | graded |
-|---|---|
-| `sorting-by-height` | yes |
-| `start-stop-station` | yes |
-| `tank-level-control` | yes |
-| `light-curtain-sorting` | yes |
-| `roller-line-weighing` | yes |
-| `pick-and-place-cell` | not yet |
-| `accumulation-buffer` | yes |
-| `heat-treat-station` | yes |
-| `guarded-cell` | yes |
-| `batch-dosing` | yes |
+**Python models of the plants, not the 3D engine.** The sorting line runs
+`harness/scene.py`; the other nine run models that live in `tools/grade.py`.
+All of them are 1-D kinematic plants with no physics. They are faithful about
+sensor semantics, about timing, and — where the lesson is analog — about the
+engine's own dynamics, which are copied from the C# part and the template that
+configures it rather than invented: Torricelli outflow, a 20-second thermal
+time constant, a flow meter's 0.2 s damping, a relay's 0.5 s channel-sync
+window, carton masses out of `BoxPhysics.cs`. But a carton in them cannot jam,
+tip, or ride two centimetres low into the end face of the next conveyor
+(AGENTS.md gotcha 23), a cylinder cannot be fouled, and nothing has a third
+dimension. **A program that passes here is not guaranteed to work in the
+rigid-body scene.** Grading against the real engine means a Godot install on
+the marking machine, which is exactly the barrier `docs/PACKAGING.md` exists to
+remove, and it has not been attempted.
 
-A test fails if that table stops matching `RUBRICS`.
+**The models reproduce two parts' behaviour without their mechanism.** In the
+engine, a safety relay holds the starter coil down by *forcing* the tag, and a
+motor starter drives the belt the same way. A forced tag is this tool's
+disqualification signal, so the guarded cell's model cannot use that mechanism
+without tripping its own wire: the plant simply does not obey a command the
+relay is not passing. The behaviour a student sees is identical and the
+mechanism is not, and if the engine ever changes what forcing means for those
+parts, this is where the two will part company.
 
-**The Python model of the line, not the 3D engine.** The grader runs
-`harness/scene.py` — a 1-D kinematic model with no physics. It is the CI
-regression scene and it is faithful about sensor semantics and timing, but a
-carton in it cannot jam, tip, or ride two centimetres low into the end face of
-the next conveyor (AGENTS.md gotcha 23). A program that passes here is not
-guaranteed to work in the rigid-body scene. Grading against the real engine
-means a Godot install on the marking machine, which is exactly the barrier
-`docs/PACKAGING.md` exists to remove, and it has not been attempted.
+**Fault injection is not graded.** Every one of these scenes has a fault tag —
+`tank.fault`, `oven.fault`, `pump.fault`, `stop.fault`, `gantry.fault` — and
+half the briefs end on it: a seized valve keeps its opening while your command
+reads zero, a failed element cools while the heater output reads 100 %, a dead
+pump holds its speed reference while the flow collapses. Those are the best
+lesson in several of these scenes and **none of them is marked**. The tags are
+declared so the tag list matches the scene a student is handed; no exam script
+raises one. `tools/try_scene.py` exercises all of them against the real engine
+and is the right place to look for how each check should be written.
 
-**No marks for the operator panel.** The scene's task brief names
-`panel.start`, `panel.stop` and `panel.estop`, and the headless scene has none
-of them — it has the ten core tags and nothing else. So the half of the
-exercise that is about interlocks, latching and a normally-closed E-stop is not
-graded. `tools/try_scene.py` does check all of that, against the engine's own
-template, and it is the right place to look for how that check should be
-written when someone grades it.
+**The operator panel is graded on two scenes out of ten.** Every model has a
+panel and the grader presses its buttons, but only `start-stop-station` and
+`guarded-cell` mark the operator contract itself — the latching trip, Start
+that will not clear it, the relay that starts nothing. On the other eight the
+panel is how the exam turns the pot and starts the line, and a program that
+ignored Stop entirely would still pass them. `tools/try_scene.py` checks the
+full contract on all ten.
 
-**A sixty-second window is a sample, not a proof.** It is long enough for
-around thirty cartons at a sensible feed rate. A program that misroutes one
+**One window is a sample, not a proof.** The windows run 60–80 seconds, which
+is a dozen or two cartons or two settling steps. A program that misroutes one
 carton in five hundred will pass, and a program whose timing is marginal may
 pass one run and fail the next. Run it more than once with different seeds
-before a mark is final; the seed is in the report so you can say which runs
-you used.
+before a mark is final; the seed is in the report so you can say which runs you
+used.
+
+**Two scenes mark an output rather than a plant fact, and cannot do otherwise.**
+The checkweigher's reject decision is a lamp (`panel.red`) and the guarded
+cell's "never wrote `belt.rotate`" is a fact about the wire. There is no
+physical consequence in either scene to read instead — the line has no reject
+gate, and a motor tag nobody obeys leaves no trace in the cartons. Both are
+still unfakeable in the way that matters (the lamp is checked against masses
+the program never sees, at two limits; the write is recorded whether or not it
+did anything), but they are the two places where the criterion is not something
+the plant did.
 
 **It cannot see the program.** Only what the program does. Copied code that
 works gets the same mark as understood code that works. That is true of every
@@ -272,8 +350,12 @@ functional test and it is worth saying out loud on a document about assessment.
 
 ## Reference
 
-* `tools/grade.py` — the tool, the rubric, and the reference controllers
+* `tools/grade.py` — the tool, the ten plant models, the rubrics and the
+  reference controllers
 * `tests/test_grade.py` — what is claimed above, asserted
-* `tools/try_scene.py` — the other side of the same seam: drives a scene to
-  prove the scene works, including the operator-panel half this does not grade
+* `tools/try_scene.py` — the other side of the same seam: drives a scene
+  against the real 3D engine to prove the scene works, including the fault
+  injection and the full operator contract this does not grade
+* `engine/templates/manifest.json` — each scene's own brief, which is what the
+  rubrics are written against
 * `docs/tag-bus.md` — the protocol, `force` included
