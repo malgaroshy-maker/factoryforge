@@ -125,6 +125,21 @@ class Driver(abc.ABC):
         Called on every `describe`. Tag ids are stable but their membership and
         ordering are not, so any address mapping must be derived fresh here
         rather than cached across epochs.
+
+        **Stop the old data flow before touching the map, and re-read the PLC
+        before returning.** Who owns what, settled by HP-33:
+
+        * The *driver* owns cancellation. Anything of yours that is still
+          reading through the previous epoch's map -- a poller, a subscription
+          -- has to be stopped here, first, before the new map goes in. A read
+          that was in flight under the old map must never be allowed to land
+          under the new one.
+        * The *bus client* owns the epoch, and holds writes back until every
+          driver has returned from this method. Writes queued in that window
+          are **discarded**, not delivered late: they came out of a map older
+          than the epoch they would be stamped with. That is why re-reading
+          before returning is part of the contract rather than an optimisation
+          -- it is what puts the current value back on the bus.
         """
 
     async def push(self, values: dict[str, TagValue]) -> None:

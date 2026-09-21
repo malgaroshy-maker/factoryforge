@@ -23,6 +23,15 @@ public sealed class Tag
     /// the low bits does not emit an update every tick.</summary>
     public const double FloatEpsilon = 1e-6;
 
+    /// <summary>An <c>int</c> tag is a signed 32-bit integer, and that range is
+    /// part of the protocol rather than an artefact of this implementation —
+    /// Python would hold any integer you like, and a bus whose two engines
+    /// disagree about what 2147483648 means is not a contract. Stated in
+    /// docs/tag-bus.md, pinned by engine/fixtures/tag_cases.json. It is also
+    /// what a PLC has: an S7 DInt is exactly this.</summary>
+    public const int IntMin = int.MinValue;
+    public const int IntMax = int.MaxValue;
+
     public string Id { get; }
     public string Name { get; }
     public TagType Type { get; }
@@ -61,25 +70,50 @@ public sealed class Tag
             // bool is deliberately not accepted: silently turning a mis-typed
             // bit write into 0/1 would hide the mistake.
             int i => i,
-            long l => checked((int)l),
+            // ArgumentException, not the OverflowException a `checked` cast
+            // throws. Everything that coerces a value catches ArgumentException
+            // and carries on with the rest of the batch; an OverflowException
+            // escaped that catch and took the whole message with it, which is
+            // the same failure HP-18 closed on the Python side.
+            long l when l >= IntMin && l <= IntMax => (int)l,
+            long l => throw new ArgumentException(
+                $"{Id}: {l} is outside the 32-bit range [{IntMin}, {IntMax}]"),
             _ => throw new ArgumentException($"{Id}: {value} is not an int"),
         },
-        _ => value switch
+        _ => Finite(value switch
         {
             float f => (double)f,
             double d => d,
             int i => (double)i,
             long l => (double)l,
             _ => throw new ArgumentException($"{Id}: {value} is not a float"),
-        },
+        }),
     };
 
-    /// <summary>True if <paramref name="value"/> is meaningfully different.</summary>
+    /// <summary>HP-23. A non-finite value is not a measurement, and it cannot
+    /// even leave: <c>NaN</c> and <c>Infinity</c> are not JSON, so a tag
+    /// holding one either corrupts whatever the plant computes from it or
+    /// leaves as a payload the other engine's parser refuses outright. Refuse
+    /// it where it arrives, with a message, rather than anywhere downstream.
+    /// Mirrors sidecar/factoryforge_sidecar/tags.py.</summary>
+    private double Finite(double d) =>
+        double.IsFinite(d) ? d
+            : throw new ArgumentException($"{Id}: {d} is not a finite float");
+
+    /// <summary>True if <paramref name="value"/> is meaningfully different.
+    ///
+    /// Coerces first, for every type. The float branch used to go straight to
+    /// <c>Convert.ToDouble</c>, which happily turns <c>true</c> into 1.0 — so a
+    /// bool written to a float tag holding 1.0 compared equal, was never
+    /// coerced, and was accepted in silence by anything that only stores when
+    /// this says so. Python rejected the same write. Mirrors
+    /// sidecar/factoryforge_sidecar/tags.py.</summary>
     public bool Differs(object value)
     {
+        var coerced = Coerce(value);
         if (Type == TagType.Float)
-            return Math.Abs(Convert.ToDouble(Value) - Convert.ToDouble(value)) > FloatEpsilon;
-        return !Equals(Value, Coerce(value));
+            return Math.Abs(Convert.ToDouble(Value) - (double)coerced) > FloatEpsilon;
+        return !Equals(Value, coerced);
     }
 
     public void Set(object value) => Value = Coerce(value);

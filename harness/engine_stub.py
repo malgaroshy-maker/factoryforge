@@ -16,7 +16,7 @@ import time
 import websockets
 
 from factoryforge_sidecar import protocol as proto
-from factoryforge_sidecar.tags import TagValue
+from factoryforge_sidecar.tags import TagError, TagValue
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class EngineStub:
         self._server: websockets.WebSocketServer | None = None
         self._client: websockets.WebSocketServerProtocol | None = None
         self._last_sent: dict[str, TagValue] = {}
+        self._last_forced: dict[str, TagValue] = {}
         self._stop = asyncio.Event()
 
     @property
@@ -84,7 +85,25 @@ class EngineStub:
             await ws.send(proto.encode(proto.hello(ENGINE_ID, self.tick_ms)))
             await self.send_describe()
             async for raw in ws:
-                await self._on_message(proto.decode(raw))
+                # A frame the engine cannot read is the sidecar's problem, not
+                # a reason to hang up on it (HP-18.1). This handler used to
+                # catch ConnectionClosed and nothing else, so a malformed frame
+                # -- or a single bad *value* inside an otherwise fine batch --
+                # escaped here and dropped the connection, while the C# engine
+                # named the offender in a status and carried on. One batch
+                # beginning with a bit value of 2 therefore disconnected one
+                # engine and was shrugged off by the other.
+                try:
+                    msg = proto.decode(raw)
+                except proto.ProtocolError as exc:
+                    await self._send(proto.status(
+                        "warn", "bad_message", f"could not read a frame: {exc}"))
+                    continue
+                try:
+                    await self._on_message(msg)
+                except (proto.ProtocolError, TagError) as exc:
+                    await self._send(proto.status(
+                        "warn", "bad_message", f"could not handle a message: {exc}"))
         except websockets.ConnectionClosed:
             pass
         finally:
@@ -95,6 +114,10 @@ class EngineStub:
         """Publish the current tag set and bump the epoch."""
         self.epoch += 1
         self._last_sent = self.scene.tags.snapshot()
+        # `describe` already carries every force, so the observe channel starts
+        # from that baseline rather than repeating it on the next tick.
+        self._last_forced = {tid: self.scene.tags.visible(tid)
+                             for tid in self.scene.tags.forced_ids()}
         await self._send(proto.describe(
             self.scene.name, self.epoch, self.scene.tags.to_json()))
 
@@ -111,12 +134,23 @@ class EngineStub:
         elif kind == "force":
             if msg.get("epoch") != self.epoch:
                 return
+            # Per value, exactly as `write` is: `force` runs the same coercion
+            # and had the same escape route out of the connection handler.
+            rejected = []
             for tag_id, value in proto.parse_values(msg).items():
-                if tag_id in self.scene.tags:
+                if tag_id not in self.scene.tags:
+                    continue
+                try:
                     self.scene.tags.force(tag_id, value)
+                except TagError as exc:
+                    rejected.append(f"{tag_id} ({exc})")
             for tag_id in msg.get("clear", []):
                 if tag_id in self.scene.tags:
                     self.scene.tags.clear_force(tag_id)
+            if rejected:
+                await self._send(proto.status(
+                    "warn", "bad_value",
+                    f"rejected bad values: {'; '.join(rejected)}"))
         elif kind == "status":
             log.info("sidecar: %s", msg.get("message"))
         else:
@@ -124,6 +158,7 @@ class EngineStub:
 
     async def _apply_writes(self, values: dict[str, TagValue]) -> None:
         unknown = []
+        rejected = []
         for tag_id, value in values.items():
             tag = self.scene.tags.get(tag_id)
             if tag is None:
@@ -134,10 +169,20 @@ class EngineStub:
                     "warn", "wrong_kind",
                     f"{tag_id} is a simulator-owned input; use force to override it"))
                 continue
-            self.scene.tags.set(tag_id, value)
+            # Per value, not per message: one bad value used to abandon the
+            # whole batch *and* drop the connection, because the TagError went
+            # straight past a handler that caught only ConnectionClosed. The C#
+            # engine has always named the offender and carried on (HP-18.1).
+            try:
+                self.scene.tags.set(tag_id, value)
+            except TagError as exc:
+                rejected.append(f"{tag_id} ({exc})")
         if unknown:
             await self._send(proto.status(
                 "warn", "unknown_tags", f"ignored unknown tags: {', '.join(unknown)}"))
+        if rejected:
+            await self._send(proto.status(
+                "warn", "bad_value", f"rejected bad values: {'; '.join(rejected)}"))
 
     # --- tick ---
 
@@ -177,7 +222,32 @@ class EngineStub:
                 accumulator = 0.0
 
             if steps:
+                await self._send_observations()
                 await self._send_updates()
+
+    async def _send_observations(self) -> None:
+        """Publish changes to the forced state, delta-only (HP-13).
+
+        Sent *before* `_send_updates` on the same tick: a release has to reach
+        the sidecar before the value it reveals, or the sidecar absorbs the
+        revealed value underneath a pin it is about to drop.
+
+        This is a separate message from `update` on purpose. `update` is
+        simulator-input delivery, drivers hang `push()` off it, and a driver
+        that writes what it is handed would push a simulator-forced output
+        straight back into the PLC node that owns it.
+        """
+        if self._client is None:
+            return
+        current = {tid: self.scene.tags.visible(tid)
+                   for tid in self.scene.tags.forced_ids()}
+        forced = {tid: v for tid, v in current.items()
+                  if tid not in self._last_forced or self._last_forced[tid] != v}
+        cleared = [tid for tid in self._last_forced if tid not in current]
+        if not forced and not cleared:
+            return
+        self._last_forced = current
+        await self._send(proto.observe(self.tick_count, forced, cleared))
 
     async def _send_updates(self) -> None:
         """Send only the input tags that actually changed."""

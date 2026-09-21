@@ -56,6 +56,24 @@ this to a network.
 | `kind` | `input` \| `output` |
 | `value` | `bool` for `bit`, `int` for `int`, `float` for `float` |
 
+### Value ranges are part of the contract
+
+- **`bit`** accepts `true`/`false`, and `0`/`1`. A stray `2` is a bug, not a bit, and is
+  rejected.
+- **`int`** is a **signed 32-bit integer**: `-2147483648` … `2147483647`. Anything outside
+  that is rejected. Python would happily hold a larger integer and the C# engine would not,
+  and a bus whose two engines disagree about what `2147483648` means is not a contract. It
+  is also what a PLC has — an S7 `DInt` is exactly this.
+- **`float`** is a double, and must be **finite**. `NaN` and `±Infinity` are rejected at
+  every edge: they cannot be written, cannot be forced, and are not valid JSON in the first
+  place, so a value that reached a tag would leave as a payload the other engine's parser
+  refuses.
+
+A value a tag cannot hold is refused **per value**. The rest of the batch still lands, and
+the engine answers with a `status` of level `warn` and code `bad_value` naming the tags it
+refused. A whole frame the engine cannot read at all draws `bad_message`. Neither is ever a
+reason to close the connection.
+
 ### `kind` is from the controller's point of view
 
 This trips people up constantly, so it is stated once, loudly, and never varies:
@@ -133,6 +151,39 @@ A tick with no changes sends nothing at all — an idle scene should produce zer
 Float comparison uses an epsilon (default `1e-6`) so that physics jitter in the last bits does
 not generate a message every single tick.
 
+The epsilon suppresses the **store**, not only the comparison. A value that does not
+meaningfully differ is not written into the table at all, so the reference it is next
+compared against is the last value actually published. Storing it anyway — which both
+engines used to do while reporting "no change" — lets the reference creep by a hair a scan,
+so a signal drifting `1e-9` per scan crosses the epsilon on the very next comparison and
+publishes on every single scan, which is the traffic the epsilon exists to prevent.
+
+### `observe` — engine → sidecar
+
+```json
+{ "t": "observe", "tick": 14203, "forced": { "conveyor_1.rotate": false }, "cleared": ["sensor_high.detect"] }
+```
+
+**Delta-only**, like `update`, and sent on the same tick — but *before* it.
+`forced` names the tags the engine currently has pinned and the value each is
+pinned to; `cleared` names tags whose force has just been released. A scene with
+nothing forced never produces one.
+
+This is what makes a force visible from the sidecar. `update` carries `input`
+tags only, so without it a `conveyor_1.rotate` forced off while the PLC
+commands it on reads as *on* from every driver and every status display — which
+defeats the one diagnostic forcing exists for.
+
+It is a separate message rather than a field on `update` for a reason worth
+stating plainly: drivers hang their `push()` hook off `update`, and a driver's
+`push()` writes what it is handed into the PLC. Routing observed *output* state
+through that hook would write a simulator-invented value back into a node the
+PLC owns — a worse fault than the one it fixes. Nothing subscribes to `observe`
+by default; it updates the sidecar's cache, so `read()` tells the truth.
+
+Ordering matters and is fixed: `observe` precedes `update` within a tick, so a
+release reaches the sidecar before the value it reveals.
+
 ### `force` — sidecar → engine
 
 ```json
@@ -145,7 +196,12 @@ automated testing possible — you can assert a PLC program's response to a sens
 stuck on without physically arranging boxes.
 
 Forced tags keep their forced value until cleared. The engine echoes forced state in
-`describe`. Do not use `force` as a shortcut for `write`.
+`describe` — as a `"forced": true` field on the tag — and republishes every later change
+to it on `observe`. Do not use `force` as a shortcut for `write`.
+
+A forced tag still absorbs writes underneath the pin: the engine stores the written value
+so that releasing the force reveals whatever the controller is currently commanding,
+rather than the value that was in effect when the force was applied.
 
 ### `status` — either direction
 
@@ -167,6 +223,25 @@ scenario, and matches what Factory I/O's own drivers achieve over TCP.
 
 Drivers run on their own asyncio tasks and must never block the bus. A driver that stalls gets
 its writes dropped, not the whole simulation.
+
+The sidecar enforces that rather than trusting it. Incoming frames are applied to the
+sidecar's cache on the receive loop and the driver hooks are run on a separate task, so a
+driver that takes half a second to write a PLC does not hold up the next `update`, the next
+`observe`, or the next `describe` — for itself or for anybody else. Updates that arrive while
+a hook is busy are coalesced: they are deltas, so the merge of two is the message the engine
+would have sent had it batched them, and a driver that has fallen behind wants the current
+state rather than a queue of history.
+
+### Epoch ownership
+
+The **driver** owns cancellation of its own data flow. Anything still reading through the
+previous epoch's address map must be stopped inside `rebuild`, before the new map goes in.
+
+The **sidecar** owns the epoch, and holds writes back until every driver has returned from
+`rebuild`. Writes queued in that window are **discarded**, not delivered late: they came out
+of a map older than the epoch they would be stamped with, and the epoch stamp is the engine's
+only defence against a write in flight across a scene change. `rebuild` re-reads the PLC
+before returning, which is what puts the current value back on the bus.
 
 ## Reference
 

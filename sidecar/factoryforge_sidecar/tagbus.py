@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 DescribeHook = Callable[[str, int, TagTable], Awaitable[None]]
 #: Called with the changed input values whenever the engine sends an update.
 UpdateHook = Callable[[dict[str, TagValue]], Awaitable[None]]
+#: Called with (forced values, released ids) whenever the engine's forced state
+#: changes. Deliberately separate from `UpdateHook`: `Driver` subscribes to
+#: updates and a driver's `push()` writes what it is handed straight into the
+#: PLC, so routing observed output state through that hook would send a
+#: simulator-invented value into a PLC-owned node (HP-13).
+ObserveHook = Callable[[dict[str, TagValue], list[str]], Awaitable[None]]
 #: Called with no arguments when the bus connection drops.
 DisconnectHook = Callable[[], Awaitable[None]]
 
@@ -38,6 +44,10 @@ class TagBusClient:
         self.scene: str | None = None
         self.epoch: int = -1
         self.connected = asyncio.Event()
+        #: Set once every describe hook has finished rebuilding for the current
+        #: epoch. Writes are held back -- discarded, not queued -- while it is
+        #: clear: see `_flush_loop`, and HP-33.
+        self.rebuilt = asyncio.Event()
 
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._pending: dict[str, TagValue] = {}
@@ -45,23 +55,46 @@ class TagBusClient:
         self._tick_ms = proto.DEFAULT_TICK_MS
         self._on_describe: list[DescribeHook] = []
         self._on_update: list[UpdateHook] = []
+        self._on_observe: list[ObserveHook] = []
         self._on_disconnect: list[DisconnectHook] = []
+
+        # Work handed to the driver hooks, and the task that runs it. The
+        # receive loop only ever fills these in; it never awaits a driver.
+        # See `_dispatch_loop` (HP-31).
+        self._next_describe: tuple[str, int, TagTable] | None = None
+        self._next_updates: dict[str, TagValue] = {}
+        self._next_observe: tuple[dict[str, TagValue], list[str]] = ({}, [])
+        self._dispatch_wake = asyncio.Event()
 
     # --- hooks ---
 
     def on_describe(self, hook: DescribeHook) -> None:
         self._on_describe.append(hook)
-        # Drivers are usually constructed after the engine's initial describe has
-        # already been processed. Replay it so registration order never matters.
+        # Drivers are usually constructed after the engine's initial describe
+        # has already been processed. Replay it so registration order never
+        # matters.
+        #
+        # Through the same queue a real describe goes through, and therefore
+        # re-running every hook rather than only the new one. Two reasons.
+        # `rebuild` is contracted to derive everything fresh, so re-running it
+        # is a cost and not a hazard -- and the new hook has no address map at
+        # all yet, which is the same state a scene change leaves every hook in,
+        # so it must hold writes back the same way (HP-33). The old path
+        # created a bare task for the one new hook and gated nothing.
         if self.epoch >= 0 and self.scene is not None:
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
             except RuntimeError:
                 return
-            loop.create_task(hook(self.scene, self.epoch, self.table))
+            self._queue_describe()
 
     def on_update(self, hook: UpdateHook) -> None:
         self._on_update.append(hook)
+
+    def on_observe(self, hook: ObserveHook) -> None:
+        """Watch the engine's forced state. Not something `Driver` subscribes
+        to — see `ObserveHook` for why that would be a worse bug than HP-13."""
+        self._on_observe.append(hook)
 
     def on_disconnect(self, hook: DisconnectHook) -> None:
         self._on_disconnect.append(hook)
@@ -86,11 +119,17 @@ class TagBusClient:
         async with self._pending_lock:
             self._pending[tag_id] = coerced
 
-        # Reflect it locally too. For an output tag the client is the authority
-        # — the engine never echoes one back, because the controller is what
-        # drives it — so without this, read() on an output returns its default
-        # forever. That made a live status display show `rotate=0` while the
-        # belt it commands was visibly running.
+        # Reflect it locally too. For an output tag the client is ordinarily
+        # the authority — the engine never echoes one back, because the
+        # controller is what drives it — so without this, read() on an output
+        # returns its default forever. That made a live status display show
+        # `rotate=0` while the belt it commands was visibly running.
+        #
+        # `set` and not `observe`: a forced output absorbs this silently, so
+        # the pin the engine reported on the observe channel keeps winning and
+        # read() goes on telling the truth about what the motor is doing
+        # (HP-13). The underlying value still updates, so releasing the force
+        # reveals the command the PLC is actually holding.
         self.table.set(tag_id, coerced)
 
     async def write_many(self, values: dict[str, TagValue]) -> None:
@@ -134,6 +173,7 @@ class TagBusClient:
                     self.table = TagTable()
                     self.scene = None
                     self.epoch = -1
+                    self._reset_dispatch()
 
                     log.info("%s to %s (tick %dms)",
                              "reconnected" if was_connected else "connected",
@@ -143,10 +183,12 @@ class TagBusClient:
                     delay = _RECONNECT_MIN_DELAY   # a live connection earns a fresh start
 
                     flusher = asyncio.create_task(self._flush_loop())
+                    dispatcher = asyncio.create_task(self._dispatch_loop())
                     try:
                         stopped_by_caller = await self._recv_loop(ws, stop)
                     finally:
                         flusher.cancel()
+                        dispatcher.cancel()
                         self.connected.clear()
                         self._ws = None
 
@@ -212,22 +254,46 @@ class TagBusClient:
     async def _handle(self, msg: dict) -> None:
         kind = msg.get("t")
         if kind == "describe":
-            scene, epoch, tags = proto.parse_describe(msg)
+            scene, epoch, tags, forced = proto.parse_describe(msg)
             self.scene, self.epoch = scene, epoch
-            self.table = TagTable(tags)
+            table = TagTable(tags)
+            # The values in a describe are already the *visible* ones, so
+            # pinning each forced tag to the value it arrived with reproduces
+            # the engine's view exactly.
+            for tag_id in forced:
+                table.force(tag_id, table.value(tag_id))
+            self.table = table
             # A new epoch invalidates anything queued against the old tag set.
             async with self._pending_lock:
                 self._pending.clear()
-            log.info("scene %r epoch %d, %d tags", scene, epoch, len(tags))
-            for hook in self._on_describe:
-                await hook(scene, epoch, self.table)
+            log.info("scene %r epoch %d, %d tags (%d forced)",
+                     scene, epoch, len(tags), len(forced))
+            self._queue_describe()
         elif kind == "update":
             values = proto.parse_values(msg)
+            # The cache is the bus client's own business and is updated here,
+            # on the receive loop, so `read()` is current the instant a frame
+            # arrives however busy the drivers are. Only the *hooks* are handed
+            # off (HP-31).
             for tag_id, value in values.items():
                 if tag_id in self.table:
-                    self.table.set(tag_id, value)
-            for hook in self._on_update:
-                await hook(values)
+                    self.table.observe(tag_id, value)
+            self._next_updates.update(values)
+            self._dispatch_wake.set()
+        elif kind == "observe":
+            forced_values, cleared = proto.parse_observe(msg)
+            # Applied before any `update` in the same tick, because the engine
+            # sends `observe` first: a release has to be in the table before
+            # the value it reveals arrives.
+            for tag_id, value in forced_values.items():
+                if tag_id in self.table:
+                    self.table.force(tag_id, value)
+            for tag_id in cleared:
+                if tag_id in self.table:
+                    self.table.clear_force(tag_id)
+            self._next_observe[0].update(forced_values)
+            self._next_observe[1].extend(cleared)
+            self._dispatch_wake.set()
         elif kind == "status":
             log.log(
                 {"info": logging.INFO, "warn": logging.WARNING}.get(
@@ -238,6 +304,86 @@ class TagBusClient:
         else:
             log.warning("ignoring unexpected message %r", kind)
 
+    # --- dispatch: driver work, off the receive loop (HP-31, HP-33) ---
+
+    def _reset_dispatch(self) -> None:
+        self._next_describe = None
+        self._next_updates = {}
+        self._next_observe = ({}, [])
+        self._dispatch_wake.clear()
+        self.rebuilt.clear()
+
+    def _queue_describe(self) -> None:
+        """Hand the current scene to the describe hooks, off the receive loop.
+
+        Clears `rebuilt`, which holds writes back until every hook has
+        finished. Updates already queued are dropped with it: they are deltas
+        against a tag set nobody has any more, and the describe carries the
+        current value of every tag in the new one.
+        """
+        self._next_describe = (self.scene or "", self.epoch, self.table)
+        self._next_updates = {}
+        self._next_observe = ({}, [])
+        self.rebuilt.clear()
+        self._dispatch_wake.set()
+
+    async def _dispatch_loop(self) -> None:
+        """Run the driver hooks, off the receive loop.
+
+        The receive loop used to await every hook inline (HP-31), so one slow
+        PLC write held up the next sensor update *and* the next scene
+        description -- for every driver, not only the slow one, and for the
+        client's own cache too. Hooks run here instead: still in order, still
+        one at a time, because a driver wants its own work serialised, but
+        nothing a driver does is between a frame and the socket any more.
+
+        Updates coalesce while a hook is busy. They are deltas, so merging two
+        of them produces the message the engine would have sent had it batched
+        them, and a driver that has fallen behind wants the current state
+        rather than a queue of history. `docs/tag-bus.md`: "A driver that
+        stalls gets its writes dropped, not the whole simulation."
+        """
+        while True:
+            await self._dispatch_wake.wait()
+            self._dispatch_wake.clear()
+
+            describe, self._next_describe = self._next_describe, None
+            forced, cleared = self._next_observe
+            self._next_observe = ({}, [])
+            values, self._next_updates = self._next_updates, {}
+
+            if describe is not None:
+                scene, epoch, table = describe
+                for hook in list(self._on_describe):
+                    await self._run_hook(hook, scene, epoch, table)
+                # Only now, and only if nothing has queued another describe
+                # behind this one. Everything between adopting an epoch and
+                # finishing the rebuild is a window in which a driver is still
+                # holding the previous epoch's address map (HP-33).
+                if self._next_describe is None:
+                    self.rebuilt.set()
+            if forced or cleared:
+                for hook in list(self._on_observe):
+                    await self._run_hook(hook, forced, cleared)
+            if values:
+                for hook in list(self._on_update):
+                    await self._run_hook(hook, values)
+
+    @staticmethod
+    async def _run_hook(hook, *args) -> None:
+        """One hook failing must not take the dispatcher down with it.
+
+        `Driver` already guards its own three, but a hook registered by an app
+        or a test is not obliged to, and a dispatcher that dies leaves every
+        driver deaf while the bus goes on looking perfectly healthy.
+        """
+        try:
+            await hook(*args)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("a tag bus hook failed: %r", hook)
+
     async def _flush_loop(self) -> None:
         """Coalesce queued writes into at most one message per tick."""
         interval = self._tick_ms / 1000.0
@@ -247,6 +393,16 @@ class TagBusClient:
                 if not self._pending:
                     continue
                 batch, self._pending = self._pending, {}
+            if not self.rebuilt.is_set():
+                # Dropped, not held back (HP-33). A write queued before every
+                # describe hook has rebuilt came out of an address map older
+                # than the epoch it would be stamped with -- so the engine
+                # would accept it, onto whichever tag inherited that id. Every
+                # driver re-derives its map and re-reads the PLC inside
+                # `rebuild`, which is what brings the value back.
+                log.debug("dropping %d write(s) queued before the rebuild "
+                          "finished (epoch %s)", len(batch), self.epoch)
+                continue
             await self._send(proto.write(self.epoch, batch))
 
     async def _send(self, msg: dict) -> None:

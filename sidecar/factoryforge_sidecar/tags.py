@@ -10,6 +10,7 @@ See docs/tag-bus.md.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
@@ -20,6 +21,15 @@ TagValue = Union[bool, int, float]
 #: Floats closer than this are treated as equal, so physics jitter in the low
 #: bits does not emit an update every tick.
 FLOAT_EPSILON = 1e-6
+
+#: An `int` tag is a signed 32-bit integer, and the range is part of the
+#: protocol rather than an artefact of one implementation. Python would hold
+#: any integer you like; the C# engine holds an `int`, and a bus whose two
+#: engines disagree about what `2147483648` means is not a contract. Documented
+#: in docs/tag-bus.md, pinned by engine/fixtures/tag_cases.json. It also matches
+#: what a PLC has: an S7 DInt is exactly this.
+INT_MIN = -2147483648
+INT_MAX = 2147483647
 
 _DEFAULTS: dict[str, TagValue] = {"bit": False, "int": 0, "float": 0.0}
 
@@ -59,16 +69,37 @@ class Tag:
             # turn a mis-typed bit write into 0/1 and hide the bug.
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TagError(f"{self.id}: {value!r} is not an int")
+            if not INT_MIN <= value <= INT_MAX:
+                raise TagError(
+                    f"{self.id}: {value!r} is outside the 32-bit range "
+                    f"[{INT_MIN}, {INT_MAX}]")
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TagError(f"{self.id}: {value!r} is not a float")
-        return float(value)
+        as_float = float(value)
+        # HP-23. A non-finite value is not a measurement, and it cannot even
+        # leave: `NaN` and `Infinity` are not JSON, so a tag holding one either
+        # corrupts whatever the plant computes from it or leaves as a payload
+        # the other engine's parser refuses outright. Refuse it where it
+        # arrives, with a message, rather than anywhere downstream of here.
+        if not math.isfinite(as_float):
+            raise TagError(f"{self.id}: {value!r} is not a finite float")
+        return as_float
 
     def differs(self, value: TagValue) -> bool:
-        """True if *value* is meaningfully different from the current one."""
+        """True if *value* is meaningfully different from the current one.
+
+        Coerces first, so a value this tag cannot hold is rejected here rather
+        than compared. Without that, `True` against a float tag holding 1.0
+        compared equal and was then quietly accepted by anything that only
+        stores when `differs` says so -- and the two engines disagreed about it,
+        because Python compares `1.0 != True` as False while C# ran the same
+        value through `Convert.ToDouble`.
+        """
+        coerced = self.coerce(value)
         if self.type == "float":
-            return abs(float(self.value) - float(value)) > FLOAT_EPSILON
-        return self.value != value
+            return abs(float(self.value) - coerced) > FLOAT_EPSILON
+        return self.value != coerced
 
     def with_value(self, value: TagValue) -> "Tag":
         return replace(self, value=self.coerce(value))
@@ -140,13 +171,40 @@ class TagTable:
         A forced tag absorbs the write silently: the underlying value updates so
         that clearing the force reveals something sensible, but the observable
         value stays pinned and no change is reported.
+
+        A value that does not meaningfully differ is **not stored** (HP-18.3).
+        Saying "nothing changed" and then storing the new value anyway let the
+        reference creep by a hair a scan, so a float drifting 1e-9 per scan
+        crossed the epsilon on the very next comparison and published on every
+        single scan -- which is the traffic the epsilon exists to prevent.
+        Coercion still happens first, so a value this tag cannot hold is
+        rejected whether or not it would have changed anything.
         """
         tag = self._tags[tag_id]
-        changed = tag.differs(value)
-        self._tags[tag_id] = tag.with_value(value)
+        coerced = tag.coerce(value)
+        changed = tag.differs(coerced)
+        if changed:
+            self._tags[tag_id] = tag.with_value(coerced)
         if tag_id in self._forced:
             return False
         return changed
+
+    def observe(self, tag_id: str, value: TagValue) -> bool:
+        """Record a value the *authority* says is already in effect.
+
+        Only the sidecar's cache uses this. The engine reports the value it can
+        see, which is the value after its own forces have been applied, so a
+        reported value must land on top of a local force pin rather than be
+        absorbed underneath it the way a simulator write is. Without it a tag
+        whose forced value the engine changed would read as whatever the pin
+        said when the sidecar first heard about it.
+        """
+        if tag_id in self._forced:
+            return self.force(tag_id, value)
+        return self.set(tag_id, value)
+
+    def forced_ids(self) -> list[str]:
+        return list(self._forced)
 
     def force(self, tag_id: str, value: TagValue) -> bool:
         tag = self._tags[tag_id]

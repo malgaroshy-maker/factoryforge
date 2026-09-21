@@ -39,6 +39,19 @@ def update(tick: int, values: dict[str, TagValue]) -> dict:
     return {"t": "update", "tick": tick, "values": values}
 
 
+def observe(tick: int, forced: dict[str, TagValue],
+            cleared: Iterable[str] = ()) -> dict:
+    """Forced state the engine currently has in effect (HP-13).
+
+    Deliberately *not* carried on `update`. `update` is simulator-input
+    delivery and every driver's `push()` hook hangs off it; an output whose
+    value the simulator is forcing must never reach that hook, or a driver that
+    writes whatever it is handed would push a simulator-invented value back
+    into a PLC-owned node. See docs/tag-bus.md.
+    """
+    return {"t": "observe", "tick": tick, "forced": forced, "cleared": list(cleared)}
+
+
 def force(epoch: int, values: dict[str, TagValue] | None = None,
           clear: Iterable[str] = ()) -> dict:
     return {"t": "force", "epoch": epoch, "values": values or {}, "clear": list(clear)}
@@ -54,12 +67,34 @@ def status(level: str, code: str, message: str) -> dict:
 
 
 def encode(msg: dict) -> str:
-    return json.dumps(msg, separators=(",", ":"))
+    """Serialise a message. Refuses to emit anything that is not JSON.
+
+    HP-23: Python's json module writes `NaN` and `Infinity` by default, which
+    are not JSON and which the C# engine's parser rejects outright -- so a
+    non-finite value that reached a tag left as a frame the other side could
+    not read, and the sender was never told. `allow_nan=False` turns that into
+    a ValueError here, where the sender can still see it.
+    """
+    try:
+        return json.dumps(msg, separators=(",", ":"), allow_nan=False)
+    except ValueError as exc:
+        raise ProtocolError(f"cannot encode {msg.get('t')!r}: {exc}") from exc
+
+
+def _reject_constant(name: str):
+    """HP-23: `NaN`, `Infinity` and `-Infinity` are not JSON.
+
+    Python's decoder reads them anyway and hands back a float, which is how a
+    non-finite value got into a float tag in the first place. The C# engine's
+    parser refuses the same frame, so accepting it here is also a parity
+    divergence: one engine took the message and the other did not.
+    """
+    raise ProtocolError(f"{name} is not valid JSON")
 
 
 def decode(raw: str | bytes) -> dict:
     try:
-        msg = json.loads(raw)
+        msg = json.loads(raw, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
         raise ProtocolError(f"not valid JSON: {exc}") from exc
     if not isinstance(msg, dict):
@@ -90,15 +125,33 @@ def check_hello(msg: dict) -> dict:
     return msg
 
 
-def parse_describe(msg: dict) -> tuple[str, int, list[Tag]]:
+def parse_describe(msg: dict) -> tuple[str, int, list[Tag], set[str]]:
+    """Scene, epoch, tags, and the ids the engine reports as forced.
+
+    The forced set used to be dropped here, which is half of HP-13: a sidecar
+    connecting to a scene somebody had already forced was told about it in the
+    very first message and threw the fact away.
+    """
     require(msg, "describe")
     try:
         scene = msg["scene"]
         epoch = int(msg["epoch"])
         tags = [Tag.from_json(t) for t in msg["tags"]]
+        forced = {t["id"] for t in msg["tags"] if t.get("forced")}
     except (KeyError, TypeError, ValueError) as exc:
         raise ProtocolError(f"bad describe: {exc}") from exc
-    return scene, epoch, tags
+    return scene, epoch, tags, forced
+
+
+def parse_observe(msg: dict) -> tuple[dict[str, Any], list[str]]:
+    require(msg, "observe")
+    forced = msg.get("forced", {})
+    if not isinstance(forced, dict):
+        raise ProtocolError("'forced' must be an object")
+    cleared = msg.get("cleared", [])
+    if not isinstance(cleared, list):
+        raise ProtocolError("'cleared' must be an array")
+    return forced, cleared
 
 
 def parse_values(msg: dict) -> dict[str, Any]:

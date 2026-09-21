@@ -37,6 +37,7 @@ public partial class TagParitySelfTest : Node
 
             CheckCoerce(root["coerce"]!.AsArray());
             CheckDiffers(root["differs"]!.AsArray());
+            CheckStore(root["store"]!.AsArray());
         }
         catch (Exception ex)
         {
@@ -63,7 +64,7 @@ public partial class TagParitySelfTest : Node
             var c = node!.AsObject();
             var type = ParseType(c["type"]!.GetValue<string>());
             bool expectError = c["error"]?.GetValue<bool>() ?? false;
-            object input = FromJson(c["input"]!);
+            object input = FromCase(c, "input");
 
             // A throwaway tag of the target type; Coerce depends only on Type,
             // not on the tag's current value.
@@ -92,14 +93,55 @@ public partial class TagParitySelfTest : Node
         {
             var c = node!.AsObject();
             var type = ParseType(c["type"]!.GetValue<string>());
-            object current = FromJson(c["current"]!);
-            object candidate = FromJson(c["candidate"]!);
-            bool expected = c["expect"]!.GetValue<bool>();
+            object current = FromCase(c, "current");
+            object candidate = FromCase(c, "candidate");
+            bool expectError = c["error"]?.GetValue<bool>() ?? false;
 
             var tag = new Tag("case", "case", type, TagKind.Output, current);
-            bool differs = tag.Differs(candidate);
-            Expect(differs == expected,
-                $"{c["type"]}: differs({current}, {candidate}) expected {expected}, got {differs}");
+            try
+            {
+                bool differs = tag.Differs(candidate);
+                Expect(!expectError,
+                    $"{c["type"]}: differs({current}, {candidate}) should be rejected, got {differs}");
+                if (expectError) continue;
+                bool expected = c["expect"]!.GetValue<bool>();
+                Expect(differs == expected,
+                    $"{c["type"]}: differs({current}, {candidate}) expected {expected}, got {differs}");
+            }
+            catch (ArgumentException)
+            {
+                Expect(expectError,
+                    $"{c["type"]}: differs({current}, {candidate}) should be answered, was rejected");
+            }
+        }
+    }
+
+    /// <summary>HP-18.3: the epsilon has to suppress the <em>store</em>, not
+    /// only the comparison. Both tables reported "no change" for a sub-epsilon
+    /// move and then stored the new value anyway, so the reference crept and a
+    /// signal drifting 1e-9 a scan published on every scan after all.</summary>
+    private void CheckStore(JsonArray cases)
+    {
+        foreach (var node in cases)
+        {
+            var c = node!.AsObject();
+            var type = ParseType(c["type"]!.GetValue<string>());
+            var probe = new Tag("case", "case", type, TagKind.Output, FromCase(c, "current"));
+            var table = new TagTable();
+            table.Add(probe);
+
+            bool changed = table.Set("case", FromCase(c, "write"));
+            bool expectedChanged = c["expect_changed"]!.GetValue<bool>();
+            Expect(changed == expectedChanged,
+                $"{c["type"]}: set({c["current"]} <- {c["write"]}) reported changed={changed}, " +
+                $"expected {expectedChanged}");
+
+            // Through Coerce, so the fixture's 1.0 and the tag's 1.0 are the
+            // same kind of thing whichever way the JSON reader guessed.
+            object expectedStored = probe.Coerce(FromCase(c, "expect_stored"));
+            Expect(ValuesMatch(table.Visible("case"), expectedStored),
+                $"{c["type"]}: set({c["current"]} <- {c["write"]}) stored " +
+                $"{table.Visible("case")}, expected {expectedStored}");
         }
     }
 
@@ -116,6 +158,25 @@ public partial class TagParitySelfTest : Node
         "float" => TagType.Float,
         _ => throw new ArgumentException($"unknown fixture type {t}"),
     };
+
+    /// <summary>One value out of a case, honouring the `_special` escape.
+    ///
+    /// JSON cannot spell a non-finite float, so a case that needs one names it
+    /// -- `"input_special": "nan"` -- and both readers of the fixture decode
+    /// the same three names. tests/test_tag_parity.py does the identical
+    /// thing.</summary>
+    private static object FromCase(JsonObject c, string key)
+    {
+        if (c[$"{key}_special"] is { } special)
+            return special.GetValue<string>() switch
+            {
+                "nan" => double.NaN,
+                "inf" => double.PositiveInfinity,
+                "-inf" => double.NegativeInfinity,
+                var other => throw new ArgumentException($"unknown special {other}"),
+            };
+        return FromJson(c[key]!);
+    }
 
     /// <summary>Mirrors TagBusServer.ToClr -- the same decode a real `write` or
     /// `force` message goes through, so this exercises the real path rather
