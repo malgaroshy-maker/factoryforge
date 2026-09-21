@@ -278,10 +278,19 @@ session; they are also what `tests/test_grade.py` asserts against.
 
 Read this part before promising it to a class.
 
-**All ten scenes, and a test asserts it** against the engine's own manifest, so
-a scene added to the start screen without a rubric fails CI rather than quietly
-shipping ungraded. What that sentence does *not* mean is that every scene is
-marked on everything its brief describes; see the next three paragraphs.
+**All ten scenes this was built for**, and a test asserts it. A second test
+asserts the other direction against the engine's own manifest — nothing is
+graded that no student can open — and a third requires any scene the engine
+ships *without* a rubric to be admitted in this file, so one cannot appear on
+the start screen and quietly go unmarked.
+
+`palletising-cell` is one: it landed on the start screen while this was being
+written and **has no rubric**. It needs a plant model with an articulated arm
+and a pallet station, which is more machine than any of the ten here, and
+nothing about the machinery below stops somebody writing it.
+
+What "all ten" does *not* mean is that every scene is marked on everything its
+brief describes; see the next four paragraphs.
 
 **Python models of the plants, not the 3D engine.** The sorting line runs
 `harness/scene.py`; the other nine run models that live in `tools/grade.py`.

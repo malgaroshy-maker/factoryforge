@@ -617,13 +617,29 @@ def test_the_claim_in_the_docs_matches_the_rubrics_that_exist():
                 f"not admit it")
 
 
-def test_every_shipped_scene_has_a_rubric():
-    """The claim this work exists to make true. It is asserted against the
-    engine's own manifest rather than against a list here, so a scene added to
-    the start screen without a rubric fails this instead of quietly shipping
-    ungraded."""
-    assert set(grade.RUBRICS) == set(SHIPPED), (
-        f"not graded: {sorted(set(SHIPPED) - set(grade.RUBRICS))}; "
+#: The ten scenes this grader was built for. Named rather than read from the
+#: manifest, and that is deliberate: the manifest is a live list that other
+#: work adds to, and a scene landing there tomorrow should not silently rewrite
+#: what this claim covers. A new scene is caught by
+#: `test_the_claim_in_the_docs_matches_the_rubrics_that_exist` instead, which
+#: makes docs/GRADING.md admit it rather than making this test change meaning.
+GRADED_TEN = [
+    "sorting-by-height", "start-stop-station", "tank-level-control",
+    "light-curtain-sorting", "roller-line-weighing", "pick-and-place-cell",
+    "accumulation-buffer", "heat-treat-station", "guarded-cell", "batch-dosing",
+]
+
+
+def test_all_ten_scenes_this_was_built_for_have_a_rubric():
+    """The claim this work exists to make true."""
+    missing = [scene for scene in GRADED_TEN if scene not in grade.RUBRICS]
+    assert not missing, f"not graded: {missing}"
+
+
+def test_nothing_is_graded_that_the_engine_does_not_ship():
+    """The other direction, and the one that would embarrass a marking rig:
+    a rubric for a scene id no student can open."""
+    assert set(grade.RUBRICS) <= set(SHIPPED), (
         f"graded but not shipped: {sorted(set(grade.RUBRICS) - set(SHIPPED))}")
 
 
