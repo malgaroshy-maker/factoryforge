@@ -18,6 +18,7 @@ from pymodbus.client import AsyncModbusTcpClient
 from factoryforge_sidecar import drivers
 from factoryforge_sidecar.modbus import DataStore, ModbusTcpServer, error_response, handle_pdu
 from factoryforge_sidecar.modbus.server import ILLEGAL_ADDRESS, ILLEGAL_FUNCTION
+from factoryforge_sidecar.tags import Tag, TagTable
 
 
 # --- protocol unit tests (no sockets) ---
@@ -267,6 +268,103 @@ async def test_stop_ends_sessions_that_are_already_established(server_factory):
         assert await _ended(reader), "stop() left an established session open"
     finally:
         writer.close()
+
+
+# --- addresses that stay put when the scene is edited -------------------------
+
+class RecordingBus:
+    """Just enough `TagBusClient` to rebuild a driver and hear what it says."""
+
+    def __init__(self) -> None:
+        self.statuses: list[tuple[str, str, str]] = []
+
+    def on_describe(self, hook) -> None: ...
+    def on_update(self, hook) -> None: ...
+    def on_disconnect(self, hook) -> None: ...
+
+    async def status(self, level, code, message) -> None:
+        self.statuses.append((level, code, message))
+
+
+def table_of(*names) -> TagTable:
+    """Bit outputs, one per name -- all coils, so ordering is the only variable."""
+    return TagTable([Tag(name, name, "bit", "output") for name in names])
+
+
+def coil_map(driver) -> dict[str, int]:
+    return {m.tag_id: m.address for m in driver._by_tag.values() if m.block == "coils"}
+
+
+@pytest.fixture
+def mapper():
+    """A Modbus driver with no sockets: only the address allocator is under test."""
+    bus = RecordingBus()
+    driver = drivers.create("modbus-tcp", bus, port=0)
+    driver.bus = bus
+    return driver
+
+
+async def test_adding_an_earlier_tag_does_not_move_the_addresses_around_it(mapper):
+    """The whole point. Addresses were rebuilt from zero in sorted-tag-id order
+    on every describe, and the engine republishes on every scene edit -- so
+    adding a part whose id sorts first slid every address after it by one,
+    while the PLC's hand-written list of numbers did not move at all."""
+    await mapper.rebuild("scene", 1, table_of("conveyor.rotate", "pusher_1.extend"))
+    before = coil_map(mapper)
+    assert before == {"conveyor.rotate": 0, "pusher_1.extend": 1}
+
+    await mapper.rebuild("scene", 2,
+                         table_of("belt_a.rotate", "conveyor.rotate", "pusher_1.extend"))
+    after = coil_map(mapper)
+    assert after["conveyor.rotate"] == before["conveyor.rotate"]
+    assert after["pusher_1.extend"] == before["pusher_1.extend"]
+    assert after["belt_a.rotate"] == 2, "a new tag must go above what already exists"
+
+
+async def test_a_deleted_tag_does_not_hand_its_address_to_a_new_one(mapper):
+    """Reusing the slot would be the same bug wearing a different hat: the PLC
+    still has that number written down, and it would now reach another device."""
+    await mapper.rebuild("scene", 1, table_of("conveyor.rotate", "pusher_1.extend"))
+    await mapper.rebuild("scene", 2, table_of("conveyor.rotate"))
+    await mapper.rebuild("scene", 3, table_of("conveyor.rotate", "zzz.lamp"))
+
+    assert coil_map(mapper)["conveyor.rotate"] == 0
+    assert coil_map(mapper)["zzz.lamp"] == 2, "it took the deleted tag's address"
+
+
+async def test_a_readded_tag_gets_its_original_address_back(mapper):
+    await mapper.rebuild("scene", 1, table_of("conveyor.rotate", "pusher_1.extend"))
+    await mapper.rebuild("scene", 2, table_of("conveyor.rotate"))
+    await mapper.rebuild("scene", 3, table_of("conveyor.rotate", "pusher_1.extend"))
+    assert coil_map(mapper) == {"conveyor.rotate": 0, "pusher_1.extend": 1}
+
+
+async def test_a_fresh_run_of_the_same_scene_maps_the_same_way(mapper):
+    """Stability across edits must not cost reproducibility across runs: a
+    student writes the map down once, from a clean start."""
+    tags = table_of("belt_a.rotate", "conveyor.rotate", "pusher_1.extend")
+    await mapper.rebuild("scene", 1, tags)
+    other = drivers.create("modbus-tcp", RecordingBus(), port=0)
+    await other.rebuild("scene", 1, tags)
+    assert coil_map(mapper) == coil_map(other) == {
+        "belt_a.rotate": 0, "conveyor.rotate": 1, "pusher_1.extend": 2}
+
+
+async def test_a_map_change_is_announced_because_the_wire_cannot_be(mapper):
+    """Modbus carries no tag names, so a master has no way to notice that the
+    scene behind the addresses has changed."""
+    await mapper.rebuild("scene", 1, table_of("conveyor.rotate"))
+    assert mapper.bus.statuses == [], "the first map is not news"
+
+    await mapper.rebuild("scene", 2, table_of("belt_a.rotate", "conveyor.rotate"))
+    assert len(mapper.bus.statuses) == 1
+    _, code, message = mapper.bus.statuses[0]
+    assert code == "modbus_map_changed"
+    assert "belt_a.rotate=0x1" in message
+    assert "unchanged" in message
+
+    await mapper.rebuild("scene", 3, table_of("belt_a.rotate", "conveyor.rotate"))
+    assert len(mapper.bus.statuses) == 1, "an unchanged map was announced anyway"
 
 
 def test_the_driver_binds_loopback_unless_told_otherwise():
