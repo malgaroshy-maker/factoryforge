@@ -131,7 +131,14 @@ async def demo(args) -> int:
     print("\nCtrl-C to stop.\n")
     printer = asyncio.create_task(_print_loop(sim, engine))
     try:
-        await asyncio.Event().wait()
+        # --duration was accepted by the subparser and never read, so the flag
+        # AGENTS.md gotcha 6 tells you to use -- "use `demo --duration N`,
+        # which shuts down cleanly" -- did not shut down at all. Same shape as
+        # the `connect` path, which has always honoured it.
+        if args.duration:
+            await asyncio.sleep(args.duration)
+        else:
+            await asyncio.Event().wait()
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
