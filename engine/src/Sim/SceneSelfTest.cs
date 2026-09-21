@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using FactoryForge.Editor;
+using FactoryForge.Parts;
 using FactoryForge.TagBus;
 using Godot;
 
@@ -61,6 +62,7 @@ public partial class SceneSelfTest : Node
             CheckDispatchSurvives();
             CheckClearUndo();
             CheckRotateAndDuplicate();
+            CheckACopiedRemoverCountsItsOwn();
             CheckASaveThatCannotLandSaysSo();
             CheckAFailedSaveLeavesTheLastGoodFile();
             CheckABadFileLeavesTheOpenSceneAlone();
@@ -470,6 +472,75 @@ public partial class SceneSelfTest : Node
         Editor.Undo();
         Expect(Editor.PlacedPartIds().ToHashSet().SetEquals(beforeDuplicate),
                "undoing a duplicate removes exactly the part it added");
+    }
+
+    /// <summary>
+    /// HP-16. A copy must not inherit a setting that names somebody else's tag.
+    ///
+    /// Copy already resets instance ids, for a reason it states: a pasted part
+    /// that adopted the tags of the one it came from would give two parts one
+    /// belt. Remover.CountTag is the same problem one level down and was not
+    /// reset, so duplicating a remover that counts into `counter.tall` gave two
+    /// removers writing one counter — the display went up twice per carton and
+    /// neither part looked wrong.
+    ///
+    /// The fix drops the key rather than rewriting it, which is why one rule
+    /// covers both cases: an empty CountTag already means "my own {id}.count"
+    /// everywhere it is read.
+    /// </summary>
+    private void CheckACopiedRemoverCountsItsOwn()
+    {
+        const string probeId = "probe_remover";
+
+        var original = Editor!.NodeFor(probeId) as Remover;
+        Expect(original is not null, "the remover probe is in the scene");
+        if (original is null) return;
+        Expect(original.CountTag == "counter.tall",
+               $"and counts into somebody else's tag to begin with (got '{original.CountTag}')");
+
+        // Ctrl+D
+        Expect(Editor.SelectPartForInspection(probeId), "the remover can be selected");
+        Editor.DuplicateSelectedPart();
+        string copyId = Editor.SelectedInstanceId ?? "";
+        Expect(copyId.Length > 0 && copyId != probeId, $"the duplicate is a new part ('{copyId}')");
+
+        var copy = Editor.NodeFor(copyId) as Remover;
+        Expect(copy is not null, "the duplicate is a Remover");
+        Expect(copy is not null && copy.CountTag != "counter.tall",
+               $"and does not carry the original's count tag (got '{copy?.CountTag}')");
+        Expect(copy is not null && copy.CountTag.Length == 0,
+               "it counts into its own tag, which is what an empty CountTag means");
+        Expect(PartTagManager.HasTagsFor(copyId, Tags), "and it registered a count tag of its own");
+        Expect(Tags.Contains($"{copyId}.count"),
+               $"specifically {copyId}.count, the one an empty CountTag resolves to");
+
+        // The original is untouched: this is about the copy, not about breaking
+        // the part it came from.
+        Expect(original.CountTag == "counter.tall",
+               $"the original still counts where it did (got '{original.CountTag}')");
+
+        Editor.Undo();
+
+        // Ctrl+C / Ctrl+V, which is the other route and a different command.
+        Expect(Editor.SelectPartForInspection(probeId), "the remover can be selected again");
+        Editor.CopySelection();
+        Editor.PasteClipboard();
+        var pastedIds = Editor.SelectedInstanceIds();
+        Expect(pastedIds.Count == 1, $"the paste put one part down (got {pastedIds.Count})");
+
+        if (pastedIds.Count == 1 && Editor.NodeFor(pastedIds[0]) is Remover pasted)
+        {
+            Expect(pasted.CountTag != "counter.tall",
+                   $"a pasted remover does not carry the count tag either (got '{pasted.CountTag}')");
+            Expect(Tags.Contains($"{pastedIds[0]}.count"),
+                   $"and counts into {pastedIds[0]}.count");
+        }
+        else
+        {
+            Expect(false, "the pasted part is a Remover");
+        }
+
+        Editor.Undo();
     }
 
     /// <summary>

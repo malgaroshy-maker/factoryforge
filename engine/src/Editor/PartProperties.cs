@@ -26,6 +26,36 @@ public static class PartProperties
     private static string N(int v) => v.ToString(CultureInfo.InvariantCulture);
     private static string N(bool v) => v ? "true" : "false";
 
+    /// <summary>
+    /// Settings that name a tag somewhere *else* in the scene, rather than
+    /// describing the part itself.
+    ///
+    /// These are the ones a copy must not carry (HP-16). Every other setting is
+    /// a property of the machine and is exactly what you want a duplicate to
+    /// inherit; a tag id is a wire to a different part, and copying the machine
+    /// does not copy the wire's meaning. Duplicating a remover that counts into
+    /// `counter.tall` gave two removers writing one counter, so the number on
+    /// the display went up twice per carton and neither part looked wrong.
+    /// </summary>
+    private static readonly string[] ExternalTagKeys = { "count_tag" };
+
+    /// <summary>
+    /// <see cref="Capture"/> for a copy, paste or duplicate rather than for a
+    /// save: the same settings, minus anything naming a tag outside the part.
+    ///
+    /// Dropping the key rather than rewriting it is what makes this correct in
+    /// both directions. An empty <c>Remover.CountTag</c> already means "my own
+    /// {id}.count" everywhere it is read, so a remover that pointed at its own
+    /// tag gets the copy's own tag, and one that pointed at a shared counter
+    /// gets its own instead of fighting over somebody else's.
+    /// </summary>
+    public static Dictionary<string, string> CaptureForCopy(Node3D node)
+    {
+        var p = Capture(node);
+        foreach (string key in ExternalTagKeys) p.Remove(key);
+        return p;
+    }
+
     public static Dictionary<string, string> Capture(Node3D node)
     {
         var p = new Dictionary<string, string>();

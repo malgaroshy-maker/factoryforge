@@ -2121,7 +2121,10 @@ public partial class SceneEditor : Node3D
                 {
                     entry.Node.Rotation.X, entry.Node.Rotation.Y, entry.Node.Rotation.Z,
                 },
-                Properties = PartProperties.Capture(entry.Node),
+                // ForCopy, not Capture: the ids are reset here for exactly this
+                // reason, and a setting *naming another tag* is the same problem
+                // one level down (HP-16).
+                Properties = PartProperties.CaptureForCopy(entry.Node),
             });
         }
 
@@ -2717,7 +2720,7 @@ public partial class SceneEditor : Node3D
             Type = source.PartType,
             Position = new[] { offset.X, offset.Y, offset.Z },
             Rotation = new[] { source.Node.Rotation.X, source.Node.Rotation.Y, source.Node.Rotation.Z },
-            Properties = PartProperties.Capture(source.Node),
+            Properties = PartProperties.CaptureForCopy(source.Node),
         };
 
         _history.ExecuteCommand(new DuplicateCommand(this, data));
@@ -2756,7 +2759,7 @@ public partial class SceneEditor : Node3D
                 {
                     entry.Node.Rotation.X, entry.Node.Rotation.Y, entry.Node.Rotation.Z,
                 },
-                Properties = PartProperties.Capture(entry.Node),
+                Properties = PartProperties.CaptureForCopy(entry.Node),
             });
         }
 
