@@ -1842,6 +1842,489 @@ async def drive_accumulation_buffer(bus: TagBusClient, duration: float,
     return not check.problems, "; ".join(check.problems)
 
 
+async def drive_guarded_cell(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
+    """Guarding as hardware, and the two mistakes it is there to catch.
+
+    Every other exercise in this file writes the drive tag. This one never
+    writes `belt.rotate` at all -- it writes `starter.coil`, and a contactor
+    runs the motor. That single difference is what makes "the relay closed" and
+    "the machine started" two separate events, and it is why the two headline
+    assertions here are *negative*:
+
+    * **A permissive that starts something is a failure.** Shutting the gate
+      and pressing Reset closes the relay's safety contacts, which hands
+      `starter.coil` back to the controller and does nothing else. If the belt
+      moves on that Reset, the program has built automatic restart out of a
+      relay written specifically to refuse it.
+
+    * **A mute that never expires is a failure.** Cartons have to cross the
+      scanner's protective field, so the controller bridges it while each one
+      passes, and the panel's pot is how long for. Widen it past the scanner's
+      own mute limit and consecutive cartons hold the bridge continuously --
+      the scanner stops honouring a request it is still receiving, and the next
+      carton in the field stops the cell. That refusal is measured here, not
+      asserted: the moment `scanner.mute` is high and `scanner.muted` is not.
+
+    Mirrors GuardedCellProfile, with one deliberate difference: the profile
+    gives itself a quarter-second commissioning press of the relay's reset at
+    startup so 🎬 Demo has something to show. This presses Reset itself -- and
+    first checks that a cell which has never been reset is a cell Start cannot
+    move.
+    """
+    EMIT_HALF_PERIOD = 2.5      # one carton every 5 s; see the mute window below
+    PUSH_DELAY = 1.0            # push eye to the transfer station: 0.5 m at 0.5 m/s
+    MUTE_WINDOW = 3.5           # long enough to carry a carton across the field
+    LONG_MUTE = 10.0            # past the scanner's own 6 s limit -- the defeat
+    SCANNER_MUTE_LIMIT = 6.0    # the scanner's own mute_limit, from the scene
+    SYNC_WINDOW = 0.5           # the relay's channel-discrepancy window, from the scene
+
+    check = Checks(verbose)
+    state = {
+        # The relay powers up open, so the cell powers up tripped. That is not
+        # a fault, it is what every safety relay does.
+        "safety_trip": True,
+        "prev_mute_eye": False, "prev_push_eye": False,
+        "mute_until": 0.0, "refused_at": None,
+        # How long the controller *asked* for the field to be bridged, and how
+        # long the scanner actually bridged it. Two numbers rather than one
+        # sampled bit, because the moment the scanner withdraws a mute and the
+        # moment the cell stops are the same tick when a carton is in the field
+        # at the time -- there is nothing in between to catch.
+        "mute_wanted_since": None, "muted_since": None,
+        "max_wanted": 0.0, "max_muted": 0.0,
+        # Hold the start command on by hand, so the relay can be caught
+        # refusing a command that is genuinely being made. Without this the
+        # controller stops asking the moment it trips, and "the coil is off"
+        # would prove nothing about who turned it off.
+        "force_coil": False, "coil_cmd": False,
+        "feeding": False, "emit": False, "emit_timer": 0.0, "fed": 0,
+        "transfer": "idle", "push_timer": 0.0,
+        "cyl_extend": False, "cyl_retract": False,
+        "samples": 0, "motor_mismatch": 0,
+        "mid_stroke": 0, "both_reeds": 0, "both_coils": 0,
+        "mute_seen": False, "field_broken_seen": False,
+    }
+
+    async def tick(dt: float) -> None:
+        s = state
+        now = time.perf_counter()
+
+        # Read the Reset button before the station consumes it: this scene has
+        # two things to reset -- the safety relay's own latch and the
+        # controller's -- and one button does both, the way one button does on
+        # a real cell.
+        reset_level = bit(bus, "panel.reset")
+        station.scan()
+
+        # Neither of these is computed here. The relay decides whether its
+        # contacts are closed and the scanner decides whether its field is
+        # clear; recomputing either from the raw channels would be a second,
+        # unrated opinion about a safety function.
+        relay_closed = bit(bus, "relay.k1") and bit(bus, "relay.k2")
+        field_clear = bit(bus, "scanner.stop")
+
+        if not relay_closed or not field_clear:
+            s["safety_trip"] = True
+        if reset_level and relay_closed and field_clear:
+            s["safety_trip"] = False
+        if s["safety_trip"]:
+            station.running = False
+
+        running = station.running and not s["safety_trip"]
+        coil = running or s["force_coil"]
+        s["coil_cmd"] = coil
+
+        # --- muting, on the pot's own window -------------------------------
+        eye = bit(bus, "mute_eye.detect")
+        if eye and not s["prev_mute_eye"] and running:
+            s["mute_until"] = now + station.setpoint
+        s["prev_mute_eye"] = eye
+
+        # What the controller is still inside its own bridge window for, and
+        # what it actually commands. The two part company the instant the cell
+        # trips, and that difference is what makes the refusal visible at all.
+        want_mute = now < s["mute_until"]
+        mute = running and want_mute
+
+        if want_mute:
+            if s["mute_wanted_since"] is None:
+                s["mute_wanted_since"] = now
+            s["max_wanted"] = max(s["max_wanted"], now - s["mute_wanted_since"])
+        else:
+            s["mute_wanted_since"] = None
+
+        if bit(bus, "scanner.muted"):
+            s["mute_seen"] = True
+            if s["muted_since"] is None:
+                s["muted_since"] = now
+            s["max_muted"] = max(s["max_muted"], now - s["muted_since"])
+        else:
+            s["muted_since"] = None
+
+        # The scanner refusing a bridge the controller is still asking for,
+        # caught either way round: as `scanner.muted` going out under a
+        # standing request -- with half a second of grace, since that bit is
+        # the scanner's answer to a request that has to cross the bus twice --
+        # or as the protective field going un-clear while the request stands,
+        # which is the same event seen from the other end when a carton happens
+        # to be in the field at the moment the limit expires. There is no
+        # sample in between those two: they are the same tick.
+        if s["refused_at"] is None and want_mute and (
+                not field_clear
+                or (s["mute_wanted_since"] is not None
+                    and now - s["mute_wanted_since"] > 0.5
+                    and not bit(bus, "scanner.muted"))):
+            s["refused_at"] = now
+
+        # --- what the contactor is doing, which is not what we commanded ----
+        motor = bit(bus, "starter.aux")
+        if bit(bus, "belt.rotate") != motor:
+            s["motor_mismatch"] += 1
+        s["samples"] += 1
+        if not field_clear:
+            s["field_broken_seen"] = True
+
+        extended = bit(bus, "cylinder.extended")
+        retracted = bit(bus, "cylinder.retracted")
+        if extended and retracted:
+            s["both_reeds"] += 1
+        if not extended and not retracted:
+            s["mid_stroke"] += 1
+
+        # --- the feed, gated on the contactor and not on the command --------
+        s["emit_timer"] += dt
+        if motor and s["feeding"]:
+            if s["emit_timer"] >= EMIT_HALF_PERIOD:
+                s["emit"] = not s["emit"]
+                s["emit_timer"] = 0.0
+                if s["emit"]:
+                    s["fed"] += 1
+        else:
+            s["emit"] = False
+            s["emit_timer"] = 0.0
+
+        # --- the transfer stroke, sequenced off the reeds -------------------
+        #
+        # Only ever one coil. Energising both is not a way to hold a
+        # double-solenoid valve still, it is a way to leave the rod wherever
+        # the previous scan put it. And no step reads `not extended` as
+        # "retracted": between the two reeds neither is made.
+        push = bit(bus, "push_eye.detect")
+        if not motor:
+            s["transfer"] = "idle"
+            s["push_timer"] = 0.0
+        else:
+            if push and not s["prev_push_eye"] and s["transfer"] == "idle" and retracted:
+                s["transfer"] = "waiting"
+                s["push_timer"] = PUSH_DELAY
+
+            if s["transfer"] == "waiting":
+                s["push_timer"] -= dt
+                if s["push_timer"] <= 0.0:
+                    s["transfer"] = "extending"
+            elif s["transfer"] == "extending":
+                if extended:
+                    s["transfer"] = "retracting"
+            elif s["transfer"] == "retracting":
+                if retracted:
+                    s["transfer"] = "idle"
+            elif not retracted:
+                # A stroke a stop interrupted left the rod between the reeds.
+                # Bring it home, and read the reed rather than assuming.
+                s["transfer"] = "retracting"
+        s["prev_push_eye"] = push
+
+        s["cyl_extend"] = s["transfer"] == "extending"
+        s["cyl_retract"] = s["transfer"] == "retracting"
+        if s["cyl_extend"] and s["cyl_retract"]:
+            s["both_coils"] += 1
+
+        # A guarding trip is a trip, and the panel has to say so. The shared
+        # Station only latches the mushroom and the drive faults, so the red
+        # lamp is overridden here rather than left dark on the one stop this
+        # scene exists to demonstrate.
+        lamps = station.lamps()
+        if s["safety_trip"]:
+            lamps["panel.red"] = True
+            lamps["tower.red"] = True
+            lamps["tower.yellow"] = False
+
+        await write_present(bus, {
+            "relay.reset": reset_level,
+            "starter.coil": coil,
+            "scanner.mute": mute,
+            "emitter.emit": s["emit"],
+            "cylinder.extend": s["cyl_extend"],
+            "cylinder.retract": s["cyl_retract"],
+            **lamps,
+        })
+
+    station = Station(bus, faults=("belt.fault", "cylinder.fault"))
+    stop_event, task = controller(tick)
+    estop_ms = fault_ms = guard_ms = -1.0
+    refusal_s = trip_s = -1.0
+    transferred = escaped = 0
+
+    try:
+        await asyncio.sleep(0.6)
+
+        # --- 1. a cell nobody has reset is a cell Start cannot move ---------
+        check(not bit(bus, "relay.k1") and not bit(bus, "relay.k2"),
+              "power-up: the relay's safety contacts are open, before anybody has reset it")
+        check(bit(bus, "relay.cha") and bit(bus, "relay.chb"),
+              "power-up: both gate leaves read shut, so the channels are healthy")
+        check(not bit(bus, "belt.rotate"), "power-up: the belt is off")
+
+        await press(bus, "panel.start")
+        await asyncio.sleep(0.5)
+        check(not bit(bus, "belt.rotate"),
+              "Start, on a relay that has never been reset, does nothing at all")
+        check(not bit(bus, "starter.aux"), "and the contactor never pulls in")
+
+        # --- 2. the permissive, and what a permissive is not ----------------
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.5)
+        check(bit(bus, "relay.k1") and bit(bus, "relay.k2"),
+              "Reset with both gate leaves shut closes the relay's safety contacts")
+        check(not bit(bus, "belt.rotate"),
+              "and the cell does NOT start -- closing a permissive hands the coil back, "
+              "it does not command it")
+        check(not bit(bus, "starter.aux"),
+              "the contactor is still out one full second after the relay closed")
+
+        # --- 3. the operator contract every line here shares ----------------
+        estop_ms = await exercise_interlocks(bus, station, check,
+                                             lambda: bit(bus, "belt.rotate"), "the belt")
+        check(bit(bus, "starter.aux"),
+              "running: the auxiliary contact says the motor is turning, not just commanded")
+        fault_ms = await exercise_fault(bus, station, check,
+                                        lambda: bit(bus, "belt.rotate"),
+                                        "belt.fault", "the belt")
+
+        # --- 4. the gate: hardware holds the coil, whatever the program says
+        struck = time.perf_counter()
+        await bus.force({"guard_a.closed": False, "guard_b.closed": False})
+        while time.perf_counter() - struck < 1.0:
+            if not bit(bus, "belt.rotate"):
+                break
+            await asyncio.sleep(0.005)
+        guard_ms = (time.perf_counter() - struck) * 1000.0
+
+        check(not bit(bus, "belt.rotate"), "opening both gate leaves stops the cell")
+        check(guard_ms <= ESTOP_LIMIT * 1000.0,
+              f"the gate stops the cell within {ESTOP_LIMIT * 1000:.0f}ms "
+              f"(took {guard_ms:.0f}ms)")
+        check(not bit(bus, "relay.k1"), "with the relay's contacts open")
+        check(not bit(bus, "relay.fault"),
+              "and no channel fault -- the two leaves opened together, which is what "
+              "cross-monitoring expects")
+
+        # Hold the start command on by hand. The controller stops asking the
+        # moment it trips, so without this "the coil is off" would say nothing
+        # about who turned it off.
+        state["force_coil"] = True
+        await asyncio.sleep(0.7)
+        check(state["coil_cmd"],
+              "with the start command deliberately held on against an open gate")
+        check(not bit(bus, "starter.coil"),
+              "the coil tag itself reads false -- the relay is holding the circuit, and "
+              "the command cannot reach the contactor")
+        check(not bit(bus, "starter.aux"), "so the contactor stays out")
+        check(not bit(bus, "belt.rotate"), "and the motor does not turn")
+        state["force_coil"] = False
+
+        await bus.force({"guard_a.closed": True, "guard_b.closed": True})
+        await asyncio.sleep(0.7)
+        check(not bit(bus, "relay.k1"),
+              "shutting the gate does not close the relay on its own -- that would be "
+              "the automatic restart guarding exists to prevent")
+        await press(bus, "panel.start")
+        await asyncio.sleep(0.5)
+        check(not bit(bus, "belt.rotate"), "and Start with the relay still open does nothing")
+
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.5)
+        check(bit(bus, "relay.k1"), "Reset closes the relay again")
+        check(not bit(bus, "belt.rotate"), "and, again, starts nothing")
+        await press(bus, "panel.start")
+        await asyncio.sleep(0.7)
+        check(bit(bus, "belt.rotate"), "Start after that Reset runs the cell")
+
+        # --- 5. one leaf on its own: cross-monitoring ------------------------
+        check(not bit(bus, "relay.fault"), "before: no channel fault")
+        await bus.force({"guard_a.closed": False})
+        await asyncio.sleep(0.15)
+        check(not bit(bus, "relay.fault"),
+              f"a channel that has only just moved is not a fault yet "
+              f"(inside the {SYNC_WINDOW:.1f}s sync window)")
+        check(not bit(bus, "belt.rotate"),
+              "but the cell is already stopped, which is the safe order")
+
+        await asyncio.sleep(1.0)
+        check(bit(bus, "relay.fault"),
+              f"one leaf still open past the {SYNC_WINDOW:.1f}s sync window latches a "
+              f"channel discrepancy -- what a welded contact looks like from the relay")
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.4)
+        check(bit(bus, "relay.fault"),
+              "a Reset while the two channels still disagree does not clear it -- you "
+              "cannot reset your way past a broken wire")
+
+        await bus.force({"guard_a.closed": True})
+        await asyncio.sleep(0.4)
+        check(bit(bus, "relay.fault"),
+              "and the fault outlives the channels agreeing again; it is latched")
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.5)
+        check(not bit(bus, "relay.fault"), "a Reset with both channels back clears it")
+        check(bit(bus, "relay.k1"), "and the same rising edge closes the contacts")
+        check(not bit(bus, "belt.rotate"), "still stopped until somebody presses Start")
+        await press(bus, "panel.start")
+        await asyncio.sleep(0.7)
+        check(bit(bus, "belt.rotate"), "Start brings the cell back")
+
+        # --- 6. production, with the mute doing its job ----------------------
+        await turn_pot(bus, MUTE_WINDOW)
+        await asyncio.sleep(0.3)
+        check(abs(station.setpoint - MUTE_WINDOW) < 0.01,
+              f"the mute pot reads {MUTE_WINDOW:.1f}s (got {station.setpoint:.2f})")
+
+        before_transferred = num(bus, "transferred.count")
+        before_escaped = num(bus, "line_end.count")
+        for key in ("samples", "motor_mismatch", "mid_stroke", "both_reeds",
+                    "both_coils", "fed"):
+            state[key] = 0
+        state["mute_seen"] = False
+
+        state["feeding"] = True
+        await asyncio.sleep(max(duration - 8.0, 22.0))
+        state["feeding"] = False
+        await asyncio.sleep(8.0)                 # drain: let the lane clear
+
+        transferred = int(num(bus, "transferred.count") - before_transferred)
+        escaped = int(num(bus, "line_end.count") - before_escaped)
+
+        check(transferred >= 2,
+              f"production: the cylinder really transfers cartons into the chute "
+              f"(got {transferred} from {state['fed']} fed, {escaped} past the station)")
+        check(transferred + escaped >= state["fed"] - 1,
+              f"conservation: every carton fed reached one of the two counters "
+              f"({transferred} + {escaped} against {state['fed']} fed)")
+        check(escaped <= 1,
+              f"and all but at most one went into the chute rather than off the end "
+              f"({escaped} past the station)")
+        check(bit(bus, "belt.rotate"),
+              "and the cell ran the whole window without the scanner tripping it")
+        check(state["mute_seen"],
+              "the protective field was bridged while cartons crossed it -- a scanner "
+              "nobody mutes would have stopped this line on the first carton")
+        check(state["mid_stroke"] > 0,
+              f"the rod was caught between the two reeds ({state['mid_stroke']} scans) -- "
+              f"'not extended' is not 'retracted'")
+        check(state["both_reeds"] == 0,
+              "and both reeds were never made at once, which would mean the gap is a lie")
+        check(state["both_coils"] == 0,
+              "the controller never energised both solenoids at once")
+        check(state["samples"] > 0 and state["motor_mismatch"] == 0,
+              f"belt.rotate followed starter.aux on all {state['samples']} scans -- the "
+              f"contactor runs the motor, and this program never wrote belt.rotate "
+              f"({state['motor_mismatch']} disagreements)")
+
+        # --- 7. widen the mute past the scanner's limit ---------------------
+        state["refused_at"] = None
+        state["mute_wanted_since"] = None
+        state["muted_since"] = None
+        state["max_wanted"] = state["max_muted"] = 0.0
+        await turn_pot(bus, LONG_MUTE)
+        await asyncio.sleep(0.3)
+        check(abs(station.setpoint - LONG_MUTE) < 0.01,
+              f"the pot is turned to {LONG_MUTE:.0f}s, past the scanner's own 6s limit "
+              f"(got {station.setpoint:.2f})")
+
+        began = time.perf_counter()
+        state["feeding"] = True
+        deadline = began + 35.0
+        while time.perf_counter() < deadline:
+            if not bit(bus, "belt.rotate"):
+                break
+            await asyncio.sleep(0.02)
+        trip_s = time.perf_counter() - began
+        state["feeding"] = False
+
+        if check(state["refused_at"] is not None,
+                 "the scanner stopped honouring a bridge the controller was still "
+                 "commanding -- consecutive cartons held it past the mute limit"):
+            refusal_s = state["refused_at"] - began
+
+        # The same event again as a duration, which no sampling race can
+        # flatter. A withdrawal, not a mute that never started: the scanner did
+        # bridge the field, and then took the guard back part-way through a
+        # request the controller never withdrew.
+        check(state["max_muted"] > 1.0,
+              f"the scanner did bridge the field first ({state['max_muted']:.1f}s), so "
+              f"this is a mute being withdrawn and not one that never started")
+        check(state["max_muted"] <= SCANNER_MUTE_LIMIT + 0.5,
+              f"the pot asked for a {LONG_MUTE:.0f}s bridge and the scanner gave "
+              f"{state['max_muted']:.1f}s of it before taking the guard back -- muting "
+              f"held longer than a pallet takes is muting somebody has taped on")
+        check(not bit(bus, "belt.rotate"),
+              f"and the next carton in the un-bridged field stopped the cell "
+              f"({trip_s:.1f}s after the pot was widened)")
+        await asyncio.sleep(0.3)
+        check(bit(bus, "panel.red"), "with the panel's red lamp lit")
+
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.4)
+        check(not bit(bus, "belt.rotate"),
+              "a Reset with a carton still standing in the field does not bring it back "
+              "-- the field has to be clear first, and a stopped belt cannot clear it")
+
+        # The way out, and the reason a taped-on mute is tempting: a fresh,
+        # deliberate bridge, long enough to run the trapped carton clear.
+        await turn_pot(bus, MUTE_WINDOW)
+        await bus.force({"scanner.mute": True})
+        await asyncio.sleep(0.5)
+        await press(bus, "panel.reset", hold=0.4)
+        await asyncio.sleep(0.3)
+        await press(bus, "panel.start")
+        await asyncio.sleep(1.0)
+        check(bit(bus, "belt.rotate"),
+              "one deliberate bridge, with the window back where it belongs, runs the "
+              "trapped carton out")
+        await asyncio.sleep(3.0)
+        await bus.force(clear=["scanner.mute"])
+        await asyncio.sleep(1.0)
+        check(bit(bus, "belt.rotate"),
+              "and the cell keeps running once the field is genuinely clear again")
+
+        # Drain before the quiet check. The chute is gravity-fed, so a carton
+        # the cylinder pushed a second before Stop is still sliding when the
+        # belt has already stopped -- and it lands in the remover afterwards,
+        # which looks exactly like a line that did not stop. Let the lane empty
+        # first, and then "the counter stopped moving" means what it says.
+        await asyncio.sleep(8.0)
+
+        await check_quiet_after_stop(bus, station, check,
+                                     lambda: bit(bus, "belt.rotate"), "transferred.count")
+    finally:
+        stop_event.set()
+        await task
+        await bus.force(clear=["panel.setpoint", "guard_a.closed", "guard_b.closed",
+                               "scanner.mute", *station.faults])
+
+    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
+          f"transferred={transferred} escaped={escaped} "
+          f"mute={MUTE_WINDOW:.1f}s refused={refusal_s:.1f}s tripped={trip_s:.1f}s "
+          f"estop={estop_ms:.0f}ms fault={fault_ms:.0f}ms gate={guard_ms:.0f}ms")
+    if refusal_s >= 0:
+        print(f"       the pot went from {MUTE_WINDOW:.1f}s to {LONG_MUTE:.0f}s and the "
+              f"scanner stopped honouring the bridge {refusal_s:.1f}s later, with "
+              f"scanner.mute still high. The cell stopped {trip_s:.1f}s in. A mute "
+              f"without a limit would have kept the guard bridged for the rest of "
+              f"the shift and told you nothing.")
+    return not check.problems, "; ".join(check.problems)
+
+
 DRIVERS = {
     "sorting-by-height": drive_sorting_by_height,
     "start-stop-station": drive_start_stop_station,
@@ -1851,6 +2334,7 @@ DRIVERS = {
     "pick-and-place-cell": drive_pick_and_place_cell,
     "heat-treat-station": drive_heat_treat_station,
     "accumulation-buffer": drive_accumulation_buffer,
+    "guarded-cell": drive_guarded_cell,
 }
 
 #: The *production* window, not the whole run: every scene now runs the shared
@@ -1871,6 +2355,11 @@ DEFAULT_DURATION = {
     # most of it: a released carton has two metres to travel before the remover
     # can count it.
     "accumulation-buffer": 95.0,
+    # The production window only. The guarding sequence in front of it is the
+    # long part -- power-up, the shared operator contract, a drive fault, the
+    # gate, and a channel discrepancy, each of which has to be watched for a
+    # second or two rather than sampled once.
+    "guarded-cell": 34.0,
 }
 
 

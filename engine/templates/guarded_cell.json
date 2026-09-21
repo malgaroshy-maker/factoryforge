@@ -1,0 +1,119 @@
+{
+  "name": "guarded-cell",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "emitter",
+      "type": "Emitter",
+      "position": [0.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "metal_every": "0" }
+    },
+    {
+      "id": "belt",
+      "type": "ConveyorBelt",
+      "position": [1.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "speed": "0.5", "friction": "0.8", "size_x": "3", "size_y": "0.12", "size_z": "0.5" }
+    },
+    {
+      "id": "mute_eye",
+      "type": "PhotoelectricSensor",
+      "position": [1.0, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "range": "0.75", "height": "0.05", "mode": "Diffuse", "visual_only": "false" }
+    },
+    {
+      "id": "scanner",
+      "type": "AreaScanner",
+      "position": [1.5, 0.5, -1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "stop_radius": "1.1", "warn_radius": "1.6", "scan_arc": "360", "mute_limit": "6" }
+    },
+    {
+      "id": "push_eye",
+      "type": "PhotoelectricSensor",
+      "position": [2.0, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "range": "0.75", "height": "0.05", "mode": "Diffuse", "visual_only": "false" }
+    },
+    {
+      "id": "cylinder",
+      "type": "PneumaticCylinder",
+      "position": [2.5, 0.5, -0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "stroke": "0.7", "rod_speed": "1.4", "plate_width": "0.5", "reed_band": "0.012" }
+    },
+    {
+      "id": "chute",
+      "type": "Chute",
+      "position": [2.5, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "incline": "30", "friction": "0.15" }
+    },
+    {
+      "id": "transferred",
+      "type": "Remover",
+      "position": [2.5, 0.15, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "zone_x": "0.6", "zone_y": "0.4", "zone_z": "0.6" }
+    },
+    {
+      "id": "line_end",
+      "type": "Remover",
+      "position": [3.25, 0.3, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "zone_x": "0.5", "zone_y": "0.6", "zone_z": "0.6" }
+    },
+    {
+      "id": "starter",
+      "type": "MotorStarter",
+      "position": [0.5, 0.5, -2.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "load_tag": "belt.rotate", "fla": "6", "load_percent": "80",
+        "trip_percent": "115", "trip_time": "10", "pull_in": "0.06"
+      }
+    },
+    {
+      "id": "relay",
+      "type": "SafetyRelay",
+      "position": [1.5, 0.5, -2.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "channel_a_tag": "guard_a.closed", "channel_b_tag": "guard_b.closed",
+        "sync_window": "0.5", "load_tag": "starter.coil"
+      }
+    },
+    {
+      "id": "guard_a",
+      "type": "SafetyGate",
+      "position": [1.0, 0.5, 2.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "travel": "0.72", "slide_speed": "1.1" }
+    },
+    {
+      "id": "guard_b",
+      "type": "SafetyGate",
+      "position": [2.0, 0.5, 2.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "travel": "0.72", "slide_speed": "1.1" }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [3.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.0, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "setpoint_min": "1", "setpoint_max": "10", "setpoint_unit": "s", "setpoint": "3.5"
+      }
+    }
+  ]
+}

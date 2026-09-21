@@ -56,6 +56,7 @@ public partial class DemoDriver : Node
         ["pick-and-place-cell"] = () => new PickAndPlaceCellProfile(),
         ["heat-treat-station"] = () => new HeatTreatStationProfile(),
         ["accumulation-buffer"] = () => new AccumulationBufferProfile(),
+        ["guarded-cell"] = () => new GuardedCellProfile(),
     };
 
     private IDemoProfile? _profile;
