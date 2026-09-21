@@ -2325,6 +2325,358 @@ async def drive_guarded_cell(bus: TagBusClient, duration: float, verbose: bool) 
     return not check.problems, "; ".join(check.problems)
 
 
+async def drive_batch_dosing(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
+    """Two loops, one inside the other, and a batch that ends on litres.
+
+    The pump is the first actuator here whose command is not its effect.
+    `pump.speed` is a reference; what the pump *delivers* is a flow, and the
+    flow meter is the only thing that knows. That gap is what makes a cascade
+    worth building and what makes a failed pump hard to see, and this exercise
+    measures both rather than asserting them:
+
+    * **The inner loop is fast and the outer one is slow.** The flow loop
+      reaches its setpoint in well under a second; the tank level takes the
+      whole batch to move ten percent. Both numbers are printed, because "flow
+      is faster than level" is the entire reason to put one loop inside the
+      other and it is worth seeing as a ratio.
+
+    * **The batch ends on a quantity.** The same recipe is run twice, at full
+      dose rate and at half, and it delivers the same litres in about twice the
+      time. A batch timed in seconds would have delivered half of it -- the
+      same lesson the accumulation buffer teaches with encoder pulses, in the
+      units a process line actually uses.
+
+    * **The inner loop is the alarm.** Failing the pump mid-dose leaves
+      `pump.speed` reading exactly what the controller commanded while
+      `meter.rate` collapses. The flow loop calls it in two seconds; the tank
+      level has not moved a whole percent by then.
+
+    Mirrors BatchDosingProfile, with one difference: the profile begins a new
+    batch on a Start press after the last one finished, and this reaches in and
+    sets the phase directly, because a test rig that wants four batches in a
+    row should not have to wait for a transfer it is not measuring.
+    """
+    FAST_RATE = 110.0           # L/min, the dose rate; the pump is rated 120
+    SLOW_RATE = 55.0            # the same recipe, half as fast
+    CREEP_LITRES = 4.0          # the approach: taper over the last few litres
+    CREEP_FLOOR = 0.25
+    KP, KI = 0.25, 1.0          # the inner flow loop, mostly integral
+    NO_FLOW_SECONDS = 2.0
+    NO_FLOW_FRACTION = 0.3
+    BATCH = 20.0                # the recipe, in litres
+    BIG_BATCH = 60.0            # long enough to survive the interlock sequence
+    CAPACITY = 200.0            # the tank's own, from the scene file
+
+    check = Checks(verbose)
+    state = {
+        "phase": "zeroing", "speed": 0.0, "integral": 0.0, "dry_for": 0.0,
+        "level_at_start": 0.0, "level_end": 0.0, "no_flow": False,
+        "dose_rate": FAST_RATE, "flow_sp": 0.0,
+        "dose_began": None, "rise_at": None, "done_at": None,
+    }
+
+    async def tick(dt: float) -> None:
+        s = state
+        now = time.perf_counter()
+
+        reset_level = bit(bus, "panel.reset")
+        edges = station.scan()
+        if reset_level:
+            s["no_flow"] = False
+        if s["no_flow"]:
+            station.running = False
+
+        target = station.setpoint
+        total = num(bus, "meter.total")
+        rate = num(bus, "meter.rate")
+        level = num(bus, "tank.level")
+
+        # Start on a finished batch starts the next one. Taken before the phase
+        # machine runs, so "complete" does not stop the line on the same scan
+        # the operator asked for another batch.
+        if edges["start"] and s["phase"] == "complete" and not s["no_flow"]:
+            s["phase"] = "zeroing"
+
+        running = station.running and not s["no_flow"]
+        zeroing = dosing = draining = False
+
+        if s["phase"] == "zeroing":
+            # Hold the totaliser's reset and wait for it to actually read zero.
+            # It is a level, not an edge, so holding it is how you zero it --
+            # and waiting for the readback is how you know this batch counts
+            # from zero rather than from what the last one left.
+            zeroing = True
+            if running and total <= 0.0:
+                s["phase"] = "dosing"
+                s["level_at_start"] = level
+                s["integral"] = 0.0
+                s["dose_began"] = now
+                s["rise_at"] = None
+        elif s["phase"] == "dosing":
+            # A Stop mid-dose suspends; Start resumes the same batch, because
+            # the totaliser kept the litres already delivered.
+            dosing = running
+            if total >= target:
+                s["phase"] = "transferring"
+                s["done_at"] = now
+                s["level_end"] = level
+        elif s["phase"] == "transferring":
+            draining = running
+            if level <= s["level_at_start"] + 0.5:
+                s["phase"] = "complete"
+        else:
+            station.running = False
+
+        # --- the inner loop --------------------------------------------------
+        flow_sp = 0.0
+        if dosing:
+            remaining = max(target - total, 0.0)
+            taper = 1.0 if remaining >= CREEP_LITRES else max(remaining / CREEP_LITRES,
+                                                              CREEP_FLOOR)
+            flow_sp = s["dose_rate"] * taper
+            error = flow_sp - rate
+            # Integrate only off the stops. Winding up against a saturated pump
+            # would carry the batch straight past its number on the way down.
+            if 0.5 < s["speed"] < 99.5:
+                s["integral"] = min(max(s["integral"] + error * KI * dt, -100.0), 100.0)
+            s["speed"] = min(max(error * KP + s["integral"], 0.0), 100.0)
+            if s["rise_at"] is None and flow_sp > 0 and rate >= flow_sp * 0.9:
+                s["rise_at"] = now
+        else:
+            s["speed"] = 0.0
+            s["integral"] = 0.0
+        s["flow_sp"] = flow_sp
+
+        # --- no flow, seen from the inner loop ---------------------------------
+        if dosing and s["speed"] > 50.0 and rate < flow_sp * NO_FLOW_FRACTION:
+            s["dry_for"] += dt
+        else:
+            s["dry_for"] = 0.0
+        if s["dry_for"] >= NO_FLOW_SECONDS:
+            s["no_flow"] = True
+            s["dry_for"] = 0.0
+
+        lamps = station.lamps()
+        if s["no_flow"]:
+            lamps["panel.red"] = True
+            lamps["tower.red"] = True
+            lamps["tower.yellow"] = False
+
+        await write_present(bus, {
+            "meter.reset": zeroing,
+            "pump.run": dosing,
+            "pump.speed": s["speed"],
+            "tank.fill": 0.0,
+            "tank.drain": 100.0 if draining else 0.0,
+            "flow_gauge.value": rate,
+            "total_display.value": round(total),
+            "level_readout.value": round(level),
+            **lamps,
+        })
+
+    station = Station(bus)
+    stop_event, task = controller(tick)
+    estop_ms = -1.0
+    fast_l = slow_l = 0.0
+    fast_s = slow_s = rise_s = -1.0
+    level_rise = 0.0
+    alarm_s = level_moved = -1.0
+
+    async def begin_batch(litres: float, rate: float) -> None:
+        """Set up a fresh batch and press Start."""
+        await press(bus, "panel.stop")
+        await asyncio.sleep(0.3)
+        state["dose_rate"] = rate
+        state["done_at"] = None
+        state["phase"] = "zeroing"
+        await turn_pot(bus, litres)
+        await asyncio.sleep(0.3)
+        await press(bus, "panel.start")
+
+    async def wait_dose(budget: float) -> bool:
+        deadline = time.perf_counter() + budget
+        while time.perf_counter() < deadline:
+            if state["done_at"] is not None:
+                return True
+            await asyncio.sleep(0.02)
+        return False
+
+    def dose_seconds() -> float:
+        """How long the dose took, or -1 if it never finished. Subtracting two
+        perf_counter stamps when one of them is a default gives a number in the
+        tens of thousands, and a failing run should report that it did not
+        finish rather than that it took a day."""
+        if state["done_at"] is None or state["dose_began"] is None:
+            return -1.0
+        return state["done_at"] - state["dose_began"]
+
+    try:
+        budget = max(duration, 40.0)
+
+        # --- 1. the operator contract, mid-dose ------------------------------
+        #
+        # The pot is at its stop for this leg so the batch cannot finish while
+        # the mushroom is being struck -- a line that stopped itself halfway
+        # through the interlock sequence would pass every check for the wrong
+        # reason.
+        await turn_pot(bus, BIG_BATCH)
+        await asyncio.sleep(0.3)
+        estop_ms = await exercise_interlocks(bus, station, check,
+                                             lambda: num(bus, "pump.speed") > 1.0,
+                                             "the pump")
+        await asyncio.sleep(1.5)
+        check(num(bus, "meter.rate") > 20.0,
+              f"running: the meter reads a real flow and not just a command "
+              f"({num(bus, 'meter.rate'):.0f} L/min against {num(bus, 'pump.speed'):.0f} % "
+              f"speed)")
+        await check_quiet_after_stop(bus, station, check,
+                                     lambda: num(bus, "pump.speed") > 1.0, "meter.total")
+
+        # --- 2. a batch, and the two speeds that make a cascade --------------
+        await begin_batch(BATCH, FAST_RATE)
+        check(await wait_dose(budget), f"a {BATCH:.0f} L batch finishes inside its budget")
+        fast_l = num(bus, "meter.total")
+        fast_s = dose_seconds()
+        level_rise = state["level_end"] - state["level_at_start"]
+        rise_s = (state["rise_at"] - state["dose_began"]
+                  if state["rise_at"] and state["dose_began"] else -1.0)
+
+        check(abs(fast_l - BATCH) <= 2.0,
+              f"the batch ends on the number: {fast_l:.0f} L against a {BATCH:.0f} L pot")
+        expected = BATCH / CAPACITY * 100.0
+        check(abs(level_rise - expected) <= 2.0,
+              f"and the tank agrees -- {BATCH:.0f} L into a {CAPACITY:.0f} L tank is "
+              f"{expected:.0f} % of level, and the level rose {level_rise:.1f} %. That is "
+              f"an instrument that is not the meter, so the meter is not marking its own "
+              f"homework")
+        check(0.0 < rise_s < 3.0,
+              f"the inner flow loop reached its setpoint in {rise_s:.2f}s")
+        check(rise_s > 0.0 and fast_s > rise_s * 4.0,
+              f"while the outer variable took {fast_s:.1f}s to move its "
+              f"{expected:.0f} % -- {(fast_s / rise_s) if rise_s > 0 else -1:.0f} times longer, which "
+              f"is the whole condition for putting one loop inside the other")
+
+        # --- 3. the same recipe, half as fast --------------------------------
+        await begin_batch(BATCH, SLOW_RATE)
+        check(await wait_dose(budget * 1.5),
+              f"the same batch at {SLOW_RATE:.0f} L/min finishes too")
+        slow_l = num(bus, "meter.total")
+        slow_s = dose_seconds()
+
+        check(abs(slow_l - BATCH) <= 2.0,
+              f"at half the dose rate it still ends on the number ({slow_l:.0f} L)")
+        check(abs(slow_l - fast_l) <= 2.0,
+              f"the same litres as the fast run ({slow_l:.0f} against {fast_l:.0f})")
+        check(fast_s > 0.0 and slow_s > fast_s * 1.6,
+              f"in about twice the time ({slow_s:.1f}s against {fast_s:.1f}s) -- which is "
+              f"exactly what a batch timed in seconds would have got wrong")
+
+        # --- 4. the totaliser's reset is a level, not an edge ----------------
+        await begin_batch(BIG_BATCH, FAST_RATE)
+        await asyncio.sleep(4.0)
+        counting = num(bus, "meter.total")
+        check(counting > 3.0, f"a batch is counting up ({counting:.0f} L)")
+
+        held = time.perf_counter()
+        await bus.force({"meter.reset": True})
+        await asyncio.sleep(0.6)
+        check(num(bus, "meter.total") == 0,
+              "holding the totaliser's reset zeroes it")
+        check(num(bus, "meter.rate") > 20.0,
+              f"while the flow is still there ({num(bus, 'meter.rate'):.0f} L/min) -- the "
+              f"reset zeroes the count, not the pump")
+        await asyncio.sleep(2.5)
+        uncounted = num(bus, "meter.rate") * (time.perf_counter() - held) / 60.0
+        check(num(bus, "meter.total") == 0,
+              f"and a reset HELD high holds it at zero -- it is a level, like a counter's "
+              f"own reset, not an edge. About {uncounted:.0f} L went past uncounted, and a "
+              f"program that pulsed it and expected the total to stay cleared has misread "
+              f"the contact")
+        await bus.force(clear=["meter.reset"])
+        await asyncio.sleep(1.5)
+        check(num(bus, "meter.total") > 0.0,
+              f"releasing it lets the totaliser count again "
+              f"({num(bus, 'meter.total'):.0f} L)")
+
+        # --- 5. a dry pump, and which loop notices ---------------------------
+        level_before = num(bus, "tank.level")
+        raised = time.perf_counter()
+        await bus.force({"pump.fault": True})
+        await asyncio.sleep(0.8)
+
+        check(num(bus, "meter.rate") < 5.0,
+              f"a failed pump delivers nothing ({num(bus, 'meter.rate'):.1f} L/min)")
+        check(num(bus, "pump.flow") < 1.0, "and reports no flow of its own")
+        check(num(bus, "pump.speed") > 40.0,
+              f"while the speed reference still reads what the controller commanded "
+              f"({num(bus, 'pump.speed'):.0f} %) -- the command and the plant disagree, "
+              f"and the command is the half that looks fine")
+
+        total_before = num(bus, "meter.total")
+        while time.perf_counter() - raised < 8.0:
+            if bit(bus, "panel.red"):
+                break
+            await asyncio.sleep(0.02)
+        alarm_s = time.perf_counter() - raised
+        level_moved = abs(num(bus, "tank.level") - level_before)
+
+        check(bit(bus, "panel.red"),
+              f"the flow loop calls it: no-flow alarm {alarm_s:.1f}s after the pump failed")
+        check(level_moved < 1.0,
+              f"and it called it while the tank level had moved {level_moved:.2f} % -- the "
+              f"outer loop would have taken minutes to notice, which is the other reason "
+              f"to close a loop around the flow")
+        check(num(bus, "meter.total") <= total_before + 1.0,
+              f"the totaliser stopped where it was ({num(bus, 'meter.total'):.0f} L)")
+
+        # Reset does not fix a pump.
+        await press(bus, "panel.reset")
+        await asyncio.sleep(0.4)
+        check(not bit(bus, "panel.red"), "Reset clears the alarm")
+        await press(bus, "panel.start")
+        rearm = time.perf_counter()
+        while time.perf_counter() - rearm < 9.0:
+            if bit(bus, "panel.red"):
+                break
+            await asyncio.sleep(0.02)
+        check(bit(bus, "panel.red"),
+              f"and the alarm comes straight back {time.perf_counter() - rearm:.1f}s later "
+              f"-- a reset does not fix a pump")
+
+        await bus.force(clear=["pump.fault"])
+        await press(bus, "panel.reset")
+        await asyncio.sleep(0.4)
+        await turn_pot(bus, BATCH)
+        await press(bus, "panel.start")
+        await asyncio.sleep(2.0)
+        check(not bit(bus, "panel.red"), "with the pump working again the alarm stays out")
+        check(num(bus, "meter.rate") > 20.0,
+              f"and the dose resumes where the totaliser left it "
+              f"({num(bus, 'meter.rate'):.0f} L/min)")
+        state["done_at"] = None
+        check(await wait_dose(budget),
+              f"the interrupted batch still finishes on its number "
+              f"({num(bus, 'meter.total'):.0f} L against a {BATCH:.0f} L pot)")
+    finally:
+        stop_event.set()
+        await task
+        await bus.write_many({"pump.run": False, "pump.speed": 0.0,
+                              "tank.fill": 0.0, "tank.drain": 0.0})
+        await bus.force(clear=["panel.setpoint", "meter.reset", "pump.fault"])
+
+    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
+          f"fast={fast_l:.0f}L@{fast_s:.1f}s slow={slow_l:.0f}L@{slow_s:.1f}s "
+          f"rise={rise_s:.2f}s level=+{level_rise:.1f}% "
+          f"noflow={alarm_s:.1f}s@{level_moved:.2f}% estop={estop_ms:.0f}ms")
+    if fast_s > 0 and slow_s > 0:
+        print(f"       the same {BATCH:.0f} L recipe: {fast_l:.0f} L in {fast_s:.1f}s at "
+              f"{FAST_RATE:.0f} L/min, {slow_l:.0f} L in {slow_s:.1f}s at "
+              f"{SLOW_RATE:.0f} L/min. A batch timed in seconds would have delivered half "
+              f"the second time. The flow loop settled in {rise_s:.2f}s and the level took "
+              f"{fast_s:.1f}s to move {level_rise:.1f} % -- that ratio is the cascade.")
+    return not check.problems, "; ".join(check.problems)
+
+
 DRIVERS = {
     "sorting-by-height": drive_sorting_by_height,
     "start-stop-station": drive_start_stop_station,
@@ -2335,6 +2687,7 @@ DRIVERS = {
     "heat-treat-station": drive_heat_treat_station,
     "accumulation-buffer": drive_accumulation_buffer,
     "guarded-cell": drive_guarded_cell,
+    "batch-dosing": drive_batch_dosing,
 }
 
 #: The *production* window, not the whole run: every scene now runs the shared
@@ -2360,6 +2713,10 @@ DEFAULT_DURATION = {
     # gate, and a channel discrepancy, each of which has to be watched for a
     # second or two rather than sampled once.
     "guarded-cell": 34.0,
+    # Not a production window here but a per-batch budget: this scene's legs
+    # each end on their own condition -- a batch reaching its number, an alarm
+    # being raised -- rather than on a clock.
+    "batch-dosing": 40.0,
 }
 
 

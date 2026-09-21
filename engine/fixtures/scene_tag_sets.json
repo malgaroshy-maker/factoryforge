@@ -1048,6 +1048,128 @@
         "type": "int",
         "kind": "input"
       }
+    ],
+    "batch-dosing": [
+      {
+        "id": "flow_gauge.value",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "level_readout.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "meter.rate",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "meter.reset",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "meter.total",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pump.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pump.flow",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "pump.run",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pump.speed",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.drain",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tank.fill",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.level",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "total_display.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

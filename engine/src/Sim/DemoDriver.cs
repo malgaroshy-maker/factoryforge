@@ -57,6 +57,7 @@ public partial class DemoDriver : Node
         ["heat-treat-station"] = () => new HeatTreatStationProfile(),
         ["accumulation-buffer"] = () => new AccumulationBufferProfile(),
         ["guarded-cell"] = () => new GuardedCellProfile(),
+        ["batch-dosing"] = () => new BatchDosingProfile(),
     };
 
     private IDemoProfile? _profile;
