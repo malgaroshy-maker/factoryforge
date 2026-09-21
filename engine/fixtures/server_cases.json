@@ -65,6 +65,42 @@
       "expect_values": { "@float_output": 1.5 }
     },
     {
+      "name": "NaN on the wire is refused and the connection survives",
+      "why": "HP-23. `NaN` is not JSON. Python's decoder read it anyway, so a non-finite value sailed into a float tag and out again as a payload the C# parser rejects; C# refused the frame but said nothing about it, so the sidecar believed its write had landed. Both must refuse it, both must say so, and neither may drop the connection.",
+      "needs": ["float_output"],
+      "prepare": { "@float_output": 2.5 },
+      "raw": "{\"t\":\"write\",\"epoch\":@epoch,\"values\":{\"@float_output\":NaN}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@float_output": 2.5 }
+    },
+    {
+      "name": "Infinity on the wire is refused and the connection survives",
+      "needs": ["float_output"],
+      "prepare": { "@float_output": 3.5 },
+      "raw": "{\"t\":\"write\",\"epoch\":@epoch,\"values\":{\"@float_output\":Infinity}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@float_output": 3.5 }
+    },
+    {
+      "name": "an overflowing float literal is refused",
+      "why": "HP-23 by the back door: 1e400 is perfectly legal JSON and decodes to infinity on both sides, so it never reaches the frame parser and has to be caught by the tag.",
+      "needs": ["float_output"],
+      "prepare": { "@float_output": 4.5 },
+      "raw": "{\"t\":\"write\",\"epoch\":@epoch,\"values\":{\"@float_output\":1e400}}",
+      "expect_status": ["bad_value"],
+      "expect_values": { "@float_output": 4.5 }
+    },
+    {
+      "name": "a non-finite force is refused too",
+      "why": "HP-23. Forcing is the deliberate exception to the direction rule, not to the type rules.",
+      "needs": ["float_output"],
+      "prepare": { "@float_output": 5.5 },
+      "raw": "{\"t\":\"force\",\"epoch\":@epoch,\"values\":{\"@float_output\":1e400}}",
+      "expect_status": ["bad_value"],
+      "expect_values": { "@float_output": 5.5 },
+      "expect_forced": []
+    },
+    {
       "name": "writing a simulator-owned input is refused by kind",
       "needs": ["bit_input"],
       "write": { "@bit_input": true },

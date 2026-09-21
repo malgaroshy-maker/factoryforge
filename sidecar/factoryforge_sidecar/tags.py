@@ -10,6 +10,7 @@ See docs/tag-bus.md.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import Literal, Union
 
@@ -75,7 +76,15 @@ class Tag:
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TagError(f"{self.id}: {value!r} is not a float")
-        return float(value)
+        as_float = float(value)
+        # HP-23. A non-finite value is not a measurement, and it cannot even
+        # leave: `NaN` and `Infinity` are not JSON, so a tag holding one either
+        # corrupts whatever the plant computes from it or leaves as a payload
+        # the other engine's parser refuses outright. Refuse it where it
+        # arrives, with a message, rather than anywhere downstream of here.
+        if not math.isfinite(as_float):
+            raise TagError(f"{self.id}: {value!r} is not a finite float")
+        return as_float
 
     def differs(self, value: TagValue) -> bool:
         """True if *value* is meaningfully different from the current one.

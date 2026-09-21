@@ -28,8 +28,15 @@
     { "type": "float", "input": 1.5, "expect": 1.5 },
     { "type": "float", "input": -2.5, "expect": -2.5 },
     { "type": "float", "input": true, "error": true },
-    { "type": "float", "input": false, "error": true }
+    { "type": "float", "input": false, "error": true },
+
+    { "type": "float", "input_special": "nan", "error": true },
+    { "type": "float", "input_special": "inf", "error": true },
+    { "type": "float", "input_special": "-inf", "error": true }
   ],
+
+  "_special_comment": "HP-23. JSON cannot spell a non-finite float, so a case that needs one names it: '<key>_special' is 'nan', 'inf' or '-inf' in place of '<key>'. Both readers decode the same three names. That is also the reason the cases exist -- a tag holding NaN leaves as a payload the other engine's parser refuses, so it has to be refused where it arrives.",
+
 
   "differs": [
     { "type": "bit", "current": false, "candidate": true, "expect": true },

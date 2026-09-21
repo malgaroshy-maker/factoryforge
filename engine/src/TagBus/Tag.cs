@@ -80,15 +80,25 @@ public sealed class Tag
                 $"{Id}: {l} is outside the 32-bit range [{IntMin}, {IntMax}]"),
             _ => throw new ArgumentException($"{Id}: {value} is not an int"),
         },
-        _ => value switch
+        _ => Finite(value switch
         {
             float f => (double)f,
             double d => d,
             int i => (double)i,
             long l => (double)l,
             _ => throw new ArgumentException($"{Id}: {value} is not a float"),
-        },
+        }),
     };
+
+    /// <summary>HP-23. A non-finite value is not a measurement, and it cannot
+    /// even leave: <c>NaN</c> and <c>Infinity</c> are not JSON, so a tag
+    /// holding one either corrupts whatever the plant computes from it or
+    /// leaves as a payload the other engine's parser refuses outright. Refuse
+    /// it where it arrives, with a message, rather than anywhere downstream.
+    /// Mirrors sidecar/factoryforge_sidecar/tags.py.</summary>
+    private double Finite(double d) =>
+        double.IsFinite(d) ? d
+            : throw new ArgumentException($"{Id}: {d} is not a finite float");
 
     /// <summary>True if <paramref name="value"/> is meaningfully different.
     ///
