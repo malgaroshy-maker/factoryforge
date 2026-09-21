@@ -229,12 +229,12 @@ reference controllers; the machinery is general, the marking is not.
 |---|---|
 | `sorting-by-height` | yes |
 | `start-stop-station` | yes |
-| `tank-level-control` | not yet |
+| `tank-level-control` | yes |
 | `light-curtain-sorting` | not yet |
 | `roller-line-weighing` | not yet |
 | `pick-and-place-cell` | not yet |
 | `accumulation-buffer` | not yet |
-| `heat-treat-station` | not yet |
+| `heat-treat-station` | yes |
 | `guarded-cell` | not yet |
 | `batch-dosing` | not yet |
 

@@ -326,6 +326,61 @@ def test_a_station_that_never_stops_at_the_target_fails_the_batch(tmp_path):
     assert {"batch.hit_the_number", "batch.stopped_itself"} <= failed_ids(report)
 
 
+def test_the_tank_passes_a_controller_that_settles_at_both_ends(tmp_path):
+    code, report = graded(tmp_path, "tank-level-control", "good", 62)
+    assert code == 0 and report["verdict"] == "PASS"
+    phases = report["evidence"]["phases"]
+    assert len(phases) == 2 and phases[0]["setpoint"] != phases[1]["setpoint"]
+    # Gotcha 16: every settling number is vacuously good on a tank that never
+    # filled, so the run has to show the level actually travelled.
+    assert report["evidence"]["travel"] >= 40.0
+    # And the settled window is a window, not the one sample a phase whose end
+    # was in the year 10000 used to fall back to.
+    assert all(p["samples"] > 500 for p in phases)
+
+
+def test_float_switches_fail_the_tank_on_settled_error(tmp_path):
+    code, report = graded(tmp_path, "tank-level-control", "bangbang", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "hold1.settled" in failed_ids(report)
+
+
+def test_a_setpoint_written_into_the_program_fails_when_the_pot_moves(tmp_path):
+    """The check that separates 'reads panel.setpoint' from 'holds 70'."""
+    code, report = graded(tmp_path, "tank-level-control", "fixedsp", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "hold2.settled" in failed_ids(report)
+    assert any("written into the program" in line for line in report["feedback"])
+
+
+def test_the_oven_passes_a_controller_that_closes_the_offset(tmp_path):
+    code, report = graded(tmp_path, "heat-treat-station", "good", 62)
+    assert code == 0 and report["verdict"] == "PASS"
+    assert report["evidence"]["travel"] >= 80.0
+
+
+def test_proportional_only_parks_short_of_the_oven_setpoint(tmp_path):
+    """The lesson of the scene, asserted as a number: the offset is the loss
+    the plate needs divided by the gain, and it gets bigger at the higher
+    setpoint because the standing output does."""
+    code, report = graded(tmp_path, "heat-treat-station", "ponly", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"hold1.settled", "hold2.settled"} <= failed_ids(report)
+    first, second = report["evidence"]["phases"]
+    assert second["settled_error"] > first["settled_error"] > 3.0
+
+
+def test_a_thermostat_reaches_the_oven_setpoint_and_still_fails(tmp_path):
+    """The trap `hold*.steady` exists for. Mean error near zero, setpoint
+    reached every couple of seconds, from alternate sides, forever."""
+    code, report = graded(tmp_path, "heat-treat-station", "thermostat", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"hold1.steady", "hold2.steady"} <= failed_ids(report)
+    for phase in report["evidence"]["phases"]:
+        assert phase["settled_error"] < 3.0, "the cycling controller missed setpoint"
+        assert phase["ripple"] > 5.0
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""

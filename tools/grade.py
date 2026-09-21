@@ -945,6 +945,363 @@ def _summary_start_stop(evidence: dict, out) -> None:
         f"(at most {estop['allowed_m'] * 1000:.0f} mm)")
 
 
+# --- the two regulators -------------------------------------------------
+#
+# The tank and the oven are the same exercise against two different plants, and
+# they are graded by the same three numbers, because "it reached the setpoint"
+# is the claim both of them are easiest to fake.
+#
+# **Settled error.** The mean distance from the setpoint over the last seconds
+# of a phase. Proportional control alone cannot make a standing output out of
+# nothing, so it parks short of an oven's setpoint by an offset you can
+# calculate from the plant -- and that offset is the whole reason integral
+# action exists. Grading "did it get there" would pass it.
+#
+# **Ripple.** Peak to peak over the same window. An on/off controller does
+# reach the setpoint. It reaches it every couple of seconds, from alternate
+# sides, and a plant that loses heat to the room will do that forever. A mean
+# error near zero says nothing about it and the peak-to-peak says everything.
+#
+# **Overshoot.** The furthest past the setpoint the measurement went on the way
+# there. A controller that gets a beautiful settled number by slamming the
+# plant to the far stop first is one that boils the tank dry on a real line.
+#
+# And the pot moves mid-run, to a second value drawn from the seed. Everything
+# above can be had by a program that knows what number it is aiming at; none of
+# it can be had by one that only knows the number it was written with.
+
+#: Seconds at the end of a phase that count as "settled".
+SETTLE_WINDOW = 8.0
+
+
+class Regulator(PlantScene):
+    """A single-measurement process with a setpoint on the panel's pot."""
+
+    #: Filled in by the subclass: what the measurement is called, in words.
+    measured = "the measurement"
+    unit = ""
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        #: (sim time, measurement) every tick. Ground truth: no bus message
+        #: reaches the trace, only the samples the controller happened to poll.
+        self.trace: list[tuple[float, float]] = []
+        #: {"setpoint", "from", "to"} per phase of the exam.
+        self.phases: list[dict] = []
+
+    def measure(self) -> float:                   # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def _phase(self, setpoint: float, until: float):
+        def do() -> None:
+            if self.phases:
+                self.phases[-1]["to"] = self.t
+            self.panel.set_setpoint(setpoint)()
+            self.phases.append({"setpoint": float(setpoint), "from": self.t,
+                                "to": until})
+        do.__name__ = f"setpoint {setpoint:g}"
+        return do
+
+    def record(self) -> None:
+        self.trace.append((self.t, self.measure()))
+
+
+def _phase_stats(trace: list[tuple[float, float]], phase: dict) -> dict:
+    """Settled error, ripple and overshoot for one phase of a regulator run."""
+    setpoint = phase["setpoint"]
+    inside = [(t, v) for t, v in trace if phase["from"] <= t <= phase["to"]]
+    if not inside:
+        return {"setpoint": setpoint, "samples": 0, "settled_error": None,
+                "ripple": None, "overshoot": None, "final": None}
+
+    # The last phase of a run has no end until the run ends, so its nominal
+    # `to` is far in the future. Clamped to the last sample, because the
+    # settled window is measured backwards from the end: the first version of
+    # this took "the last eight seconds" of a phase ending in the year 10000,
+    # found nothing, and fell back to a single sample -- which has a settled
+    # error of whatever that sample was and a ripple of exactly zero. Every
+    # second-phase check in the run was being decided by one number.
+    end = min(phase["to"], inside[-1][0])
+    start = inside[0][1]
+    approach = 1.0 if setpoint >= start else -1.0
+    tail = [v for t, v in inside if t >= end - SETTLE_WINDOW]
+    tail = tail or [inside[-1][1]]
+    past = max((v - setpoint) * approach for _, v in inside)
+    return {
+        "setpoint": round(setpoint, 2),
+        "samples": len(inside),
+        "from": round(phase["from"], 1),
+        "to": round(end, 1),
+        "started_at": round(start, 2),
+        "settled_error": round(sum(abs(v - setpoint) for v in tail) / len(tail), 2),
+        "ripple": round(max(tail) - min(tail), 2),
+        "overshoot": round(max(past, 0.0), 2),
+        "final": round(inside[-1][1], 2),
+    }
+
+
+def grade_regulator(watched: Watched, engine: GradedEngine, report: Report,
+                    duration: float, *, settled: float, ripple: float,
+                    overshoot: float, moved: float) -> None:
+    sim: Regulator = watched.inner
+    stats = [_phase_stats(sim.trace, phase) for phase in sim.phases]
+    values = [v for _, v in sim.trace]
+    span = (max(values) - min(values)) if values else 0.0
+    unit = sim.unit
+
+    report.evidence.update({
+        "phases": stats,
+        "travel": round(span, 2),
+        "limits": {"settled": settled, "ripple": ripple, "overshoot": overshoot},
+        "trace": [[round(t, 1), round(v, 2)] for t, v in sim.trace[::50]],
+    })
+
+    # Gotcha 16, in its process-control form: every settling check below is
+    # vacuously true of a plant that never left where it started.
+    report.add("plant.moved",
+               span >= moved,
+               f"{sim.measured} travelled {span:.1f}{unit} over the run "
+               f"(at least {moved:g}{unit} needed for the rest to mean anything)")
+
+    for index, phase in enumerate(stats, start=1):
+        sp = phase["setpoint"]
+        if phase["settled_error"] is None:
+            report.add(f"hold{index}.settled", False,
+                       f"no samples in the phase at {sp:g}{unit}")
+            continue
+        report.add(f"hold{index}.settled",
+                   phase["settled_error"] <= settled,
+                   f"at {sp:g}{unit}: settled {phase['settled_error']:.1f}{unit} "
+                   f"from setpoint over the last {SETTLE_WINDOW:g}s "
+                   f"(at most {settled:g}{unit})")
+        report.add(f"hold{index}.steady",
+                   phase["ripple"] <= ripple,
+                   f"at {sp:g}{unit}: {phase['ripple']:.1f}{unit} peak to peak "
+                   f"while holding (at most {ripple:g}{unit})")
+        report.add(f"hold{index}.overshoot",
+                   phase["overshoot"] <= overshoot,
+                   f"at {sp:g}{unit}: went {phase['overshoot']:.1f}{unit} past the "
+                   f"setpoint on the way (at most {overshoot:g}{unit})")
+
+    _regulator_feedback(report, sim, stats, settled, ripple, overshoot, span, moved)
+
+
+def _regulator_feedback(report, sim, stats, settled, ripple, overshoot,
+                        span, moved) -> None:
+    say = report.feedback.append
+    unit = sim.unit
+
+    if span < moved:
+        say(f"{sim.measured.capitalize()} barely moved ({span:.1f}{unit}). Nothing "
+            f"below this line means anything until the plant is actually being "
+            f"driven -- check that the run command and the actuator are both "
+            f"getting written.")
+        return
+
+    # Said first, and once, because it explains every other number below it:
+    # the pot moved a long way and the measurement did not follow.
+    deaf = (len(stats) > 1 and stats[0]["final"] is not None
+            and stats[1]["final"] is not None
+            and abs(stats[1]["setpoint"] - stats[0]["setpoint"]) > 10.0
+            and abs(stats[1]["final"] - stats[0]["final"]) < 5.0)
+    if deaf:
+        say(f"The pot went from {stats[0]['setpoint']:g}{unit} to "
+            f"{stats[1]['setpoint']:g}{unit} and {sim.measured} stayed at "
+            f"{stats[1]['final']:g}{unit}. That is a setpoint written into the "
+            f"program rather than read off `panel.setpoint` -- read it every "
+            f"scan, not once at startup, and turning the knob re-tunes the line "
+            f"instead of needing a download.")
+
+    for index, phase in enumerate(stats, start=1):
+        if phase["settled_error"] is None:
+            continue
+        sp = phase["setpoint"]
+        if deaf:
+            continue
+        if phase["ripple"] > ripple:
+            say(f"At {sp:g}{unit} the measurement swung {phase['ripple']:.1f}{unit} "
+                f"peak to peak. It reaches the setpoint -- from alternate sides, "
+                f"forever. On/off is not control here: the actuator modulates, so "
+                f"write it a number between 0 and 100 instead of an edge.")
+        elif phase["settled_error"] > settled:
+            say(f"At {sp:g}{unit} it parked {phase['settled_error']:.1f}{unit} off "
+                f"and stayed there. An error that stops closing is a controller "
+                f"with no way to produce output from a small error -- either a "
+                f"deadband that stops it acting once it is near, or proportional "
+                f"action on its own, whose output IS the error times the gain and "
+                f"so cannot reach zero while the plant still needs an output. "
+                f"Integral action is the term that supplies one out of nothing.")
+        if phase["overshoot"] > overshoot:
+            say(f"At {sp:g}{unit} it went {phase['overshoot']:.1f}{unit} past the "
+                f"setpoint before coming back. Full output until the setpoint "
+                f"arrives is a plant with no brakes; back the actuator off as the "
+                f"error closes.")
+
+    if len(stats) > 1 and stats[0]["settled_error"] is not None \
+            and stats[1]["settled_error"] is not None \
+            and stats[0]["settled_error"] <= settled < stats[1]["settled_error"]:
+        say(f"The first setpoint was held and the second was not. `panel.setpoint` "
+            f"is the pot, and this run turned it: read it every scan rather than "
+            f"latching it at startup or writing the number into the program.")
+
+
+def _summary_regulator(evidence: dict, out) -> None:
+    for index, phase in enumerate(evidence["phases"], start=1):
+        if phase["settled_error"] is None:
+            out(f"hold {index}: setpoint {phase['setpoint']:g} — no samples")
+            continue
+        out(f"hold {index}: setpoint {phase['setpoint']:g}, ended {phase['final']:g}, "
+            f"settled {phase['settled_error']:g} off, ripple {phase['ripple']:g}, "
+            f"overshoot {phase['overshoot']:g}")
+    out(f"measurement travelled {evidence['travel']:g} over the run")
+
+
+# --- tank level control -------------------------------------------------
+#
+# Observable fact: the level trace, which the plant integrates and no bus
+# message reaches.
+#
+# How a program fakes it: "the level reached the setpoint" is true of a pair of
+# float switches, of a valve slammed fully open until the number arrives, and
+# of a program with 70 written into it. All three are graded out -- by the
+# ripple, by the overshoot, and by the pot moving to a second level drawn from
+# the seed.
+#
+# Outflow follows Torricelli, so the drain valve's authority grows with the
+# square root of the head and a controller tuned at the top of the tank behaves
+# differently at the bottom. That is why the second setpoint is a low one.
+#
+# Numbers from `engine/src/Parts/LevelTank.cs` and the template that configures
+# it: 18 %/s at a fully open fill valve, 22 %/s draining a full tank.
+TANK_FILL_RATE = 18.0
+TANK_DRAIN_RATE = 22.0
+
+
+class TankScene(Regulator):
+    name = "tank-level-control"
+    measured = "the level"
+    unit = "%"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("tank.fill", "Tank Fill Valve (%)", "float", "output"),
+            Tag("tank.drain", "Tank Drain Valve (%)", "float", "output"),
+            Tag("level_readout.value", "Level Readout", "int", "output"),
+            Tag("tank.level", "Tank Level (%)", "float", "input"),
+            Tag("tank.fault", "Tank Valve Fault", "bit", "input"),
+        )
+        self.level = 0.0
+
+        high = self.rng.choice([65.0, 70.0, 75.0])
+        low = self.rng.choice([18.0, 22.0, 26.0])
+        self.script = Script([
+            (0.2, self._phase(high, until=30.0)),
+            (1.0, self.panel.press("start")),
+            (30.0, self._phase(low, until=10_000.0)),
+        ])
+
+    def measure(self) -> float:
+        return self.level
+
+    def step(self, dt: float) -> None:
+        fill = min(max(self.num("tank.fill"), 0.0), 100.0)
+        drain = min(max(self.num("tank.drain"), 0.0), 100.0)
+        inflow = TANK_FILL_RATE * fill / 100.0
+        outflow = (TANK_DRAIN_RATE * drain / 100.0
+                   * (max(self.level, 0.0) / 100.0) ** 0.5)
+        self.level = min(max(self.level + (inflow - outflow) * dt, 0.0), 100.0)
+        self.tags.set("tank.level", self.level)
+        self.record()
+
+
+def grade_tank(watched, engine, report, duration) -> None:
+    # A few percent, which is what the scene's own brief asks for. Ripple is
+    # tighter than settled error on purpose: a controller 3 % off is mistuned,
+    # while one swinging 3 % peak to peak is cycling a valve that has to last.
+    grade_regulator(watched, engine, report, duration,
+                    settled=3.0, ripple=3.0, overshoot=6.0, moved=40.0)
+
+
+# --- heat treat station -------------------------------------------------
+#
+# Observable fact: the temperature trace.
+#
+# How a program fakes it: the same three ways as the tank, plus one this plant
+# alone can catch. The plate loses heat to the room in proportion to how far
+# above it the plate is, so *holding* a temperature needs a standing heater
+# output -- and a proportional controller can only make a standing output out
+# of a standing error. Grade "did it reach the setpoint" and P-only passes on
+# the way past. Grade the settled error and it parks, measurably, exactly the
+# offset the plant's own numbers predict: at 120 degC the plate loses
+# (120-20)*0.30 = 30 degC/s of heat, which is 33 % of a 90 degC/s element, and
+# a gain of 3.5 can only produce 33 % from an error of 9.5 degC.
+#
+# Numbers from `engine/src/Parts/HeatingStation.cs` and the template: a 90
+# degC/s element, a loss of 0.30 per degC above a 20 degC room, a thermal mass
+# of 6. That is a first-order lag with a 20-second time constant.
+OVEN_POWER = 90.0
+OVEN_LOSS = 0.30
+OVEN_MASS = 6.0
+OVEN_AMBIENT = 20.0
+#: The part's own at-temperature window, which is about its configured target
+#: and not about the pot -- exactly as the engine has it.
+OVEN_TARGET = 180.0
+OVEN_TOLERANCE = 3.0
+
+
+class OvenScene(Regulator):
+    name = "heat-treat-station"
+    measured = "the plate"
+    unit = "C"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("oven.heater", "Heating Station Heater (%)", "float", "output"),
+            Tag("temp_gauge.value", "Temperature Gauge", "float", "output"),
+            Tag("temp_readout.value", "Temperature Readout", "int", "output"),
+            Tag("alarm.beacon", "Alarm Beacon", "bit", "output"),
+            Tag("alarm.horn", "Alarm Horn", "bit", "output"),
+            Tag("oven.temperature", "Heating Station Temperature (C)",
+                "float", "input"),
+            Tag("oven.attemp", "Heating Station At Temperature", "bit", "input"),
+            Tag("oven.fault", "Heating Station Element Fault", "bit", "input"),
+        )
+        self.temperature = OVEN_AMBIENT
+        self.tags.set("oven.temperature", self.temperature)
+
+        first = self.rng.choice([115.0, 125.0, 135.0])
+        second = self.rng.choice([190.0, 200.0, 210.0])
+        self.script = Script([
+            (0.2, self._phase(first, until=30.0)),
+            (1.0, self.panel.press("start")),
+            (30.0, self._phase(second, until=10_000.0)),
+        ])
+
+    def measure(self) -> float:
+        return self.temperature
+
+    def step(self, dt: float) -> None:
+        power = min(max(self.num("oven.heater"), 0.0), 100.0)
+        heat = OVEN_POWER * power / 100.0
+        loss = (self.temperature - OVEN_AMBIENT) * OVEN_LOSS
+        self.temperature = max(self.temperature + (heat - loss) / OVEN_MASS * dt,
+                               OVEN_AMBIENT)
+        self.tags.set("oven.temperature", self.temperature)
+        self.tags.set("oven.attemp",
+                      abs(self.temperature - OVEN_TARGET) <= OVEN_TOLERANCE)
+        self.record()
+
+
+def grade_oven(watched, engine, report, duration) -> None:
+    # 3 degC settled, against a P-only offset of 9.5 degC at the first setpoint
+    # and 16 degC at the second: the margin is wide enough that a well-tuned
+    # proportional-only loop still fails, which is the point of the scene.
+    grade_regulator(watched, engine, report, duration,
+                    settled=3.0, ripple=5.0, overshoot=12.0, moved=80.0)
+
+
 #: Every scene this tool can mark, and what it says it marks.
 RUBRICS = {
     "sorting-by-height": {
@@ -977,6 +1334,39 @@ RUBRICS = {
                  "panel.red are yours to write; panel.start, panel.stop, "
                  "panel.reset, panel.estop, panel.setpoint, part_present.detect, "
                  "counter.count are the line's."),
+    },
+    "tank-level-control": {
+        "title": "Tank level control",
+        "task": ("Hold the tank at the level the pot asks for, with the fill "
+                 "and drain valves. Outflow follows Torricelli, so the process "
+                 "gain falls with level: this run asks for a high level and "
+                 "then a low one."),
+        "build": TankScene,
+        "observe": None,
+        "grade": grade_tank,
+        "summary": _summary_regulator,
+        "duration": 65.0,
+        "references": ("good", "bangbang", "fixedsp"),
+        "tags": ("tank.fill, tank.drain, level_readout.value, panel.green, "
+                 "panel.red are yours to write; tank.level, tank.fault, "
+                 "panel.setpoint and the buttons are the plant's."),
+    },
+    "heat-treat-station": {
+        "title": "Heat treat station",
+        "task": ("Hold the plate at the temperature on the pot. The plant is a "
+                 "first-order lag losing heat to the room, so holding a "
+                 "temperature needs a standing output -- and proportional "
+                 "action can only make one out of a standing error."),
+        "build": OvenScene,
+        "observe": None,
+        "grade": grade_oven,
+        "summary": _summary_regulator,
+        "duration": 65.0,
+        "references": ("good", "ponly", "thermostat"),
+        "tags": ("oven.heater, temp_gauge.value, temp_readout.value, "
+                 "alarm.beacon, alarm.horn, panel.green, panel.red are yours to "
+                 "write; oven.temperature, oven.attemp, oven.fault, "
+                 "panel.setpoint and the buttons are the plant's."),
     },
 }
 
@@ -1260,6 +1650,126 @@ async def _ss_runon(bus, stop):
     await _ss_body(bus, stop, latch_estop=True, stop_at_target=False)
 
 
+# --- tank level control references --------------------------------------
+
+async def _tank_body(bus, stop, *, gain: float, deadband: float,
+                     fixed: float | None) -> None:
+    """One implementation, three behaviours.
+
+    `gain` with no deadband is proportional control on a plant whose only
+    outflow is the drain valve, so the error really does go to zero. `deadband`
+    turns it into a pair of float switches. `fixed` ignores the pot.
+    """
+    scanner = Scanner(bus)
+
+    async def body(dt: float) -> None:
+        scanner.scan()
+        level = scanner.num("tank.level")
+        setpoint = fixed if fixed is not None else scanner.setpoint
+        fill = drain = 0.0
+        if scanner.running:
+            error = setpoint - level
+            if deadband > 0.0:
+                if error > deadband:
+                    fill = 100.0
+                elif error < -deadband:
+                    drain = 100.0
+            else:
+                fill = min(max(error * gain, 0.0), 100.0)
+                drain = min(max(-error * gain, 0.0), 100.0)
+        await bus.write_many({"tank.fill": fill, "tank.drain": drain,
+                              "level_readout.value": int(round(level)),
+                              **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
+
+
+async def _tank_good(bus, stop):
+    """Proportional, modulating rather than saturating. A gain that pins the
+    valve at 100 % until the setpoint arrives is bang-bang wearing a float's
+    clothes, and it hides the nonlinearity this scene exists to show."""
+    await _tank_body(bus, stop, gain=1.6, deadband=0.0, fixed=None)
+
+
+async def _tank_bangbang(bus, stop):
+    """A pair of float switches six percent apart. It reaches the setpoint --
+    and then parks at the edge of the band, because with both valves shut this
+    tank has no outflow at all."""
+    await _tank_body(bus, stop, gain=0.0, deadband=6.0, fixed=None)
+
+
+async def _tank_fixedsp(bus, stop):
+    """Good control of the wrong number. Holds 70 % beautifully and never reads
+    the pot, which is invisible until somebody turns it."""
+    await _tank_body(bus, stop, gain=1.6, deadband=0.0, fixed=70.0)
+
+
+# --- heat treat station references ---------------------------------------
+
+async def _oven_body(bus, stop, *, gain: float, integral_gain: float,
+                     deadband: float) -> None:
+    scanner = Scanner(bus)
+    state = {"integral": 0.0, "on": False}
+
+    async def body(dt: float) -> None:
+        scanner.scan()
+        temperature = scanner.num("oven.temperature")
+        setpoint = scanner.setpoint
+        power = 0.0
+        if scanner.running:
+            error = setpoint - temperature
+            if deadband > 0.0:
+                # Real hysteresis, because a thermostat without it chatters the
+                # contactor to death -- and the hysteresis is precisely what
+                # puts the swing in. Element on below setpoint minus the band,
+                # off above setpoint plus it, latched in between.
+                if temperature <= setpoint - deadband:
+                    state["on"] = True
+                elif temperature >= setpoint + deadband:
+                    state["on"] = False
+                power = 100.0 if state["on"] else 0.0
+            else:
+                proportional = error * gain
+                if integral_gain > 0.0 and -100.0 < proportional < 100.0:
+                    # Only off the stops. Integrating through a cold start's
+                    # flat-out heating is textbook windup, and it is what turns
+                    # a working PI into a 40 degC overshoot.
+                    state["integral"] = min(max(state["integral"] + error * dt,
+                                                -140.0), 140.0)
+                power = min(max(proportional + state["integral"] * integral_gain,
+                                0.0), 100.0)
+        else:
+            state["integral"] = 0.0
+        await bus.write_many({"oven.heater": power,
+                              "temp_gauge.value": temperature,
+                              "temp_readout.value": int(round(temperature)),
+                              "alarm.beacon": temperature > setpoint + 25.0,
+                              **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
+
+
+async def _oven_good(bus, stop):
+    """PI, with enough integral authority to supply the whole standing output.
+    An integral that can only contribute a tenth of what the plate loses cannot
+    close the offset it was added to close."""
+    await _oven_body(bus, stop, gain=3.5, integral_gain=0.6, deadband=0.0)
+
+
+async def _oven_ponly(bus, stop):
+    """The lesson, written out. Gain 3.5 and nothing else, so the plate parks
+    exactly (loss / element) / gain degrees short -- and parks somewhere else
+    when the setpoint moves, because the offset depends on the setpoint."""
+    await _oven_body(bus, stop, gain=3.5, integral_gain=0.0, deadband=0.0)
+
+
+async def _oven_thermostat(bus, stop):
+    """Element full on below setpoint, off above. It reaches the setpoint every
+    couple of seconds from alternate sides and never holds it: this plant
+    always loses heat, so the cycling never stops."""
+    await _oven_body(bus, stop, gain=0.0, integral_gain=0.0, deadband=4.0)
+
+
 #: `{scene: {name: controller}}`, plus the two shared ones. Every scene has a
 #: `good` that must pass and at least one wrong answer that must fail for that
 #: scene's own reason -- the rubric is only known to work when both have been
@@ -1268,6 +1778,10 @@ REFERENCES: dict[str, dict] = {
     "sorting-by-height": {"good": _good, "blind": _blind, "greedy": _greedy},
     "start-stop-station": {"good": _ss_good, "noestop": _ss_noestop,
                            "runon": _ss_runon},
+    "tank-level-control": {"good": _tank_good, "bangbang": _tank_bangbang,
+                           "fixedsp": _tank_fixedsp},
+    "heat-treat-station": {"good": _oven_good, "ponly": _oven_ponly,
+                           "thermostat": _oven_thermostat},
 }
 
 _SHARED = {"idle": _idle, "forcer": _forcer}
