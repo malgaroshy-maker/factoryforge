@@ -2924,9 +2924,39 @@ public partial class SceneEditor : Node3D, IPartHost
         foreach (var part in _placedParts)
         {
             if (part.Node is not IPart driven) continue;
-            driven.StepPart(new PartTick(Tags, part.TagIds, part.InstanceId, dt, this));
+
+            // One part's throw must not take the rest of the scene down with
+            // it. Godot logs an exception out of _PhysicsProcess and carries on
+            // (gotcha 12), but the carrying-on happens *outside* this loop --
+            // so a single misbehaving part silently stopped every part placed
+            // after it, on every tick, while the log filled with one stack
+            // trace per frame.
+            //
+            // The nearest live example is a part that computes a non-finite
+            // float: TagTable.Set rejects those rather than storing them
+            // (HP-23), so a division that has gone to infinity surfaces here
+            // rather than as a wrong number on the bus. Guard the arithmetic in
+            // the part; this is what catches the one that got away, and it says
+            // which part it was.
+            try
+            {
+                driven.StepPart(new PartTick(Tags, part.TagIds, part.InstanceId, dt, this));
+            }
+            catch (System.Exception ex)
+            {
+                // Once per part, not once per tick: at 60 Hz the second form is
+                // a 23 MB log and a window that looks hung, which is exactly
+                // how gotcha 21 presented.
+                if (_brokenParts.Add(part.InstanceId))
+                    GD.PushError($"part '{part.InstanceId}' threw during its tick; the rest of "
+                                 + $"the scene is still running, this part is not: {ex}");
+            }
         }
     }
+
+    /// <summary>Parts that have thrown once. See the catch in
+    /// <see cref="_PhysicsProcess"/>.</summary>
+    private readonly HashSet<string> _brokenParts = new();
 
     // ---------- IPartHost: the little a part legitimately asks of the scene
 
