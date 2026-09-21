@@ -497,6 +497,48 @@ def test_not_zeroing_the_totaliser_ends_the_second_batch_before_it_starts(tmp_pa
     assert any("over before it started" in line for line in report["feedback"])
 
 
+def test_the_guarded_cell_passes_a_program_that_never_writes_the_motor(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "good", 68, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["wrote_belt_rotate"] is False
+    assert evidence["started_without_a_press_at"] == []
+    assert evidence["transferred"] >= 3
+    # The exam has to have actually stopped and restarted the cell, or the
+    # check below it is about a gate that never opened.
+    assert 0.3 < evidence["contactor_fraction"] < 0.95
+
+
+def test_a_program_that_starts_the_motor_on_the_permissive_fails(tmp_path):
+    """The whole lesson of the scene, and the one a student writes by accident.
+
+    The relay closing hands `starter.coil` back; it does not command it. A
+    program holding the coil for as long as the cell "should be running"
+    restarts the machine the instant the guard is reset, with somebody still
+    inside. The plant records the tick the contactor pulled in and whether
+    anybody had pressed Start since it last stopped -- neither of which a
+    controller can arrange from the bus."""
+    code, report = graded(tmp_path, "guarded-cell", "autostart", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.no_start_on_the_permissive" in failed_ids(report)
+    assert report["evidence"]["started_without_a_press_at"]
+    assert any("automatic restart" in line for line in report["feedback"])
+
+
+def test_writing_the_motors_own_tag_fails_the_guarded_cell(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "writesbelt", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.never_wrote_the_motor" in failed_ids(report)
+    assert report["evidence"]["wrote_belt_rotate"] is True
+
+
+def test_a_mute_held_past_the_scanners_limit_fails(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "tapedmute", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.mute_within_the_limit" in failed_ids(report)
+    assert report["evidence"]["longest_mute_s"] > grade.GC_MUTE_LIMIT
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""

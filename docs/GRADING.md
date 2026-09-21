@@ -235,7 +235,7 @@ reference controllers; the machinery is general, the marking is not.
 | `pick-and-place-cell` | not yet |
 | `accumulation-buffer` | yes |
 | `heat-treat-station` | yes |
-| `guarded-cell` | not yet |
+| `guarded-cell` | yes |
 | `batch-dosing` | yes |
 
 A test fails if that table stops matching `RUBRICS`.
