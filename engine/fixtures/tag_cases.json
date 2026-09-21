@@ -17,6 +17,11 @@
     { "type": "int", "input": false, "error": true },
     { "type": "int", "input": 1.5, "error": true },
 
+    { "type": "int", "input": 2147483647, "expect": 2147483647 },
+    { "type": "int", "input": -2147483648, "expect": -2147483648 },
+    { "type": "int", "input": 2147483648, "error": true },
+    { "type": "int", "input": -2147483649, "error": true },
+
     { "type": "float", "input": 1, "expect": 1.0 },
     { "type": "float", "input": 0, "expect": 0.0 },
     { "type": "float", "input": -7, "expect": -7.0 },
@@ -34,6 +39,22 @@
     { "type": "float", "current": 1.0, "candidate": 1.0000005, "expect": false },
     { "type": "float", "current": 1.0, "candidate": 1.0000011, "expect": true },
     { "type": "float", "current": 1.0, "candidate": 1.0, "expect": false },
-    { "type": "float", "current": 100.0, "candidate": 100.000002, "expect": true }
+    { "type": "float", "current": 100.0, "candidate": 100.000002, "expect": true },
+
+    { "type": "int", "current": 1, "candidate": true, "error": true },
+    { "type": "bit", "current": false, "candidate": 2, "error": true },
+    { "type": "float", "current": 1.0, "candidate": true, "error": true }
+  ],
+
+  "_store_comment": "HP-18.3. `differs` answering 'no meaningful change' and the table storing the new value anyway are two different things, and both tables did the second while reporting the first -- so the stored reference crept by a hair a scan and a signal drifting 1e-9 per scan published on every scan after all. These cases pin the *table*, not the tag: set() returns whether anything changed, and the value afterwards must be the old one when it did not. Not reachable from the wire (an output's stored value is not observable there, and an input's is driven only by the scene), which is why it is here rather than in server_cases.json.",
+
+  "store": [
+    { "type": "float", "current": 1.0, "write": 1.0000005, "expect_changed": false, "expect_stored": 1.0 },
+    { "type": "float", "current": 1.0, "write": 1.0000011, "expect_changed": true, "expect_stored": 1.0000011 },
+    { "type": "float", "current": 1.0, "write": 1.0, "expect_changed": false, "expect_stored": 1.0 },
+    { "type": "int", "current": 3, "write": 3, "expect_changed": false, "expect_stored": 3 },
+    { "type": "int", "current": 3, "write": 4, "expect_changed": true, "expect_stored": 4 },
+    { "type": "bit", "current": false, "write": false, "expect_changed": false, "expect_stored": false },
+    { "type": "bit", "current": false, "write": true, "expect_changed": true, "expect_stored": true }
   ]
 }

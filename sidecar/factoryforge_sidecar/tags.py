@@ -21,6 +21,15 @@ TagValue = Union[bool, int, float]
 #: bits does not emit an update every tick.
 FLOAT_EPSILON = 1e-6
 
+#: An `int` tag is a signed 32-bit integer, and the range is part of the
+#: protocol rather than an artefact of one implementation. Python would hold
+#: any integer you like; the C# engine holds an `int`, and a bus whose two
+#: engines disagree about what `2147483648` means is not a contract. Documented
+#: in docs/tag-bus.md, pinned by engine/fixtures/tag_cases.json. It also matches
+#: what a PLC has: an S7 DInt is exactly this.
+INT_MIN = -2147483648
+INT_MAX = 2147483647
+
 _DEFAULTS: dict[str, TagValue] = {"bit": False, "int": 0, "float": 0.0}
 
 
@@ -59,16 +68,29 @@ class Tag:
             # turn a mis-typed bit write into 0/1 and hide the bug.
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TagError(f"{self.id}: {value!r} is not an int")
+            if not INT_MIN <= value <= INT_MAX:
+                raise TagError(
+                    f"{self.id}: {value!r} is outside the 32-bit range "
+                    f"[{INT_MIN}, {INT_MAX}]")
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TagError(f"{self.id}: {value!r} is not a float")
         return float(value)
 
     def differs(self, value: TagValue) -> bool:
-        """True if *value* is meaningfully different from the current one."""
+        """True if *value* is meaningfully different from the current one.
+
+        Coerces first, so a value this tag cannot hold is rejected here rather
+        than compared. Without that, `True` against a float tag holding 1.0
+        compared equal and was then quietly accepted by anything that only
+        stores when `differs` says so -- and the two engines disagreed about it,
+        because Python compares `1.0 != True` as False while C# ran the same
+        value through `Convert.ToDouble`.
+        """
+        coerced = self.coerce(value)
         if self.type == "float":
-            return abs(float(self.value) - float(value)) > FLOAT_EPSILON
-        return self.value != value
+            return abs(float(self.value) - coerced) > FLOAT_EPSILON
+        return self.value != coerced
 
     def with_value(self, value: TagValue) -> "Tag":
         return replace(self, value=self.coerce(value))
@@ -140,10 +162,20 @@ class TagTable:
         A forced tag absorbs the write silently: the underlying value updates so
         that clearing the force reveals something sensible, but the observable
         value stays pinned and no change is reported.
+
+        A value that does not meaningfully differ is **not stored** (HP-18.3).
+        Saying "nothing changed" and then storing the new value anyway let the
+        reference creep by a hair a scan, so a float drifting 1e-9 per scan
+        crossed the epsilon on the very next comparison and published on every
+        single scan -- which is the traffic the epsilon exists to prevent.
+        Coercion still happens first, so a value this tag cannot hold is
+        rejected whether or not it would have changed anything.
         """
         tag = self._tags[tag_id]
-        changed = tag.differs(value)
-        self._tags[tag_id] = tag.with_value(value)
+        coerced = tag.coerce(value)
+        changed = tag.differs(coerced)
+        if changed:
+            self._tags[tag_id] = tag.with_value(coerced)
         if tag_id in self._forced:
             return False
         return changed

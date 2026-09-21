@@ -56,6 +56,24 @@ this to a network.
 | `kind` | `input` \| `output` |
 | `value` | `bool` for `bit`, `int` for `int`, `float` for `float` |
 
+### Value ranges are part of the contract
+
+- **`bit`** accepts `true`/`false`, and `0`/`1`. A stray `2` is a bug, not a bit, and is
+  rejected.
+- **`int`** is a **signed 32-bit integer**: `-2147483648` … `2147483647`. Anything outside
+  that is rejected. Python would happily hold a larger integer and the C# engine would not,
+  and a bus whose two engines disagree about what `2147483648` means is not a contract. It
+  is also what a PLC has — an S7 `DInt` is exactly this.
+- **`float`** is a double, and must be **finite**. `NaN` and `±Infinity` are rejected at
+  every edge: they cannot be written, cannot be forced, and are not valid JSON in the first
+  place, so a value that reached a tag would leave as a payload the other engine's parser
+  refuses.
+
+A value a tag cannot hold is refused **per value**. The rest of the batch still lands, and
+the engine answers with a `status` of level `warn` and code `bad_value` naming the tags it
+refused. A whole frame the engine cannot read at all draws `bad_message`. Neither is ever a
+reason to close the connection.
+
 ### `kind` is from the controller's point of view
 
 This trips people up constantly, so it is stated once, loudly, and never varies:
@@ -132,6 +150,13 @@ A tick with no changes sends nothing at all — an idle scene should produce zer
 
 Float comparison uses an epsilon (default `1e-6`) so that physics jitter in the last bits does
 not generate a message every single tick.
+
+The epsilon suppresses the **store**, not only the comparison. A value that does not
+meaningfully differ is not written into the table at all, so the reference it is next
+compared against is the last value actually published. Storing it anyway — which both
+engines used to do while reporting "no change" — lets the reference creep by a hair a scan,
+so a signal drifting `1e-9` per scan crosses the epsilon on the very next comparison and
+publishes on every single scan, which is the traffic the epsilon exists to prevent.
 
 ### `observe` — engine → sidecar
 

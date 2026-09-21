@@ -47,12 +47,21 @@ public sealed class TagTable : IEnumerable<Tag>
     /// A forced tag absorbs the write silently — the underlying value updates so
     /// that clearing the force reveals something sensible, but the observable
     /// value stays pinned and no change is reported.
+    ///
+    /// A value that does not meaningfully differ is <em>not stored</em>
+    /// (HP-18.3). Saying "nothing changed" and then storing the new value
+    /// anyway let the reference creep by a hair a scan, so a float drifting
+    /// 1e-9 per scan crossed the epsilon on the very next comparison and
+    /// published on every single scan — exactly the traffic the epsilon exists
+    /// to prevent. Coercion still happens first, so a value this tag cannot
+    /// hold is rejected whether or not it would have changed anything.
     /// </summary>
     public bool Set(string id, object value)
     {
         var tag = _tags[id];
-        bool changed = tag.Differs(value);
-        tag.Set(value);
+        var coerced = tag.Coerce(value);
+        bool changed = tag.Differs(coerced);
+        if (changed) tag.Set(coerced);
         return !_forced.ContainsKey(id) && changed;
     }
 
@@ -106,8 +115,9 @@ public sealed class TagTable : IEnumerable<Tag>
     public bool TrySet(string id, object value)
     {
         if (!_tags.TryGetValue(id, out var tag)) return false;
-        bool changed = tag.Differs(value);
-        tag.Set(value);
+        var coerced = tag.Coerce(value);
+        bool changed = tag.Differs(coerced);
+        if (changed) tag.Set(coerced);
         return !_forced.ContainsKey(id) && changed;
     }
 

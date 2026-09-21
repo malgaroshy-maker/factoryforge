@@ -134,7 +134,13 @@ public partial class TagBusServer : Node
             }
             catch (Exception e)
             {
+                // Say so on the bus, not only in the engine's log. A frame the
+                // engine cannot read is the sidecar's problem to fix, and a
+                // sidecar that is never told simply believes its write landed.
+                // The Python engine answers the same frame the same way, which
+                // is the whole point of HP-19.
                 GD.PushWarning($"tag bus: bad message: {e.Message}");
+                Status("warn", "bad_message", $"could not read a frame: {e.Message}");
             }
         }
     }
@@ -270,14 +276,23 @@ public partial class TagBusServer : Node
 
             case "force":
                 if (msg["epoch"]?.GetValue<int>() != Epoch) return;
+                List<string>? badForces = null;
                 if (msg["values"]?.AsObject() is { } forces)
                     foreach (var (id, node) in forces)
-                        if (Tags.Contains(id) && node is not null)
-                            Tags.Force(id, ToClr(node));
+                    {
+                        if (!Tags.Contains(id) || node is null) continue;
+                        // Per value, exactly as ApplyWrites is: `force` runs
+                        // the same coercion, and one bad value used to abort
+                        // every release in the same message.
+                        try { Tags.Force(id, ToClr(node)); }
+                        catch (ArgumentException e) { (badForces ??= new()).Add($"{id} ({e.Message})"); }
+                    }
                 if (msg["clear"]?.AsArray() is { } clears)
                     foreach (var node in clears)
                         if (node is not null && Tags.Contains(node.GetValue<string>()))
                             Tags.ClearForce(node.GetValue<string>());
+                if (badForces is not null)
+                    Status("warn", "bad_value", $"rejected bad values: {string.Join("; ", badForces)}");
                 break;
 
             case "status":

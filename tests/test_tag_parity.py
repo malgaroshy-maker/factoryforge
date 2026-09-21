@@ -11,30 +11,43 @@ See FF-29.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
 
-from factoryforge_sidecar.tags import Tag, TagError
+from factoryforge_sidecar.tags import Tag, TagError, TagTable
+
+ROOT = Path(__file__).resolve().parent.parent
 
 FIXTURE = json.loads(
-    (Path(__file__).resolve().parent.parent / "engine" / "fixtures" / "tag_cases.json")
-    .read_text(encoding="utf-8")
+    (ROOT / "engine" / "fixtures" / "tag_cases.json").read_text(encoding="utf-8")
 )
+
+#: JSON cannot spell a non-finite float, so a fixture case that needs one names
+#: it instead. Both readers of the fixture decode the same three names.
+SPECIALS = {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}
+
+
+def _value(case: dict, key: str):
+    if f"{key}_special" in case:
+        return SPECIALS[case[f"{key}_special"]]
+    return case[key]
 
 
 def _probe(tag_type: str, value=None) -> Tag:
     return Tag(id="case", name="case", type=tag_type, kind="output", value=value)
 
 
-@pytest.mark.parametrize("case", FIXTURE["coerce"], ids=lambda c: f"{c['type']}:{c['input']!r}")
+@pytest.mark.parametrize("case", FIXTURE["coerce"],
+                         ids=lambda c: f"{c['type']}:{c.get('input', c.get('input_special'))!r}")
 def test_coerce(case: dict) -> None:
     tag = _probe(case["type"])
     if case.get("error"):
         with pytest.raises(TagError):
-            tag.coerce(case["input"])
+            tag.coerce(_value(case, "input"))
     else:
-        assert tag.coerce(case["input"]) == case["expect"]
+        assert tag.coerce(_value(case, "input")) == case["expect"]
 
 
 @pytest.mark.parametrize(
@@ -43,4 +56,26 @@ def test_coerce(case: dict) -> None:
 )
 def test_differs(case: dict) -> None:
     tag = _probe(case["type"], case["current"])
-    assert tag.differs(case["candidate"]) == case["expect"]
+    if case.get("error"):
+        with pytest.raises(TagError):
+            tag.differs(case["candidate"])
+    else:
+        assert tag.differs(case["candidate"]) == case["expect"]
+
+
+@pytest.mark.parametrize(
+    "case", FIXTURE["store"],
+    ids=lambda c: f"{c['type']}:{c['current']!r}<-{c['write']!r}",
+)
+def test_store(case: dict) -> None:
+    """The epsilon has to suppress the *store*, not only the comparison.
+
+    HP-18.3: both tables reported "no change" for a sub-epsilon move and then
+    stored the new value anyway, so the reference crept and a signal drifting by
+    1e-9 a scan published on every scan after all. Not reachable over the wire
+    -- an output's stored value is not observable there and an input's is
+    driven only by the scene -- so it lives here, in the shared model fixture.
+    """
+    table = TagTable([Tag("case", "case", case["type"], "output", case["current"])])
+    assert table.set("case", case["write"]) == case["expect_changed"]
+    assert table.value("case") == case["expect_stored"]
