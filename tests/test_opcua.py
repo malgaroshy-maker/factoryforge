@@ -179,15 +179,57 @@ async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_cli
         "an acknowledged write is still queued for retry"
 
 
+DEAD_ENDPOINT = "opc.tcp://127.0.0.1:48499/nothing-here/"
+
+
 async def test_missing_plc_does_not_block_startup(bus):
     """If the PLC is off, start() must still return promptly."""
-    driver = drivers.create("opcua-client", bus,
-                            url="opc.tcp://127.0.0.1:48499/nothing-here/")
+    driver = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT)
     await asyncio.wait_for(driver.start(), timeout=2)
     try:
         assert not driver.connected.is_set()
     finally:
         await driver.stop()
+
+
+async def test_the_connect_timeout_is_explicit_and_configurable(monkeypatch, bus):
+    """AGENTS.md gotcha 8: "asyncua's default 4 s connect timeout is too short
+    for a real S7. Use timeout=10." The lesson was learned and written into the
+    handoff document, and the code went on constructing `Client(url=...)` with
+    no timeout at all -- so a CPU that was merely busy looked like a CPU that
+    was not there.
+    """
+    from factoryforge_sidecar.drivers import opcua_client as mod
+
+    seen: list[dict] = []
+    real_client = mod.Client
+
+    class Recording(real_client):
+        def __init__(self, url, **kwargs):
+            seen.append({"url": url, **kwargs})
+            super().__init__(url, **kwargs)
+
+    monkeypatch.setattr(mod, "Client", Recording)
+
+    driver = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT)
+    assert driver.timeout == 10.0, "the default must be the one AGENTS.md prescribes"
+    await driver.start()
+    try:
+        assert await _settle(lambda: seen), "no client was ever constructed"
+        assert seen[0]["timeout"] == 10.0, "asyncua's 4s default was left in place"
+    finally:
+        await driver.stop()
+
+    seen.clear()
+    # `-o timeout 20` arrives from the CLI as a string.
+    slow = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT, timeout="20")
+    assert slow.timeout == 20.0
+    await slow.start()
+    try:
+        assert await _settle(lambda: seen)
+        assert seen[0]["timeout"] == 20.0, "a configured timeout did not reach asyncua"
+    finally:
+        await slow.stop()
 
 
 # --- server driver, driven by a real client ---

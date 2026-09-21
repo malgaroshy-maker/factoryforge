@@ -40,6 +40,12 @@ RECONNECT_DELAY = 5.0
 #: `_reconcile_loop` for why dropping one is not survivable.
 INPUT_RETRY_INTERVAL = 1.0
 
+#: AGENTS.md gotcha 8: "asyncua's default 4 s connect timeout is too short for
+#: a real S7. Use timeout=10." Stated as a number here rather than left to
+#: asyncua's default, so that changing it is a decision somebody takes rather
+#: than a dependency's default quietly applying.
+CONNECT_TIMEOUT = 10.0
+
 
 class _SubHandler:
     """Receives data changes for PLC-written (sim output) nodes."""
@@ -65,6 +71,7 @@ class OpcUaClientDriver(Driver):
                  poll_interval: float = 0.05,
                  publish_interval: int = 50,
                  input_retry_interval: float = INPUT_RETRY_INTERVAL,
+                 timeout: float = CONNECT_TIMEOUT,
                  **config) -> None:
         super().__init__(bus, url=url, **config)
         self.url = url
@@ -85,6 +92,11 @@ class OpcUaClientDriver(Driver):
         self.poll_interval = poll_interval
         self.publish_interval = publish_interval
         self.input_retry_interval = float(input_retry_interval)
+        # Each request to the server, the connect handshake included, must be
+        # answered inside this. A real S7-1500 does not always manage asyncua's
+        # 4s default, which is how a CPU that was simply busy came to look like
+        # a CPU that was not there. `-o timeout 20` for an unusually slow one.
+        self.timeout = float(timeout)
 
         self.mapping: dict[str, str] = dict(mapping or {})
         if mapping_file:
@@ -149,8 +161,8 @@ class OpcUaClientDriver(Driver):
                 await asyncio.sleep(RECONNECT_DELAY)
 
     async def _connect(self) -> None:
-        log.info("connecting to %s", self.url)
-        self.client = Client(url=self.url)
+        log.info("connecting to %s (timeout %gs)", self.url, self.timeout)
+        self.client = Client(url=self.url, timeout=self.timeout)
         await self.client.connect()
         self.connected.set()
         await self._report("info", "plc_connected", f"connected to OPC UA server {self.url}")
