@@ -195,6 +195,20 @@ public partial class TagForceSelfTest : Node
         box.EmitSignal(LineEdit.SignalName.TextChanged, text);
     }
 
+    /// <summary>
+    /// Can a person actually see this row?
+    ///
+    /// <c>Visible</c> alone cannot answer that and this test used to ask it
+    /// anyway (HP-40). A row sits inside its group's body, and a row whose own
+    /// flag is true inside a body whose flag is false is a row nobody can see —
+    /// so every assertion here passed while the panel showed an empty list.
+    /// That is precisely the bug HP-40 fixes, and this test walked straight
+    /// past it for as long as both existed.
+    ///
+    /// <c>IsVisibleInTree</c> asks the question the user asks.
+    /// </summary>
+    private static bool OnScreen(Control? node) => node is not null && node.IsVisibleInTree();
+
     private void CheckGrouping()
     {
         Expect(HeaderFor("test") is not null, "tags are grouped under their part's name");
@@ -204,11 +218,15 @@ public partial class TagForceSelfTest : Node
         var row = RowFor("test.bit");
         if (row?.GetParent() is not Control body) { Expect(false, "test.bit: no group body"); return; }
 
-        Expect(body.Visible, "a group starts expanded");
+        Expect(OnScreen(body), "a group starts expanded");
+        Expect(header.Text.StartsWith("\u25be"), "and its header says so");
         Click(header);
-        Expect(!body.Visible, "clicking its header collapses it");
+        Expect(!OnScreen(body), "clicking its header collapses it");
+        Expect(header.Text.StartsWith("\u25b8"),
+               $"and the header follows the body (reads '{header.Text}')");
         Click(header);
-        Expect(body.Visible, "and clicking again opens it");
+        Expect(OnScreen(body), "and clicking again opens it");
+        Expect(header.Text.StartsWith("\u25be"), "with the header back to expanded");
     }
 
     private void CheckSearch()
@@ -217,19 +235,39 @@ public partial class TagForceSelfTest : Node
         if (box is null) { Expect(false, "the panel has no search box"); return; }
 
         Type(box, "level");
-        Expect(RowFor("test.level")?.Visible == true, "searching keeps what matches");
-        Expect(RowFor("test.bit")?.Visible == false, "and hides what does not");
+        Expect(OnScreen(RowFor("test.level")), "searching keeps what matches");
+        Expect(!OnScreen(RowFor("test.bit")), "and hides what does not");
         // A whole group with nothing matching takes its header with it, or the
         // results read as a list of empty machines.
-        Expect(HeaderFor("other")?.Visible == false, "a group with no matches disappears entirely");
+        Expect(!OnScreen(HeaderFor("other")), "a group with no matches disappears entirely");
 
         Type(box, "other.");
-        Expect(RowFor("other.detect")?.Visible == true, "searching by part prefix finds its tags");
-        Expect(RowFor("test.level")?.Visible == false, "and drops the other machine");
+        Expect(OnScreen(RowFor("other.detect")), "searching by part prefix finds its tags");
+        Expect(!OnScreen(RowFor("test.level")), "and drops the other machine");
 
         Type(box, "");
-        Expect(RowFor("test.bit")?.Visible == true, "clearing the box brings everything back");
-        Expect(HeaderFor("other")?.Visible == true, "headers included");
+        Expect(OnScreen(RowFor("test.bit")), "clearing the box brings everything back");
+        Expect(OnScreen(HeaderFor("other")), "headers included");
+        // The rows, not only the headers (HP-40). Filtering hides a group's
+        // *body*, so a clear that reopened the header and not the body left a
+        // "▾" over nothing -- and for the group whose tags never matched, that
+        // was every row it had.
+        Expect(OnScreen(RowFor("other.detect")),
+               "and the rows inside those headers, not just the headers");
+
+        // A group folded by hand is a different statement from a group emptied
+        // by a filter, and a cleared filter must not undo it.
+        var header = HeaderFor("test")!;
+        Click(header);
+        Expect(!OnScreen(RowFor("test.bit")), "a group collapsed by hand hides its rows");
+        Type(box, "level");
+        Expect(OnScreen(RowFor("test.level")),
+               "a search opens a collapsed group, or it would hide its own matches");
+        Type(box, "");
+        Expect(!OnScreen(RowFor("test.bit")),
+               "and clearing the search gives the group back to whoever collapsed it");
+        Click(header);
+        Expect(OnScreen(RowFor("test.bit")), "reopened by hand again");
     }
 
     private void CheckKindFilter()
@@ -238,15 +276,15 @@ public partial class TagForceSelfTest : Node
         if (kind is null) { Expect(false, "the panel has no kind filter"); return; }
 
         Click(kind);      // Outputs
-        Expect(RowFor("test.bit")?.Visible == true, "the Outputs filter keeps what the PLC writes");
-        Expect(RowFor("other.detect")?.Visible == false, "and drops what it reads");
+        Expect(OnScreen(RowFor("test.bit")), "the Outputs filter keeps what the PLC writes");
+        Expect(!OnScreen(RowFor("other.detect")), "and drops what it reads");
 
         Click(kind);      // Inputs
-        Expect(RowFor("other.detect")?.Visible == true, "the Inputs filter keeps what the PLC reads");
-        Expect(RowFor("test.bit")?.Visible == false, "and drops what it writes");
+        Expect(OnScreen(RowFor("other.detect")), "the Inputs filter keeps what the PLC reads");
+        Expect(!OnScreen(RowFor("test.bit")), "and drops what it writes");
 
         Click(kind);      // back to All
-        Expect(RowFor("test.bit")?.Visible == true && RowFor("other.detect")?.Visible == true,
+        Expect(OnScreen(RowFor("test.bit")) && OnScreen(RowFor("other.detect")),
                "and cycling once more shows both again");
     }
 
