@@ -624,6 +624,170 @@ async def test_a_read_past_the_end_of_the_db_blames_the_length_first(
         "optimized block access is still being given as the diagnosis"
 
 
+# --- offsets, directions, and the byte range a write is allowed to touch ------
+#
+# AGENTS.md records that all three Siemens drivers once shipped calling
+# `TagTable.outputs()` and `tag.kind.value`, neither of which exists, and that
+# nothing in the suite would have caught it. Everything below starts, rebuilds,
+# polls, pushes and stops a driver, so either mistake raises here.
+
+async def test_the_poller_reads_each_tag_from_its_own_offset(plc, fake_bus):
+    """Bit 2 of byte 0 is the pusher, not "the third tag in declaration order".
+    The scheme this replaced packed every bit into byte 0 in tag order and
+    wrapped at 8 with `% 8`, so the ninth silently overwrote the first."""
+    plc.memory[0] = 0b0000_0101         # conveyor.rotate and pusher.extend
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: "conveyor.rotate" in fake_bus.written)
+    finally:
+        await driver.stop()
+
+    assert fake_bus.written["conveyor.rotate"] is True
+    assert fake_bus.written["emitter.emit"] is False
+    assert fake_bus.written["pusher.extend"] is True
+    assert fake_bus.written["stack_light.green"] is False
+
+
+async def test_doublewords_are_read_from_their_own_boundaries(plc, fake_bus):
+    """DBD2 and DBD6 are four bytes each, big-endian -- the DInt counters used
+    to be ignored by the addressing scheme entirely."""
+    table = TagTable([
+        Tag("setpoint.speed", "Speed", "int", "output"),
+        Tag("temp.actual", "Temperature", "float", "output"),
+    ])
+    struct.pack_into(">i", plc.memory, 2, 70_000)     # past 16 bits on purpose
+    struct.pack_into(">f", plc.memory, 6, 21.5)
+
+    driver = make_snap7(fake_bus, mapping={"setpoint.speed": "DBD2",
+                                           "temp.actual": "DBD6"})
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("mixed", 1, table)
+        assert await settle(lambda: "setpoint.speed" in fake_bus.written)
+    finally:
+        await driver.stop()
+
+    assert fake_bus.written["setpoint.speed"] == 70_000
+    assert fake_bus.written["temp.actual"] == pytest.approx(21.5)
+
+
+async def test_a_write_lands_on_the_tag_s_own_bit(plc, fake_bus):
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("sorting", 1, sorting_table())
+        await driver.push({"sensor_high.detect": True})
+        struct_before = bytes(plc.memory)
+
+        assert FakeUtil.get_bool(plc.memory, 1, 1) is True, "DBX1.1 was not set"
+        assert FakeUtil.get_bool(plc.memory, 1, 0) is False, "it set a neighbour too"
+        await driver.push({"counter.tall": 5})
+        assert struct.unpack_from(">i", plc.memory, 2)[0] == 5
+        assert plc.memory[1] == struct_before[1], "the DInt write reached byte 1"
+    finally:
+        await driver.stop()
+
+
+async def test_a_write_does_not_stomp_the_bytes_the_plc_owns(plc, fake_bus):
+    """Gotcha 19d: bits are not individually addressable on the wire, so
+    setting a simulator bit means read-modify-write of a whole byte. The driver
+    must write the narrowest range it can -- here, byte 1 only, leaving the
+    PLC's own byte 0 exactly as the program left it."""
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("sorting", 1, sorting_table())
+
+        plc.memory[0] = 0xFF                # every PLC-owned output asserted
+        await driver.push({"sensor_low.detect": True, "pusher.extended": True})
+        assert plc.memory[0] == 0xFF, "a simulator write rewrote PLC-owned bits"
+        assert all(start != 0 for start, _ in plc.writes), \
+            "byte 0 was written at all, which is the window gotcha 19d is about"
+    finally:
+        await driver.stop()
+
+
+async def test_direction_decides_who_writes_what(plc, fake_bus):
+    """`kind` is from the controller's point of view, and it is the whole
+    contract: an `output` is the PLC's to write and ours to read, an `input`
+    the other way round. Getting it backwards is how a driver ends up
+    overwriting the program's own outputs with a copy read a moment earlier."""
+    driver = make_snap7(fake_bus)
+    try:
+        await driver.start()
+        assert await settle(lambda: driver.connected.is_set())
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: "conveyor.rotate" in fake_bus.written)
+
+        # Nothing simulator-owned is ever reported back to the bus as if the
+        # PLC had produced it.
+        assert set(fake_bus.written) == {
+            "conveyor.rotate", "emitter.emit", "pusher.extend", "stack_light.green"}
+
+        # And a PLC-owned tag offered to push() is refused, not written.
+        plc.memory[0] = 0x00
+        plc.writes.clear()
+        await driver.push({"conveyor.rotate": True, "pusher.extend": True})
+        assert plc.memory[0] == 0x00, "the driver wrote a tag the PLC owns"
+        assert plc.writes == []
+    finally:
+        await driver.stop()
+
+
+async def test_plcsim_reads_outputs_and_writes_inputs_by_symbol(sim_instance, fake_bus):
+    """The PLCSIM driver used to hand tag ids straight to ReadBool, asking the
+    CPU for a variable called "conveyor.rotate" that no PLC has ever had, and
+    swallowed every resulting exception while reporting itself started."""
+    driver = make_plcsim(fake_bus)
+    sim_instance.values['"FF_IO".conveyor.rotate'] = True
+    try:
+        await driver.start()
+        await driver.rebuild("sorting", 1, sorting_table())
+        assert await settle(lambda: "conveyor.rotate" in fake_bus.written)
+        assert fake_bus.written["conveyor.rotate"] is True
+        assert set(fake_bus.written) == {
+            "conveyor.rotate", "emitter.emit", "pusher.extend", "stack_light.green"}
+
+        await driver.push({"counter.tall": 7, "conveyor.rotate": False})
+        assert sim_instance.values['"FF_IO".counter.tall'] == 7
+        assert sim_instance.values['"FF_IO".conveyor.rotate'] is True, \
+            "the driver wrote a tag the PLC owns"
+    finally:
+        await driver.stop()
+
+
+async def test_plcsim_says_which_tags_have_no_symbol(sim_instance, fake_bus, caplog):
+    """A partial mapping must be named, not silently skipped: 'connected but
+    driving nothing' is the state this driver shipped in for months."""
+    partial = {"conveyor.rotate": '"FF_IO".conveyor.rotate'}
+    driver = make_plcsim(fake_bus, mapping=partial)
+    try:
+        with caplog.at_level(logging.WARNING, logger=plcsim_advanced.__name__):
+            await driver.start()
+            await driver.rebuild("sorting", 1, sorting_table())
+            assert await settle(lambda: "conveyor.rotate" in fake_bus.written)
+    finally:
+        await driver.stop()
+
+    complaints = " ".join(r.getMessage() for r in caplog.records)
+    assert "pusher.extend" in complaints and "no PLC symbol" in complaints
+
+
+async def test_plcsim_updates_the_tag_list_but_nothing_else(sim_instance, fake_bus):
+    driver = make_plcsim(fake_bus)
+    await driver.start()
+    try:
+        assert sim_instance.tag_list_updated, "the CPU's symbols were never loaded"
+    finally:
+        await driver.stop()
+
+
 async def test_plcsim_never_touches_the_power_state(sim_instance, fake_bus):
     """Gotcha 18: attaching to a CPU somebody else started and downloaded a
     program to is not owning it. stop() used to PowerOff(), so a 40-second run
