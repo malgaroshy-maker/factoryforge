@@ -220,12 +220,25 @@ session; they are also what `tests/test_grade.py` asserts against.
 
 Read this part before promising it to a class.
 
-**One scene.** `sorting-by-height`, and `--list` will only ever show what is
-really implemented. The rubric table in `tools/grade.py` is keyed by scene id
-and adding a second one means writing its `build`, `observe` and `grade`
-functions; the machinery is general, the marking is not. The other seven
-shipped scenes are not gradable today, and a test fails if that sentence stops
-being true without this file changing.
+**Not every shipped scene.** `--list` shows what is really implemented and
+nothing else. The rubric table in `tools/grade.py` is keyed by scene id, and
+adding one means writing its plant model, its `grade` function and its
+reference controllers; the machinery is general, the marking is not.
+
+| scene | graded |
+|---|---|
+| `sorting-by-height` | yes |
+| `start-stop-station` | yes |
+| `tank-level-control` | not yet |
+| `light-curtain-sorting` | not yet |
+| `roller-line-weighing` | not yet |
+| `pick-and-place-cell` | not yet |
+| `accumulation-buffer` | not yet |
+| `heat-treat-station` | not yet |
+| `guarded-cell` | not yet |
+| `batch-dosing` | not yet |
+
+A test fails if that table stops matching `RUBRICS`.
 
 **The Python model of the line, not the 3D engine.** The grader runs
 `harness/scene.py` — a 1-D kinematic model with no physics. It is the CI

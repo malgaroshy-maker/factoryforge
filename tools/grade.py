@@ -63,7 +63,7 @@ sys.path.insert(0, str(ROOT / "sidecar"))
 sys.path.insert(0, str(ROOT / "harness"))
 
 from engine_stub import EngineStub                      # noqa: E402
-from factoryforge_sidecar.tags import TagTable, TagValue  # noqa: E402
+from factoryforge_sidecar.tags import Tag, TagTable, TagValue  # noqa: E402
 import scene as scene_model                             # noqa: E402
 
 #: Ports a graded run may bind when the instructor asks for a fixed one. The
@@ -198,6 +198,12 @@ class GradedEngine(EngineStub):
         self.sessions: list[dict] = []
         self.forces: list[dict] = []
         self.input_writes: list[dict] = []
+        #: Every output tag the controller has ever written. One scene marks on
+        #: this: `guarded-cell` asks for a program that never touches the
+        #: motor's own tag, and "did you write it" is a fact about the wire
+        #: rather than about the plant, so it cannot be inferred from the
+        #: cartons. Nothing else uses it as a criterion.
+        self.written_tags: set[str] = set()
         self.arrived = asyncio.Event()
         self._t0 = time.perf_counter()
 
@@ -233,6 +239,7 @@ class GradedEngine(EngineStub):
                 "cleared": sorted(msg.get("clear") or []),
             })
         elif kind == "write":
+            self.written_tags.update(msg.get("values") or {})
             wrong = sorted(
                 tag_id for tag_id in (msg.get("values") or {})
                 if (tag := self.scene.tags.get(tag_id)) is not None
@@ -453,8 +460,492 @@ def _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
             f"{len(sim.sorted_short)} short past the end, none misrouted.")
 
 
-#: Every scene this tool can mark. One, and the tool says so rather than
-#: pretending: see docs/GRADING.md.
+def _summary_sorting(evidence: dict, out) -> None:
+    pusher = evidence["pusher"]
+    out(f"fed {evidence['emitted']}, sorted {evidence['sorted']}, "
+        f"{evidence['still_on_belt']} still on the belt")
+    out(f"chute   {evidence['chute']['total']:>3}  "
+        f"({evidence['chute']['tall']} tall, {evidence['chute']['short']} short)")
+    out(f"far end {evidence['far_end']['total']:>3}  "
+        f"({evidence['far_end']['short']} short, {evidence['far_end']['tall']} tall)")
+    window = pusher["required_window_s"]
+    measured = pusher["mean_delay_after_beam_s"]
+    out(f"pusher fired {pusher['fired']}x, "
+        f"{'never' if measured is None else f'{measured:.2f}s'} after the beam "
+        f"(needs {window[0]:.2f}-{window[1]:.2f}s)")
+    if evidence["misrouted"]:
+        out("misrouted:")
+        for entry in evidence["misrouted"][:8]:
+            out(f"  carton {entry['carton']:>3} ({entry['height']}) "
+                f"-> {entry['lane']} at {entry['at']:.1f}s")
+
+
+# =======================================================================
+#  The other nine scenes
+# =======================================================================
+#
+# `harness/scene.py` models one line, and it is owned by the tag-bus stream.
+# The nine models below live here instead, and they are the same *kind* of
+# thing: 1-D kinematic plants with no physics, faithful about tag semantics,
+# sensor windows and -- where the lesson is analog -- about the engine's own
+# dynamics, which are copied from the C# part and the template that configures
+# it rather than invented. Every constant that matters carries the file it came
+# from, so a change to a part shows up here as a number that no longer matches
+# rather than as a rubric that is quietly wrong.
+#
+# Three rules each of them follows.
+#
+# **The plant keeps its own ledger.** Every model records what physically
+# happened -- which carton went where, how many litres really left the pump,
+# whether the contactor pulled in before anybody pressed Start -- in attributes
+# no bus message reaches. That ledger is the verdict. Tags are evidence.
+#
+# **The plant runs the exam.** Each model owns a `Script`: a list of things an
+# examiner does on the plant side, on simulation time. Pressing Start, striking
+# the mushroom, turning the pot to a number chosen from the seed, and -- the
+# part that makes several of these rubrics work at all -- reaching into the
+# machinery mid-run and changing something physical that no tag reports. A belt
+# that is suddenly half as fast. A pump rated for half the flow. A gantry that
+# travels slower than it did. Those are the changes a program written on a
+# stopwatch cannot survive and a program written on feedback does not notice.
+#
+# **Nothing here forces a tag.** The engine's own parts do -- a safety relay
+# holds the starter coil down by forcing it, and a motor starter drives the belt
+# the same way -- but a forced tag is this tool's disqualification signal, so
+# the models reproduce the *behaviour* and never the mechanism: the plant simply
+# ignores a command it is not obeying. See docs/GRADING.md, which says so.
+
+
+def _quantise(value: float, step: float) -> float:
+    return round(value / step) * step
+
+
+@dataclass
+class Item:
+    """A carton, in one dimension. Height and mass are the plant's secret.
+
+    `height` is metres, `mass` kilograms -- both from `BoxPhysics.cs`, where a
+    carton is 0.20 x H x 0.24 at 150 kg/m3 and a steel one at 900.
+    """
+    height: float = 0.10
+    metal: bool = False
+    position: float = 0.0
+    id: int = 0
+    lane: str | None = None          #: set once it leaves the line
+    measured: float | None = None    #: what an instrument said about it
+    threshold: float | None = None   #: the rule in force when it was measured
+    carried: bool = False
+
+    @property
+    def mass(self) -> float:
+        density = 900.0 if self.metal else 150.0
+        return 0.20 * self.height * 0.24 * density
+
+    @property
+    def grams(self) -> float:
+        return self.mass * 1000.0
+
+
+class Script:
+    """The examiner, on simulation time.
+
+    A list of `(seconds, what)` run in order, once each, from inside `tick`.
+    Simulation time and not wall clock, so a slow machine sits an exam in the
+    same order as a fast one, and nothing here sleeps -- on Windows a sleep
+    under 15.6 ms does not sleep at all (AGENTS.md gotcha 2) and the tick is the
+    one place with an exact clock.
+    """
+
+    def __init__(self, steps: list[tuple[float, object]]) -> None:
+        self._steps = sorted(steps, key=lambda s: s[0])
+        self._next = 0
+        self.done: list[tuple[float, str]] = []
+
+    def run(self, now: float) -> None:
+        while self._next < len(self._steps) and now >= self._steps[self._next][0]:
+            when, what = self._steps[self._next]
+            self._next += 1
+            what()                                         # type: ignore[operator]
+            self.done.append((round(now, 2), getattr(what, "__name__", "step")))
+
+
+class Panel:
+    """The operator station, from the operator's side.
+
+    Every template places one and every scene here has one, because half of
+    what these exercises teach is the operator contract: momentary buttons, a
+    normally-closed mushroom, a latch that Start cannot clear. The grader is
+    the hand on those buttons -- it presses them from the plant side, which is
+    what makes "Start while tripped did nothing" a fact about the machine
+    rather than a fact about a tag somebody could have written.
+
+    `estop` is inverted on purpose, exactly as `ButtonPanel.cs` declares it:
+    normally closed, true = healthy.
+    """
+
+    #: Long enough that a controller scanning at 50 ms cannot miss the edge,
+    #: short enough to still be one edge. `tools/try_scene.py` holds 0.15 s
+    #: against the real engine for the same reason.
+    PRESS = 0.15
+
+    def __init__(self, tags: TagTable, prefix: str = "panel",
+                 setpoint: float = 0.0) -> None:
+        self.tags = tags
+        self.prefix = prefix
+        self._held: dict[str, float] = {}
+        self.setpoint_value = setpoint
+        self.healthy = True
+        #: Sim time of the last Start press. Ground truth for "did the machine
+        #: start because somebody started it".
+        self.last_start: float | None = None
+        self.presses: list[tuple[float, str]] = []
+        self._t = 0.0
+
+    def declare(self, tags: TagTable) -> None:
+        p = self.prefix
+        for name, title in (("start", "Start (momentary)"), ("stop", "Stop (momentary)"),
+                            ("reset", "Reset (momentary)")):
+            tags.add(Tag(f"{p}.{name}", f"Panel {title}", "bit", "input"))
+        tags.add(Tag(f"{p}.estop", "Panel E-Stop OK (NC)", "bit", "input", value=True))
+        tags.add(Tag(f"{p}.setpoint", "Panel Setpoint", "float", "input",
+                     value=self.setpoint_value))
+        tags.add(Tag(f"{p}.green", "Panel Green Lamp", "bit", "output"))
+        tags.add(Tag(f"{p}.red", "Panel Red Lamp", "bit", "output"))
+
+    # --- the examiner's hand ---
+
+    def press(self, name: str):
+        def do() -> None:
+            self._held[name] = self._t + self.PRESS
+            self.presses.append((round(self._t, 2), name))
+            if name == "start":
+                self.last_start = self._t
+        do.__name__ = f"press {name}"
+        return do
+
+    def set_setpoint(self, value: float):
+        def do() -> None:
+            self.setpoint_value = float(value)
+        do.__name__ = f"pot to {value}"
+        return do
+
+    def strike(self):
+        def do() -> None:
+            self.healthy = False
+        do.__name__ = "strike the mushroom"
+        return do
+
+    def release(self):
+        def do() -> None:
+            self.healthy = True
+        do.__name__ = "release the mushroom"
+        return do
+
+    # --- the plant side ---
+
+    def tick(self, dt: float, now: float) -> None:
+        self._t = now
+        p = self.prefix
+        for name in ("start", "stop", "reset"):
+            self.tags.set(f"{p}.{name}", now < self._held.get(name, -1.0))
+        self.tags.set(f"{p}.estop", self.healthy)
+        self.tags.set(f"{p}.setpoint", float(self.setpoint_value))
+
+    def started_since(self, when: float) -> bool:
+        return self.last_start is not None and self.last_start >= when
+
+
+class PlantScene:
+    """What every model below has in common.
+
+    Owns the tag table, the panel, the clock and the exam script, and offers
+    the two things a rubric always wants: a place to put ground truth, and a
+    `bit`/`num` pair that reads the *visible* value -- the one a force would
+    change -- so a scene never accidentally grades the value underneath a pin.
+    """
+
+    name = "unnamed"
+
+    def __init__(self, seed: int) -> None:
+        self.rng = random.Random(seed)
+        self.seed = seed
+        self.t = 0.0
+        self.tags = TagTable([])
+        self.panel = Panel(self.tags)
+        self.panel.declare(self.tags)
+        self.script = Script([])
+        self.notes: dict = {}
+
+    # --- reading what the controller wrote ---
+
+    def bit(self, tag_id: str) -> bool:
+        return bool(self.tags.visible(tag_id))
+
+    def num(self, tag_id: str) -> float:
+        return float(self.tags.visible(tag_id))
+
+    # --- the loop ---
+
+    def tick(self, dt: float) -> None:
+        self.t += dt
+        self.script.run(self.t)
+        self.panel.tick(dt, self.t)
+        self.step(dt)
+
+    def step(self, dt: float) -> None:            # pragma: no cover - overridden
+        raise NotImplementedError
+
+    # --- helpers the models share ---
+
+    def _declare(self, *tags: Tag) -> None:
+        for tag in tags:
+            self.tags.add(tag)
+
+    def _eye(self, items: list[Item], position: float, window: float = 0.20) -> bool:
+        """A diffuse photoelectric sensor: true while an item is in its window.
+
+        Matches `harness/scene.py`, which is in turn the semantics
+        `PhotoelectricSensor.cs` gives a diffuse head.
+        """
+        half = window / 2
+        return any(abs(item.position - position) <= half for item in items)
+
+
+#: A shuffled, seeded feed, the same argument as `feed_pattern` makes for the
+#: sorting line: an order a controller can guess is an order it can be written
+#: against. Every scene that feeds more than one kind of carton draws from one
+#: of these rather than from an alternation.
+def shuffled_cycle(rng: random.Random, values: list, repeats: int) -> list:
+    out: list = []
+    for _ in range(repeats):
+        block = list(values)
+        rng.shuffle(block)
+        out.extend(block)
+    return out
+
+
+# --- start / stop station ----------------------------------------------
+#
+# Observable fact: how many cartons physically crossed the part-present eye
+# between the Start press and the line stopping itself, and how far the belt
+# travelled while the station was tripped.
+#
+# How a program fakes it: by running the belt for about the right length of
+# time. A batch of five at a fixed feed rate is a stopwatch problem if the
+# grader only ever asks for five. So the pot is a number drawn from the seed
+# and the exam asks for it twice, with a different number the second time --
+# and the count that decides the mark is crossings of the eye, which is a
+# distance the belt really moved with a carton on it.
+#
+# The other half is the mushroom, and it is graded as belt travel: the line has
+# to be off within 200 ms of the strike, has to stay off when the mushroom pops
+# back out, has to ignore Start while latched, and has to come back only after
+# Reset *and* Start. Every one of those is metres of belt, not the state of a
+# lamp.
+
+#: `engine/templates/start_stop_station.json`: belt speed 0.5 m/s, 3 m deck.
+SS_BELT_SPEED = 0.5
+SS_EYE_POS = 1.5
+SS_EYE_WINDOW = 0.20
+#: Where a carton *enters* the eye's window, which is the moment the beam
+#: breaks and therefore the physical event a counter counts. Counting from the
+#: middle of the window instead put the plant's ledger 0.1 m -- a fifth of a
+#: second -- behind the sensor, so a correct controller that stopped the belt
+#: on its fourth edge was marked as having made three.
+SS_EYE_BREAK = SS_EYE_POS - SS_EYE_WINDOW / 2
+SS_REMOVER_POS = 2.8
+#: `docs/tag-bus.md` §4.2 and `tools/try_scene.py`: strike to stopped.
+ESTOP_LIMIT = 0.200
+
+
+class StartStopScene(PlantScene):
+    name = "start-stop-station"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("belt.rotate", "Belt Conveyor (Rotate)", "bit", "output"),
+            Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
+            Tag("produced.value", "Produced (Display)", "int", "output"),
+            Tag("part_present.detect", "Diffuse Sensor (Detect)", "bit", "input"),
+            Tag("counter.count", "Remover (Count)", "int", "input"),
+        )
+
+        self.items: list[Item] = []
+        self.removed: list[Item] = []
+        self._next_id = 1
+        self._emit_edge = False
+
+        #: Ground truth. Crossings of the eye, stamped with the sim time, so a
+        #: batch can be counted from the Start press that began it.
+        self.crossings: list[float] = []
+        #: Metres the belt moved while the station was tripped -- struck
+        #: mushroom, or latched after one.
+        self.travel_while_tripped = 0.0
+        self.tripped_since: float | None = None
+        self.stop_lag: float | None = None
+        #: The batch the examiner asked for, and when it asked.
+        self.batches: list[dict] = []
+
+        big = 40                       # unreachable, so the interlocks have room
+        self.batch_size = self.rng.choice([3, 4, 5])
+        self.script = Script([
+            (0.5, self.panel.set_setpoint(big)),
+            (1.0, self.panel.press("start")),
+            (12.0, self.panel.strike()),
+            (14.0, self.panel.release()),
+            (15.0, self.panel.press("start")),     # must not restart: still latched
+            (17.0, self.panel.press("reset")),
+            (18.5, self.panel.press("start")),     # this one must
+            (24.0, self.panel.press("stop")),
+            (26.0, self.panel.press("reset")),
+            (26.5, self.panel.set_setpoint(self.batch_size)),
+            (27.0, self._begin_batch),
+        ])
+
+    def _begin_batch(self) -> None:
+        self.panel.press("start")()
+        self.batches.append({"target": self.batch_size, "from": self.t,
+                             "crossings_at": len(self.crossings)})
+
+    # --- the plant ---
+
+    def step(self, dt: float) -> None:
+        tripped = not self.panel.healthy
+        if tripped and self.tripped_since is None:
+            self.tripped_since = self.t
+        elif not tripped and self.tripped_since is not None and self.panel.started_since(
+                self.tripped_since):
+            self.tripped_since = None
+
+        emit = self.bit("emitter.emit")
+        if emit and not self._emit_edge:
+            self.items.append(Item(id=self._next_id))
+            self._next_id += 1
+        self._emit_edge = emit
+
+        running = self.bit("belt.rotate")
+        if running:
+            moved = SS_BELT_SPEED * dt
+            if self.tripped_since is not None:
+                self.travel_while_tripped += moved
+                if self.stop_lag is None and not self.panel.healthy:
+                    self.stop_lag = self.t - self.tripped_since
+            for item in self.items:
+                before = item.position
+                item.position += moved
+                if before < SS_EYE_BREAK <= item.position:
+                    self.crossings.append(self.t)
+        elif self.tripped_since is not None and self.stop_lag is None and not self.panel.healthy:
+            self.stop_lag = self.t - self.tripped_since
+
+        still = []
+        for item in self.items:
+            if item.position >= SS_REMOVER_POS:
+                self.removed.append(item)
+            else:
+                still.append(item)
+        self.items = still
+
+        self.tags.set("part_present.detect",
+                      self._eye(self.items, SS_EYE_POS, SS_EYE_WINDOW))
+        self.tags.set("counter.count", len(self.removed))
+
+
+def grade_start_stop(watched: Watched, engine: GradedEngine, report: Report,
+                     duration: float) -> None:
+    sim: StartStopScene = watched.inner
+    batch = sim.batches[0] if sim.batches else None
+    made = len(sim.crossings) - batch["crossings_at"] if batch else 0
+    target = batch["target"] if batch else sim.batch_size
+    # Anything that crossed the eye more than four seconds after the target was
+    # met is a line that did not stop itself.
+    overrun = 0
+    if batch:
+        hits = sim.crossings[batch["crossings_at"]:]
+        if len(hits) >= target:
+            at_target = hits[target - 1]
+            overrun = sum(1 for h in hits if h > at_target + 4.0)
+
+    report.evidence.update({
+        "batch": {"target": target, "made": made, "overrun": overrun},
+        "crossings": len(sim.crossings),
+        "removed": len(sim.removed),
+        "estop": {
+            "travel_while_tripped_m": round(sim.travel_while_tripped, 3),
+            "allowed_m": round(SS_BELT_SPEED * ESTOP_LIMIT, 3),
+            "stop_lag_s": None if sim.stop_lag is None else round(sim.stop_lag, 3),
+        },
+        "belt_running_fraction": round(watched.held_true("belt.rotate"), 3),
+        "presses": sim.panel.presses,
+        "produced_display": sim.num("produced.value"),
+    })
+
+    allowed = SS_BELT_SPEED * ESTOP_LIMIT
+    report.add("line.ran",
+               len(sim.removed) >= 4,
+               f"{len(sim.removed)} cartons reached the far end (at least 4 needed)")
+    report.add("estop.stopped_the_belt",
+               sim.travel_while_tripped <= allowed,
+               f"the belt moved {sim.travel_while_tripped * 1000:.0f} mm while the "
+               f"station was tripped (at most {allowed * 1000:.0f} mm, which is "
+               f"{ESTOP_LIMIT * 1000:.0f} ms of belt)")
+    report.add("batch.hit_the_number",
+               made == target,
+               f"the batch made {made} against a pot of {target}")
+    report.add("batch.stopped_itself",
+               overrun == 0,
+               "the line stopped itself at the target" if not overrun
+               else f"{overrun} more carton(s) went past the eye after the target was met")
+
+    _start_stop_feedback(report, watched, sim, made, target, overrun, allowed)
+
+
+def _start_stop_feedback(report, watched, sim, made, target, overrun, allowed) -> None:
+    say = report.feedback.append
+    belt = watched.held_true("belt.rotate")
+
+    if belt == 0.0:
+        say("The belt never ran. `belt.rotate` is a PLC output and nothing "
+            "downstream matters until your program writes it.")
+    if not sim.removed and belt > 0:
+        say("The belt ran but nothing reached the far end. `emitter.emit` makes "
+            "one carton on each RISING edge -- holding it true makes exactly one.")
+
+    if sim.travel_while_tripped > allowed:
+        say(f"The belt kept moving with the station tripped -- "
+            f"{sim.travel_while_tripped * 1000:.0f} mm of it. `panel.estop` is "
+            f"NORMALLY CLOSED: true means healthy, so the mushroom reads FALSE. "
+            f"And the trip has to latch: releasing the mushroom must not restart "
+            f"anything, and Start must do nothing until Reset has cleared it.")
+
+    if made > target:
+        say(f"The batch overran: {made} cartons for a pot of {target}. The pot is "
+            f"read fresh, not latched at power-up -- this run set it twice.")
+    elif made < target and belt > 0:
+        say(f"The batch stopped {target - made} short of the pot. Count the "
+            f"RISING edge of `part_present.detect`; it stays true for as long as "
+            f"a carton sits in the beam, which at this belt speed is many scans.")
+    elif overrun:
+        say("The line reached its target and carried on. At the target it has to "
+            "stop itself -- nobody presses Stop for it.")
+    elif made == target and sim.travel_while_tripped <= allowed:
+        say(f"The batch landed exactly: {made} of {target}, and the line stopped "
+            f"itself. The E-stop held the belt inside "
+            f"{ESTOP_LIMIT * 1000:.0f} ms and Start would not clear the latch.")
+
+
+def _summary_start_stop(evidence: dict, out) -> None:
+    batch, estop = evidence["batch"], evidence["estop"]
+    out(f"batch of {batch['target']}: made {batch['made']}, "
+        f"{batch['overrun']} past the target")
+    out(f"{evidence['crossings']} cartons crossed the eye, "
+        f"{evidence['removed']} reached the far end")
+    out(f"belt travel while tripped {estop['travel_while_tripped_m'] * 1000:.0f} mm "
+        f"(at most {estop['allowed_m'] * 1000:.0f} mm)")
+
+
+#: Every scene this tool can mark, and what it says it marks.
 RUBRICS = {
     "sorting-by-height": {
         "title": "Sorting by height",
@@ -463,9 +954,29 @@ RUBRICS = {
         "build": build_sorting_scene,
         "observe": observe_sorting,
         "grade": grade_sorting,
+        "summary": _summary_sorting,
+        "duration": 60.0,
+        "references": ("good", "blind", "greedy"),
         "tags": ("conveyor.rotate, emitter.emit, pusher.extend are yours to write; "
                  "sensor_low.detect, sensor_high.detect, pusher.extended, "
                  "pusher.retracted, counter.tall, counter.short are the line's."),
+    },
+    "start-stop-station": {
+        "title": "Start / stop station",
+        "task": ("Run a batch of the size the pot asks for and stop when it is "
+                 "made. The mushroom is normally closed and its trip latches: "
+                 "only Reset clears it, and Reset alone starts nothing. Reset "
+                 "also clears the batch count."),
+        "build": StartStopScene,
+        "observe": None,
+        "grade": grade_start_stop,
+        "summary": _summary_start_stop,
+        "duration": 60.0,
+        "references": ("good", "noestop", "runon"),
+        "tags": ("belt.rotate, emitter.emit, produced.value, panel.green, "
+                 "panel.red are yours to write; panel.start, panel.stop, "
+                 "panel.reset, panel.estop, panel.setpoint, part_present.detect, "
+                 "counter.count are the line's."),
     },
 }
 
@@ -537,20 +1048,89 @@ def check_integrity(watched: Watched, engine: GradedEngine, report: Report,
 # `factoryforge-sidecar connect` uses -- so they cross the same seam a real
 # controller does. They run in this process, which a real one never does.
 
-REFERENCE_CHOICES = ("good", "blind", "greedy", "idle", "forcer")
+#: Two of these are the same on every scene, so they are written once: a
+#: controller that connects and does nothing must never be able to pass, and a
+#: controller that forces its way to a flattering number must be disqualified
+#: rather than failed. The rest are per scene, because a wrong answer is only
+#: interesting when it is wrong about that scene's own lesson.
+SHARED_REFERENCES = ("idle", "forcer")
 
 #: The emitter makes one carton per rising edge. 1.8s apart is comfortably
 #: more than the 1.2s a carton takes to clear the pusher.
 EMIT_PULSE = 0.2
 EMIT_GAP = 1.6
 
+#: A reference controller's scan. Comfortably above Windows' 15.6 ms timer
+#: floor, where a shorter sleep does not sleep at all (AGENTS.md gotcha 2).
+SCAN = 0.05
 
-async def _feed(bus, stop: asyncio.Event) -> None:
+
+async def _feed(bus, stop: asyncio.Event, gap: float = EMIT_GAP,
+                tag: str = "emitter.emit") -> None:
     while not stop.is_set():
-        await bus.write("emitter.emit", True)
+        await bus.write(tag, True)
         await asyncio.sleep(EMIT_PULSE)
-        await bus.write("emitter.emit", False)
-        await asyncio.sleep(EMIT_GAP)
+        await bus.write(tag, False)
+        await asyncio.sleep(gap)
+
+
+class Scanner:
+    """A reference controller's scan loop, with the panel already solved.
+
+    Every scene below that has an operator station wants the same three things
+    -- momentary edges, a normally-closed mushroom, a latch only Reset clears --
+    and writing that four times would be four chances to write it differently.
+    This is the same contract `Station` in `tools/try_scene.py` implements
+    against the 3D engine, and it is deliberately the *correct* one: a wrong
+    reference is wrong about its scene's lesson, not about the panel.
+    """
+
+    def __init__(self, bus, latch_estop: bool = True) -> None:
+        self.bus = bus
+        self.latch_estop = latch_estop
+        self.running = False
+        self.tripped = False
+        self._prev = {"start": False, "stop": False, "reset": False}
+
+    def bit(self, tag_id: str) -> bool:
+        value = self.bus.read(tag_id)
+        return bool(value) if value is not None else False
+
+    def num(self, tag_id: str) -> float:
+        value = self.bus.read(tag_id)
+        return float(value) if value is not None else 0.0
+
+    @property
+    def setpoint(self) -> float:
+        return self.num("panel.setpoint")
+
+    def scan(self) -> dict[str, bool]:
+        now = {k: self.bit(f"panel.{k}") for k in ("start", "stop", "reset")}
+        edges = {k: now[k] and not self._prev[k] for k in now}
+        self._prev = now
+
+        healthy = self.bit("panel.estop")
+        if self.latch_estop and not healthy:
+            self.tripped = True
+        elif edges["reset"]:
+            self.tripped = False
+
+        if self.tripped or edges["stop"]:
+            self.running = False
+        elif edges["start"] and (healthy or not self.latch_estop):
+            self.running = True
+        edges["healthy"] = healthy
+        return edges
+
+    def lamps(self) -> dict:
+        return {"panel.green": self.running, "panel.red": self.tripped}
+
+
+async def run_scan(bus, stop: asyncio.Event, body, period: float = SCAN) -> None:
+    """Call `body(dt)` on a fixed scan until told to stop."""
+    while not stop.is_set():
+        await body(period)
+        await asyncio.sleep(period)
 
 
 async def _stroke(bus, delay: float, hold: float = 0.5) -> None:
@@ -602,24 +1182,115 @@ async def _idle(bus, stop: asyncio.Event) -> None:
 
 
 async def _forcer(bus, stop: asyncio.Event) -> None:
-    """Runs the line, never sorts, and forces the counters to look right."""
-    await bus.write("conveyor.rotate", True)
-    feeder = asyncio.create_task(_feed(bus, stop))
+    """Forces whatever counter the scene has, so the numbers read well.
+
+    Generic, because every scene has something a controller would rather lie
+    about than earn. It pins every simulator-owned counter it can see.
+    """
+    targets = {tag.id: 20 for tag in bus.table
+               if tag.id.endswith((".count", ".total"))
+               or tag.id in ("counter.tall", "counter.short")}
+    run_tags = [t for t in ("conveyor.rotate", "belt.rotate", "buffer.run",
+                            "infeed.rotate", "scale.rotate") if t in bus.table]
+    for tag_id in run_tags:
+        await bus.write(tag_id, True)
+    feeder = (asyncio.create_task(_feed(bus, stop))
+              if "emitter.emit" in bus.table else None)
     try:
         while not stop.is_set():
-            await bus.force({"counter.tall": 20, "counter.short": 20})
+            await bus.force(targets or {"panel.green": True})
             await asyncio.sleep(0.5)
     finally:
-        feeder.cancel()
+        if feeder is not None:
+            feeder.cancel()
 
 
-_REFERENCE = {"good": _good, "blind": _blind, "greedy": _greedy,
-              "idle": _idle, "forcer": _forcer}
+# --- start / stop station references ------------------------------------
+
+async def _ss_body(bus, stop, latch_estop: bool, stop_at_target: bool) -> None:
+    """One implementation, three behaviours, so the two wrong ones differ from
+    the right one in exactly one place and nothing else."""
+    scanner = Scanner(bus, latch_estop=latch_estop)
+    state = {"made": 0, "present": False, "feed": 0.0, "emit": False}
+
+    async def body(dt: float) -> None:
+        edges = scanner.scan()
+        if edges["reset"]:
+            state["made"] = 0
+
+        target = int(round(scanner.setpoint))
+        present = scanner.bit("part_present.detect")
+        if present and not state["present"] and scanner.running:
+            state["made"] += 1
+        state["present"] = present
+
+        if stop_at_target and target > 0 and state["made"] >= target:
+            scanner.running = False
+
+        if scanner.running:
+            state["feed"] -= dt
+            if state["feed"] <= 0.0:
+                state["emit"] = not state["emit"]
+                state["feed"] = 1.2 if state["emit"] else 0.3
+        else:
+            state["emit"] = False
+
+        await bus.write_many({"belt.rotate": scanner.running,
+                              "emitter.emit": state["emit"],
+                              "produced.value": state["made"],
+                              **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
 
 
-async def start_reference(kind: str, url: str):
+async def _ss_good(bus, stop):
+    """What the exercise asks for: a latching E-stop and a batch on the pot."""
+    await _ss_body(bus, stop, latch_estop=True, stop_at_target=True)
+
+
+async def _ss_noestop(bus, stop):
+    """Reads Start and Stop and never reads the mushroom. The belt keeps
+    running through the strike, which is the one thing this station is for."""
+    await _ss_body(bus, stop, latch_estop=False, stop_at_target=True)
+
+
+async def _ss_runon(bus, stop):
+    """Counts, displays the count, and never stops at the target -- the batch
+    controller that is really just a conveyor with a display on it."""
+    await _ss_body(bus, stop, latch_estop=True, stop_at_target=False)
+
+
+#: `{scene: {name: controller}}`, plus the two shared ones. Every scene has a
+#: `good` that must pass and at least one wrong answer that must fail for that
+#: scene's own reason -- the rubric is only known to work when both have been
+#: watched (AGENTS.md gotcha 24).
+REFERENCES: dict[str, dict] = {
+    "sorting-by-height": {"good": _good, "blind": _blind, "greedy": _greedy},
+    "start-stop-station": {"good": _ss_good, "noestop": _ss_noestop,
+                           "runon": _ss_runon},
+}
+
+_SHARED = {"idle": _idle, "forcer": _forcer}
+
+
+def reference_for(scene: str, kind: str):
+    return REFERENCES.get(scene, {}).get(kind) or _SHARED.get(kind)
+
+
+def reference_choices() -> tuple[str, ...]:
+    names = set(SHARED_REFERENCES)
+    for table in REFERENCES.values():
+        names |= set(table)
+    return tuple(sorted(names))
+
+
+async def start_reference(kind: str, url: str, scene: str):
     """Connect a reference controller. Returns an awaitable that stops it."""
     from factoryforge_sidecar.tagbus import TagBusClient       # noqa: PLC0415
+
+    controller = reference_for(scene, kind)
+    if controller is None:
+        raise RuntimeError(f"{scene} has no {kind!r} reference controller")
 
     bus = TagBusClient(url)
     stop = asyncio.Event()
@@ -631,7 +1302,7 @@ async def start_reference(kind: str, url: str):
             raise RuntimeError("reference controller never received a describe")
         await asyncio.sleep(0.05)
 
-    task = asyncio.create_task(_REFERENCE[kind](bus, stop))
+    task = asyncio.create_task(controller(bus, stop))
 
     async def shutdown() -> None:
         stop.set()
@@ -663,7 +1334,7 @@ async def run_grading(args) -> Report:
     reference = None
     try:
         if args.reference:
-            reference = await start_reference(args.reference, engine.url)
+            reference = await start_reference(args.reference, engine.url, args.scene)
 
         try:
             await asyncio.wait_for(engine.arrived.wait(), timeout=args.wait)
@@ -745,35 +1416,28 @@ def print_summary(report: Report, args) -> None:
         print(f"  [{'ok' if check.ok else 'XX'}] {check.id:<30} {check.detail}")
 
     evidence = report.evidence
-    if "pusher" in evidence:
-        pusher = evidence["pusher"]
+    summary = RUBRICS.get(report.scene, {}).get("summary")
+    # Only once the run reached a verdict about the plant. A disqualified or
+    # aborted run has no plant evidence to print, and a summary that assumed
+    # otherwise would raise on the one path a student most needs to read.
+    if summary is not None and any(not c.id.startswith("integrity.")
+                                   for c in report.checks):
         print()
-        print(f"  fed {evidence['emitted']}, sorted {evidence['sorted']}, "
-              f"{evidence['still_on_belt']} still on the belt")
-        print(f"  chute   {evidence['chute']['total']:>3}  "
-              f"({evidence['chute']['tall']} tall, {evidence['chute']['short']} short)")
-        print(f"  far end {evidence['far_end']['total']:>3}  "
-              f"({evidence['far_end']['short']} short, {evidence['far_end']['tall']} tall)")
-        window = pusher["required_window_s"]
-        measured = pusher["mean_delay_after_beam_s"]
-        print(f"  pusher fired {pusher['fired']}x, "
-              f"{'never' if measured is None else f'{measured:.2f}s'} after the beam "
-              f"(needs {window[0]:.2f}–{window[1]:.2f}s)")
-        if evidence["misrouted"]:
-            print("  misrouted:")
-            for entry in evidence["misrouted"][:8]:
-                print(f"    carton {entry['carton']:>3} ({entry['height']}) "
-                      f"-> {entry['lane']} at {entry['at']:.1f}s")
+        try:
+            summary(evidence, lambda line: print("  " + line))
+        except (KeyError, TypeError, ValueError):
+            pass
 
     if report.feedback:
         print()
         for line in report.feedback:
             print(_wrap("  - " + line))
 
+    failed = [c.id for c in report.checks if not c.ok]
     print()
     print(f"RESULT grade={report.verdict} scene={report.scene} "
-          f"sorted={evidence.get('sorted', 0)} "
-          f"misrouted={len(evidence.get('misrouted', []))} "
+          f"checks={len(report.checks) - len(failed)}/{len(report.checks)} "
+          f"failed={','.join(failed) or 'none'} "
           f"forced={len(evidence.get('forced_tags', {}))}")
 
 
@@ -792,8 +1456,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scene", default="sorting-by-height",
                         help="scene id (see --list)")
     parser.add_argument("--student", default=None, help="name for the report")
-    parser.add_argument("--duration", type=float, default=DEFAULT_DURATION,
-                        help="seconds to watch once the controller connects")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="seconds to watch once the controller connects "
+                             "(default: the scene's own, since an exercise that "
+                             "heats a plate needs longer than one that pushes a "
+                             "carton)")
     parser.add_argument("--wait", type=float, default=DEFAULT_WAIT,
                         help="seconds to wait for a controller before giving up")
     parser.add_argument("--seed", type=int, default=None,
@@ -806,19 +1473,30 @@ def main(argv: list[str] | None = None) -> int:
                         help="write the full report here (- for stdout)")
     parser.add_argument("--quiet", action="store_true",
                         help="suppress everything but the RESULT line")
-    parser.add_argument("--reference", choices=REFERENCE_CHOICES, default=None,
+    parser.add_argument("--reference", choices=reference_choices(), default=None,
                         help="grade a built-in controller instead of waiting for "
-                             "one, to check the grader itself")
+                             "one, to check the grader itself. Which ones a scene "
+                             "has is in --list")
     args = parser.parse_args(argv)
 
     if args.list:
         for scene_id, rubric in sorted(RUBRICS.items()):
+            refs = ", ".join(tuple(rubric["references"]) + SHARED_REFERENCES)
             print(f"{scene_id}\n    {rubric['title']} — {rubric['task']}")
+            print(f"    {rubric['duration']:g}s window; references: {refs}")
         return 0
 
     if args.scene not in RUBRICS:
         print(f"RESULT grade=ERROR no rubric for {args.scene!r}; "
               f"known: {', '.join(sorted(RUBRICS))}", file=sys.stderr)
+        return EXIT[ERROR]
+    if args.duration is None:
+        args.duration = RUBRICS[args.scene]["duration"]
+    if args.reference and reference_for(args.scene, args.reference) is None:
+        print(f"RESULT grade=ERROR {args.scene} has no {args.reference!r} "
+              f"reference; it has: "
+              f"{', '.join(tuple(RUBRICS[args.scene]['references']) + SHARED_REFERENCES)}",
+              file=sys.stderr)
         return EXIT[ERROR]
     if args.bus_port and args.bus_port not in SUGGESTED_PORTS:
         print(f"note: --bus-port {args.bus_port} is outside "

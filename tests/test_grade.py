@@ -273,6 +273,59 @@ def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
     assert not any(c["id"].startswith("sort.") for c in report["checks"])
 
 
+# --- the other scenes, end to end -------------------------------------
+#
+# One PASS and one FAIL per scene, both real: a tag bus on an ephemeral port, a
+# controller on the far end of a websocket, and a verdict read out of the JSON
+# report. Nothing else answers the only question worth asking about a rubric,
+# which is whether it can tell a program that does the job from one that does
+# not (AGENTS.md gotcha 24).
+#
+# They cost wall clock -- a thermal plant takes as long to heat here as it does
+# in the engine -- and the windows below are the shortest each exercise can be
+# marked in rather than the windows an instructor would use. `--duration` on
+# the command line is longer for that reason.
+
+
+def graded(tmp_path, scene: str, reference: str, duration: float,
+           seed: int = 11) -> tuple[int, dict]:
+    out = tmp_path / f"{scene}-{reference}.json"
+    code = run("--scene", scene, "--reference", reference,
+               "--duration", duration, "--seed", seed, "--wait", 30, "--json", out)
+    return code, json.loads(out.read_text(encoding="utf-8"))
+
+
+def failed_ids(report: dict) -> set[str]:
+    return {c["id"] for c in report["checks"] if not c["ok"]}
+
+
+def test_the_start_stop_station_passes_a_latching_estop_and_an_exact_batch(tmp_path):
+    code, report = graded(tmp_path, "start-stop-station", "good", 45)
+    assert code == 0 and report["verdict"] == "PASS"
+    batch = report["evidence"]["batch"]
+    assert batch["made"] == batch["target"] and batch["overrun"] == 0
+    # Gotcha 16: a batch of the right size on a line that never moved is not a
+    # batch. Cartons have to have reached the far end.
+    assert report["evidence"]["removed"] >= 4
+
+
+def test_a_station_that_ignores_the_mushroom_fails_on_belt_travel(tmp_path):
+    """The whole point of this scene. The failure is measured in millimetres of
+    belt that moved while the station was tripped, not in the state of a lamp."""
+    code, report = graded(tmp_path, "start-stop-station", "noestop", 45)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "estop.stopped_the_belt" in failed_ids(report)
+    estop = report["evidence"]["estop"]
+    assert estop["travel_while_tripped_m"] > estop["allowed_m"]
+    assert any("NORMALLY CLOSED" in line for line in report["feedback"])
+
+
+def test_a_station_that_never_stops_at_the_target_fails_the_batch(tmp_path):
+    code, report = graded(tmp_path, "start-stop-station", "runon", 45)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"batch.hit_the_number", "batch.stopped_itself"} <= failed_ids(report)
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -291,13 +344,49 @@ def test_an_unknown_scene_is_an_error_not_a_crash(capsys):
     assert "no rubric" in capsys.readouterr().err
 
 
+MANIFEST = json.loads(
+    (ROOT / "engine" / "templates" / "manifest.json").read_text(encoding="utf-8"))
+SHIPPED = [entry["id"] for entry in MANIFEST]
+
+
 def test_list_names_only_the_scenes_that_are_really_marked(capsys):
+    """`--list` is a promise. A scene named there that has no rubric behind it
+    is a class told an exercise will be marked and then finding it is not."""
     assert run("--list") == 0
     listed = capsys.readouterr().out
-    assert "sorting-by-height" in listed
-    assert set(grade.RUBRICS) == {"sorting-by-height"}, (
-        "a scene was added to RUBRICS -- docs/GRADING.md claims one, and that "
-        "claim is the whole point of the 'what this does not do' section")
+    for scene_id in grade.RUBRICS:
+        assert scene_id in listed
+        assert scene_id in SHIPPED, (
+            f"{scene_id} is graded but is not a scene the engine ships")
+
+
+def test_the_claim_in_the_docs_matches_the_rubrics_that_exist():
+    """docs/GRADING.md's 'what this does not do' section is the honest half of
+    this tool, and the way it goes wrong is by being written once and then
+    outliving the code. Every scene with a rubric has to be named there, and
+    every shipped scene without one has to be named there too."""
+    doc = (ROOT / "docs" / "GRADING.md").read_text(encoding="utf-8")
+    for scene_id in grade.RUBRICS:
+        assert scene_id in doc, f"{scene_id} is graded and docs/GRADING.md never says so"
+    for scene_id in SHIPPED:
+        if scene_id not in grade.RUBRICS:
+            assert scene_id in doc, (
+                f"{scene_id} ships and is not graded, and docs/GRADING.md does "
+                f"not admit it")
+
+
+def test_every_rubric_has_a_right_answer_and_a_wrong_one():
+    """AGENTS.md gotcha 24: a rubric only ever seen to pass is a rubric nobody
+    knows the shape of. Each scene carries a `good` that must pass and at least
+    one controller that is wrong about *that scene's* lesson and must fail."""
+    for scene_id, rubric in grade.RUBRICS.items():
+        refs = rubric["references"]
+        assert refs[0] == "good", f"{scene_id}'s first reference is not `good`"
+        assert len(refs) >= 2, f"{scene_id} has no deliberately wrong controller"
+        for name in refs:
+            assert grade.reference_for(scene_id, name) is not None
+        for name in grade.SHARED_REFERENCES:
+            assert grade.reference_for(scene_id, name) is not None
 
 
 async def test_two_graded_runs_can_share_a_machine():
