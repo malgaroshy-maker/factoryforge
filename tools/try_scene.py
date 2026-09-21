@@ -121,13 +121,24 @@ class Engine:
             pass
 
 
-async def wait_for_port(timeout: float) -> bool:
+async def wait_for_port(timeout: float, proc: subprocess.Popen | None = None) -> str | None:
+    """None once the port is open, otherwise why it never opened.
+
+    `proc` is the engine we are waiting on. Without it this loop cannot tell
+    "still starting" from "died ten seconds ago": it burns the whole timeout
+    either way and then blames the port, which is the one thing that is not
+    wrong. A wait that cannot observe its own failure mode is the same defect
+    as a test that cannot -- see AGENTS.md gotcha 16, and the 52-minute poll
+    this project already paid for once (HP-54).
+    """
     deadline = time.perf_counter() + timeout
     while time.perf_counter() < deadline:
         if port_listening():
-            return True
+            return None
+        if proc is not None and proc.poll() is not None:
+            return f"the engine exited with code {proc.returncode} before opening the port"
         await asyncio.sleep(0.1)
-    return False
+    return f"the engine did not open the port within {timeout:g}s"
 
 
 async def connect(timeout: float = 15.0) -> tuple[TagBusClient, asyncio.Task]:
@@ -1909,8 +1920,9 @@ async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bo
         print(f"Starting engine for '{entry['title']}'...")
         eng = Engine(godot, entry)
 
-        if not await wait_for_port(20.0):
-            print("RESULT engine never opened the tag bus port")
+        why = await wait_for_port(20.0, eng.proc)
+        if why is not None:
+            print(f"RESULT {why}")
             print(eng.tail())
             eng.stop()
             return 1

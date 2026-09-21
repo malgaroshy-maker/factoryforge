@@ -175,8 +175,16 @@ class EngineProcess:
                     if probe.connect_ex(("127.0.0.1", BUS_PORT)) == 0:
                         time.sleep(0.5)      # let the describe go out
                         return self
+                # Ask whether it is still alive, not just whether the port is
+                # shut. Without this the loop spends its full thirty seconds
+                # and then blames the port for an engine that died on startup
+                # -- the port is the one thing that is not wrong (HP-54).
+                if self.proc.poll() is not None:
+                    raise RuntimeError(
+                        f"engine exited with code {self.proc.returncode} before "
+                        f"opening port {BUS_PORT}; see {self.log}")
                 time.sleep(0.25)
-            raise RuntimeError(f"engine never opened port {BUS_PORT}")
+            raise RuntimeError(f"engine never opened port {BUS_PORT} within 30s")
         except BaseException:
             # BaseException, not Exception: Ctrl-C during that minute of waiting
             # is the most likely way to get here and leaks the same process.
@@ -293,12 +301,20 @@ def section_b() -> None:
     code, out = run([sys.executable, "-m", "pytest", "-q", "tests"], timeout=600)
     match = re.search(r"(\d+) passed", out)
     failed = re.search(r"(\d+) failed", out)
+    # Skips too. A skip is neither a pass nor a failure, so counting only the
+    # first two makes a test that quietly stops running anywhere invisible in
+    # this line -- which is exactly how CI spent weeks measuring FakeUtil
+    # against itself, because snap7 was not installed and
+    # test_the_fake_agrees_with_real_snap7 hit its importorskip. The count was
+    # accurate and incomplete, and that is how a suite shrinks (HP-56).
+    skipped = re.search(r"(\d+) skipped", out)
     # Name the tests that failed, not just how many. A bare count sends you back
     # to run pytest yourself to find out what broke -- and if it was a flake,
     # the second run tells you nothing at all.
     names = re.findall(r"^(?:FAILED\s+)?(tests[/\][\w./\]+::[\w\[\]-]+)", out, re.M)
     detail = (f"{match.group(1) if match else '?'} passed"
-              + (f", {failed.group(1)} FAILED" if failed else ""))
+              + (f", {failed.group(1)} FAILED" if failed else "")
+              + (f", {skipped.group(1)} skipped" if skipped else ""))
     if names:
         detail += ": " + ", ".join(dict.fromkeys(names))
     record("B1", "pytest suite", code == 0, detail)
@@ -607,7 +623,23 @@ def section_g() -> None:
             [sys.executable, "-m", "factoryforge_sidecar", "connect", "--driver", "mock",
              "--duration", "20", "--port", str(BUS_PORT)],
             cwd=SIDECAR, stdout=handle, stderr=subprocess.STDOUT)
-        time.sleep(2.0)   # let it connect and receive the describe
+        # Wait for evidence that it connected, not a guessed two seconds. The
+        # printer loop only runs once the describe has arrived, so an "OUT "
+        # line is proof. Under load -- another engine building, a parallel
+        # plan -- two seconds was not always enough, and the sidecar was then
+        # killed before it had connected at all: nothing to lose the
+        # connection, nothing logged, and a FAIL reading "did not notice the
+        # engine die". That is this check's own subject, so the failure
+        # impersonated the bug (gotcha 2: wait on events, never on a sleep).
+        connected = False
+        for _ in range(100):                      # 20s ceiling
+            handle.flush()
+            if "OUT " in g5_log.read_text(encoding="utf-8", errors="replace"):
+                connected = True
+                break
+            if sidecar_proc.poll() is not None:   # it died; stop waiting on it
+                break
+            time.sleep(0.2)
         eng.proc.terminate()
         try:
             eng.proc.wait(timeout=10)
@@ -622,8 +654,10 @@ def section_g() -> None:
         handle.close()
     g5_out = g5_log.read_text(encoding="utf-8", errors="replace") if g5_log.exists() else ""
     record("G5", "the sidecar notices when the engine dies mid-run and retries",
-           "connection lost" in g5_out and "retrying" in g5_out,
-           "" if "connection lost" in g5_out else g5_out.strip()[-160:])
+           connected and "connection lost" in g5_out and "retrying" in g5_out,
+           "" if connected and "connection lost" in g5_out
+           else ("the sidecar never connected, so there was nothing to lose"
+                 if not connected else g5_out.strip()[-160:]))
 
     # G6: forcing an input tag while paused must still reach the bus. Pausing
     # used to zero the fixed-timestep accumulator that gated SendUpdates(), so
