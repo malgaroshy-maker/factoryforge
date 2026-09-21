@@ -82,8 +82,6 @@ import scene as scene_model                             # noqa: E402
 #: Fixed ports were removed project-wide under HP-53 for exactly that reason.
 SUGGESTED_PORTS = range(7500, 7511)
 
-#: How long the grader keeps the scene running after the controller connects.
-DEFAULT_DURATION = 60.0
 #: How long it waits for a controller before giving up with ERROR.
 DEFAULT_WAIT = 120.0
 
@@ -525,10 +523,6 @@ def _summary_sorting(evidence: dict, out) -> None:
 # the same way -- but a forced tag is this tool's disqualification signal, so
 # the models reproduce the *behaviour* and never the mechanism: the plant simply
 # ignores a command it is not obeying. See docs/GRADING.md, which says so.
-
-
-def _quantise(value: float, step: float) -> float:
-    return round(value / step) * step
 
 
 @dataclass
