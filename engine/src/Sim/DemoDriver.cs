@@ -58,6 +58,7 @@ public partial class DemoDriver : Node
         ["accumulation-buffer"] = () => new AccumulationBufferProfile(),
         ["guarded-cell"] = () => new GuardedCellProfile(),
         ["batch-dosing"] = () => new BatchDosingProfile(),
+        ["palletising-cell"] = () => new PalletisingCellProfile(),
     };
 
     private IDemoProfile? _profile;

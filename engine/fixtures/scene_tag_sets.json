@@ -1170,6 +1170,243 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "palletising-cell": [
+      {
+        "id": "arm.atelbow",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.atshoulder",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.atwaist",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.elbow",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "arm.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "arm.grip",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "arm.height",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.holding",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "arm.inposition",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "arm.limit",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "arm.reach",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.shoulder",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "arm.stretch",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "arm.waist",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "atpick.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "emitter.emit",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "infeed.actual",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "infeed.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "infeed.run",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "infeed.speed",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "onpallet.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "pallet.change",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pallet.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.full",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.index",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pallet.layer",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.layerdone",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.nextx",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.nexty",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.nextz",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "pallet.slot",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pickstation.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pickstation.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "stop.down",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "stop.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "stop.raise",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "stop.up",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

@@ -292,6 +292,10 @@ public partial class Main : Node
         {
             AddChild(new ControlPartsSelfTest { Name = "ControlPartsSelfTest", Editor = _editor!, Tags = tags });
         }
+        if (_selfTest == "handlingparts")
+        {
+            AddChild(new HandlingPartsSelfTest { Name = "HandlingPartsSelfTest", Editor = _editor!, Tags = tags });
+        }
         if (_selfTest == "editorkeys")
         {
             AddChild(new EditorKeysSelfTest { Name = "EditorKeysSelfTest", Editor = _editor!, Tags = tags });

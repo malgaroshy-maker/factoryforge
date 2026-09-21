@@ -41,6 +41,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import socket
 import subprocess
@@ -2688,6 +2689,437 @@ async def drive_batch_dosing(bus: TagBusClient, duration: float, verbose: bool) 
     return not check.problems, "; ".join(check.problems)
 
 
+async def drive_palletising_cell(bus: TagBusClient, duration: float,
+                                 verbose: bool) -> tuple[bool, str]:
+    """Solve for joint angles, and index through a pattern (HA-04).
+
+    Four things are checked here that no other scene can check.
+
+    **The controller does the kinematics, and the machine agrees.** The arm
+    takes three angles, not a position, so `solve` below turns each target into
+    a pose -- and then the run compares the tool position the machine *reports*
+    against the point that pose was computed for. That single check is worth the
+    whole exercise: arithmetic done here, verified over the wire against
+    geometry built there, with no shared code between the two.
+
+    **The pattern repeats and the layers interlock.** Six cartons make a layer,
+    the seventh starts the next one a layer height higher, and slot 0 of layer 1
+    is deliberately not above slot 0 of layer 0. The run reads both and checks
+    they differ.
+
+    **A full pallet refuses.** Indexed past its capacity, `pallet.count` stops
+    moving and the published position stops with it -- so a program that ignores
+    `full` places on the same slot rather than stacking into the air.
+
+    **The moves are staged.** A joint-space move bows a long way off the chord
+    between its endpoints, so a carton flown straight from the pick to a slot
+    sweeps through the stack. This lifts, swings on the waist alone -- one joint
+    moves the tool on an exact horizontal circle and cannot dip -- aligns the
+    radius, and only then descends. Mirrors PalletisingCellProfile.
+    """
+    #: Where the cell's furniture is, in the arm's own frame. Template
+    #: knowledge, exactly as PICK_AT/PLACE_AT are for the gantry cell: arm at
+    #: (-0.57, -0.85), pick stop at (-0.57, 0), pallet centre at (0.10, -0.85).
+    PICK_LOCAL_Z = 0.85
+    PALLET_LOCAL_X = 0.67
+    #: Tool height for a pick off the belt, and for transit above a full stack.
+    PICK_Y, TRANSIT_Y = 0.16, 0.72
+    #: Tool above the drop surface so the carton's underside lands level with
+    #: it: the arm holds a carton half its height plus 20 mm below the tool.
+    CARTON_DROP = 0.13
+    #: Degrees of axis error counted as arrived, wider than the machine's own
+    #: in-position window so the two never disagree in a way that stalls it.
+    ARRIVAL = 1.8
+    #: Shortest link `solve` will divide by.
+    MIN_LINK = 0.05
+    FEED_INTERVAL = 1.6
+
+    check = Checks(verbose)
+    state = {
+        "step": "measure_stretch",
+        "settle": 0.0,
+        "feed": 1.0,
+        "placed": 0,
+        "attempts": 0,
+        "empty": 0,
+        "unreachable": 0,
+        "worst_ik_error": 0.0,
+        "layer_seen": 0,
+        "layerdone_seen": False,
+        "cmd": (0.0, 0.0, 0.0),
+        "slot": (0.0, 0.0, 0.0),
+        "geom": None,          # (shoulder height, upper arm, forearm), measured
+        "slot0": {},           # layer -> (x, z) of its first slot
+        "index_hold": 0,
+    }
+
+    def solve(target: tuple[float, float, float]):
+        """Inverse kinematics for a waist and two links.
+
+        The elbow comes from the law of cosines on the triangle
+        shoulder-elbow-tool; the shoulder is the angle up to the target plus the
+        angle the upper arm stands off that line. Elbow-up of the two solutions,
+        which keeps the forearm out of whatever the arm is reaching over.
+
+        Three guards, in the order they bite, because every one is reachable
+        from a scene somebody edited: a zero-length link divides the elbow term
+        by zero, a target on the shoulder axis makes `d` zero and divides the
+        shoulder term by it, and a target further off than the links reach has
+        no solution at all. The clamps on the cosines would turn that last one
+        into a silently wrong pose, so the reach is checked *before* them -- and
+        it is the case that actually happens.
+        """
+        x, y, z = target
+        waist = math.degrees(math.atan2(-z, x))
+        height, upper, fore = state["geom"]
+        if upper < MIN_LINK or fore < MIN_LINK:
+            return None
+
+        radius = math.hypot(x, z)
+        rise = y - height
+        distance = math.hypot(radius, rise)
+        if distance < MIN_LINK or distance > upper + fore:
+            return None
+
+        cos_elbow = (distance ** 2 - upper ** 2 - fore ** 2) / (2.0 * upper * fore)
+        cos_offset = (distance ** 2 + upper ** 2 - fore ** 2) / (2.0 * distance * upper)
+        elbow = math.degrees(math.acos(max(-1.0, min(1.0, cos_elbow))))
+        offset = math.acos(max(-1.0, min(1.0, cos_offset)))
+        return waist, math.degrees(math.atan2(rise, radius) + offset), elbow
+
+    def command(writes: dict, pose: tuple[float, float, float]) -> None:
+        state["cmd"] = pose
+        writes["arm.waist"], writes["arm.shoulder"], writes["arm.elbow"] = pose
+
+    def move_to(writes: dict, target: tuple[float, float, float]) -> bool:
+        pose = solve(target)
+        if pose is None:
+            state["unreachable"] += 1
+            return False
+        command(writes, pose)
+        return True
+
+    def arrived() -> bool:
+        """Every axis has reached the pose *this step* commanded.
+
+        Deliberately not `arm.inposition` on its own: that bit compares the axes
+        to the pose the machine currently holds, and a pose written this scan
+        has not reached it yet -- so on the scan that issues a move it still
+        reads "arrived", at the pose we are trying to leave. The gantry cell's
+        driver trusted the equivalent bit and released every carton straight
+        back onto the pick station.
+        """
+        want = state["cmd"]
+        return (abs(num(bus, "arm.atwaist") - want[0]) <= ARRIVAL
+                and abs(num(bus, "arm.atshoulder") - want[1]) <= ARRIVAL
+                and abs(num(bus, "arm.atelbow") - want[2]) <= ARRIVAL)
+
+    def slot_target() -> tuple[float, float, float]:
+        return (PALLET_LOCAL_X + num(bus, "pallet.nextx"),
+                num(bus, "pallet.nexty") + CARTON_DROP,
+                num(bus, "pallet.nextz"))
+
+    async def tick(dt: float) -> None:
+        station.scan()
+        running = station.running
+
+        at_pick = bit(bus, "atpick.detect")
+        writes = {
+            "stop.raise": running,
+            "infeed.run": running,
+            "infeed.speed": station.setpoint if running else 0.0,
+            # Runs even with a carton indexed: it is what holds the queue
+            # against the blade. Stopping it is the accumulation interlock that
+            # wedges a carton on the joint between two decks.
+            "pickstation.rotate": running,
+            # An Int tag, and the bus refuses a float for one -- which is the
+            # whole point of the tag model having types at all.
+            "onpallet.value": int(num(bus, "pallet.count")),
+            "emitter.emit": False,
+            **station.lamps(),
+        }
+
+        # Hold the index high for a few scans rather than one.
+        #
+        # The station takes a rising edge, so a longer pulse still indexes
+        # exactly once. But a 20 ms controller scan and a 16.7 ms physics tick
+        # are close enough that a one-scan pulse sent over the wire is
+        # sometimes never sampled high at all -- the first version of this
+        # driver placed six cartons while the pallet counted one, and the cell
+        # looked perfect from every other angle. The engine-side profile has no
+        # such problem because it runs *on* the physics clock; a real PLC does
+        # not, which is exactly why this is the wire-level exercise.
+        #
+        # Only this controller's own pulse is driven here, so a pulse written
+        # by the checks below, once the line is stopped, is left alone.
+        if state["index_hold"] > 0:
+            state["index_hold"] -= 1
+            writes["pallet.index"] = state["index_hold"] > 0
+
+        if running and not at_pick:
+            state["feed"] -= dt
+            if state["feed"] <= 0.0:
+                state["feed"] = FEED_INTERVAL
+                writes["emitter.emit"] = True
+
+        if bit(bus, "pallet.layerdone"):
+            state["layerdone_seen"] = True
+        state["layer_seen"] = max(state["layer_seen"], int(num(bus, "pallet.layer")))
+        layer = int(num(bus, "pallet.layer"))
+        if int(num(bus, "pallet.slot")) == 0 and layer not in state["slot0"]:
+            state["slot0"][layer] = (num(bus, "pallet.nextx"), num(bus, "pallet.nextz"))
+
+        if not running:
+            # Stopped means stopped. The jaws stay as they are, so a trip does
+            # not drop a carried carton, and no pose is commanded at all -- which
+            # is what leaves the arm tags free for the checks below.
+            await write_present(bus, writes)
+            return
+
+        holding = bit(bus, "arm.holding")
+        step = state["step"]
+
+        if step == "measure_stretch":
+            # Straight out and level: the tool sits at shoulder height, at a
+            # radius of both links end to end. Measured rather than copied from
+            # the template, because the link lengths are sliders on the part and
+            # a hardcoded copy would place into thin air the day one moved.
+            command(writes, (0.0, 0.0, 0.0))
+            if arrived():
+                state["geom"] = (num(bus, "arm.height"), 0.0, num(bus, "arm.reach"))
+                command(writes, (0.0, 0.0, 90.0))
+                state["step"] = "measure_fold"
+        elif step == "measure_fold":
+            if arrived():
+                height, _, total = state["geom"]
+                upper = num(bus, "arm.reach")
+                state["geom"] = (height, upper, total - upper)
+                state["step"] = "topick"
+        elif step == "topick":
+            writes["arm.grip"] = False
+            if move_to(writes, (0.0, TRANSIT_Y, PICK_LOCAL_Z)) and arrived() and at_pick:
+                state["settle"] = 0.35
+                state["step"] = "descend"
+        elif step == "descend":
+            state["settle"] -= dt
+            if state["settle"] <= 0.0 and move_to(writes, (0.0, PICK_Y, PICK_LOCAL_Z)):
+                if arrived():
+                    state["settle"] = 0.2
+                    state["step"] = "grip"
+        elif step == "grip":
+            writes["arm.grip"] = True
+            state["settle"] -= dt
+            if state["settle"] <= 0.0:
+                state["attempts"] += 1
+                if holding:
+                    state["slot"] = slot_target()
+                    state["step"] = "lift"
+                else:
+                    # Jaws that closed on nothing go back to waiting rather than
+                    # flying an empty cycle and indexing the pattern past a slot
+                    # that never got a carton.
+                    state["empty"] += 1
+                    writes["arm.grip"] = False
+                    state["step"] = "topick"
+        elif step == "lift":
+            writes["arm.grip"] = True
+            if move_to(writes, (0.0, TRANSIT_Y, PICK_LOCAL_Z)) and arrived():
+                state["step"] = "swing"
+        elif step == "swing":
+            # Waist only: one joint moves the tool on an exact horizontal
+            # circle, so a carried carton cannot dip into the stack on the way
+            # across -- which a two-joint move to the same endpoint genuinely
+            # can, by about 175 mm on this arm.
+            writes["arm.grip"] = True
+            target = state["slot"]
+            command(writes, (math.degrees(math.atan2(-target[2], target[0])),
+                             state["cmd"][1], state["cmd"][2]))
+            if arrived():
+                state["step"] = "align"
+        elif step == "align":
+            writes["arm.grip"] = True
+            x, _, z = state["slot"]
+            if move_to(writes, (x, TRANSIT_Y, z)) and arrived():
+                state["step"] = "place"
+        elif step == "place":
+            writes["arm.grip"] = True
+            if move_to(writes, state["slot"]) and arrived():
+                # The assertion this scene exists for: the pose was solved here
+                # and the tool position is reported by the machine, so the two
+                # agreeing means the kinematics are right rather than merely
+                # self-consistent.
+                x, y, z = state["slot"]
+                error = math.hypot(num(bus, "arm.reach") - math.hypot(x, z),
+                                   num(bus, "arm.height") - y)
+                state["worst_ik_error"] = max(state["worst_ik_error"], error)
+                state["step"] = "release"
+        elif step == "release":
+            writes["arm.grip"] = False
+            if not holding:
+                writes["pallet.index"] = True
+                state["index_hold"] = 4
+                state["placed"] += 1
+                state["step"] = "retreat"
+        elif step == "retreat":
+            x, _, z = state["slot"]
+            if move_to(writes, (x, TRANSIT_Y, z)) and arrived():
+                state["step"] = "change" if bit(bus, "pallet.full") else "topick"
+        elif step == "change":
+            if not bit(bus, "pallet.change"):
+                writes["pallet.change"] = True
+            else:
+                writes["pallet.change"] = False
+                if not bit(bus, "pallet.full"):
+                    state["step"] = "topick"
+
+        await write_present(bus, writes)
+
+    station = Station(bus, faults=("arm.fault", "infeed.fault", "stop.fault"))
+    stop_event, task = controller(tick)
+    estop_ms = -1.0
+
+    try:
+        await turn_pot(bus, 70.0)
+        await asyncio.sleep(0.2)
+        estop_ms = await exercise_interlocks(bus, station, check,
+                                             lambda: bit(bus, "infeed.run"),
+                                             "the infeed drive command")
+
+        await press(bus, "panel.start")
+        await asyncio.sleep(1.5)
+        check.note(f"production begins: running={station.running} "
+                   f"step={state['step']} geom={state['geom']}")
+
+        await asyncio.sleep(max(duration, 55.0))
+        # Captured here, not read at the end: the fill-and-refuse checks below
+        # drive the pattern to the top of the pallet by hand, and the controller
+        # is still watching, so `layer_seen` afterwards is the fill's number and
+        # not production's.
+        produced_layers = state["layer_seen"] + 1
+        check.note(f"production ends: step={state['step']} "
+                   f"count={num(bus, 'pallet.count'):.0f} "
+                   f"layer={num(bus, 'pallet.layer'):.0f} slot0={state['slot0']}")
+
+        check(state["geom"] is not None and state["geom"][1] > 0.1,
+              f"the controller measured the arm before using it "
+              f"(shoulder {state['geom'][0]:.3f} m, links {state['geom'][1]:.3f} + "
+              f"{state['geom'][2]:.3f} m)" if state["geom"] else
+              "the controller measured the arm before using it (it never finished)")
+        check(state["placed"] >= 6,
+              f"the cell stacked at least a full layer ({state['placed']} placed) -- "
+              f"one carton is a cell that happens to work once, not a pattern")
+        # Exactly, not "at least": a rising edge sent over the wire can be
+        # missed and it can be double-counted, and the two failures look
+        # identical from a count that is merely large enough.
+        check(num(bus, "pallet.count") == state["placed"],
+              f"and the station counted exactly what the sequence placed "
+              f"({num(bus, 'pallet.count'):.0f} against {state['placed']})")
+        check(state["layer_seen"] >= 1,
+              f"the pattern wrapped onto a second layer (reached layer "
+              f"{state['layer_seen']})")
+        check(state["layerdone_seen"],
+              "and said so on pallet.layerdone as it went -- a level, so a slow "
+              "scan cannot miss it")
+        check(state["unreachable"] == 0,
+              f"every pose the sequence asked for was reachable "
+              f"({state['unreachable']} refusals)")
+        # 50 mm, and the number is not arbitrary: this driver calls an axis
+        # arrived within 1.8 degrees, which at a metre of reach is already
+        # about 30 mm of arc. Anything tighter asserts how long the axes were
+        # given to settle rather than whether the arithmetic was right -- and
+        # a genuinely wrong solve misses by tens of centimetres, not by two.
+        check(state["worst_ik_error"] < 0.05,
+              f"and the tool went where the kinematics said it would -- worst "
+              f"disagreement between the solved point and the position the "
+              f"machine reported was {state['worst_ik_error'] * 1000:.0f} mm")
+
+        first = state["slot0"].get(0)
+        second = state["slot0"].get(1)
+        if check(first is not None and second is not None,
+                 f"both layers published a first slot ({state['slot0']})"):
+            check(abs(first[0] - second[0]) > 0.05 or abs(first[1] - second[1]) > 0.05,
+                  f"and slot 0 of layer 1 is not above slot 0 of layer 0 -- the "
+                  f"layers interlock ({first} against {second})")
+
+        # Stop the line and take the pattern the rest of the way by hand. Filling
+        # a three-layer pallet a carton at a time would be a two-minute run; what
+        # is being checked is the station's refusal, not the arm's patience.
+        await press(bus, "panel.stop")
+        await asyncio.sleep(0.3)
+        for _ in range(24):
+            await bus.write_many({"pallet.index": True})
+            await asyncio.sleep(0.06)
+            await bus.write_many({"pallet.index": False})
+            await asyncio.sleep(0.04)
+
+        filled = num(bus, "pallet.count")
+        held_x, held_y = num(bus, "pallet.nextx"), num(bus, "pallet.nexty")
+        check(bit(bus, "pallet.full"),
+              f"indexed past its capacity, the pallet reports itself full "
+              f"({filled:.0f} cartons)")
+        for _ in range(3):
+            await bus.write_many({"pallet.index": True})
+            await asyncio.sleep(0.06)
+            await bus.write_many({"pallet.index": False})
+            await asyncio.sleep(0.04)
+        check(num(bus, "pallet.count") == filled,
+              f"and refuses further index pulses outright "
+              f"({num(bus, 'pallet.count'):.0f} against {filled:.0f})")
+        check(abs(num(bus, "pallet.nextx") - held_x) < 1e-4
+              and abs(num(bus, "pallet.nexty") - held_y) < 1e-4,
+              "with the published position held at the last slot -- a full "
+              "pallet does not invite a program to stack into the air")
+
+        await bus.write_many({"pallet.change": True})
+        await asyncio.sleep(0.15)
+        await bus.write_many({"pallet.change": False})
+        await asyncio.sleep(0.2)
+        check(num(bus, "pallet.count") == 0 and not bit(bus, "pallet.full"),
+              f"a pallet change starts an empty one "
+              f"({num(bus, 'pallet.count'):.0f} cartons)")
+
+        # A command past a mechanical stop is refused, and said so -- the thing
+        # a travel axis can never demonstrate, because every position it can be
+        # commanded to is one it can reach.
+        await bus.write_many({"arm.shoulder": 200.0})
+        await asyncio.sleep(1.8)
+        check(bit(bus, "arm.limit"),
+              "a command past the shoulder stop raises arm.limit")
+        check(abs(num(bus, "arm.atshoulder") - 105.0) < 1.0,
+              f"and the axis stops on the stop rather than going where it was "
+              f"told ({num(bus, 'arm.atshoulder'):.1f} deg of 105)")
+        await bus.write_many({"arm.shoulder": 40.0})
+        await asyncio.sleep(0.4)
+        check(not bit(bus, "arm.limit"),
+              "a command back inside the envelope clears it -- arm.limit "
+              "describes this scan, not a latched history")
+
+        # Seize the arm mid-move: every axis stops where it stands.
+        await bus.write_many({"arm.shoulder": 90.0, "arm.elbow": 20.0})
+        await asyncio.sleep(0.3)
+        await bus.force({"arm.fault": True})
+        await asyncio.sleep(0.3)
+        frozen = (num(bus, "arm.atshoulder"), num(bus, "arm.atelbow"))
+        await asyncio.sleep(1.5)
+        now = (num(bus, "arm.atshoulder"), num(bus, "arm.atelbow"))
+        check(abs(now[0] - frozen[0]) < 0.5 and abs(now[1] - frozen[1]) < 0.5,
+              f"a seized arm freezes where it stands (shoulder {frozen[0]:.1f} -> "
+              f"{now[0]:.1f}, elbow {frozen[1]:.1f} -> {now[1]:.1f} deg)")
+        check(not bit(bus, "arm.inposition"),
+              "and does not claim to have arrived, which is the only honest "
+              "thing it can say")
+        await bus.force(clear=["arm.fault"])
+    finally:
+        stop_event.set()
+        await task
+
+    print(f"RESULT pattern={'PASS' if not check.problems else 'FAIL'} "
+          f"placed={state['placed']} layers={produced_layers} "
+          f"ik_error={state['worst_ik_error'] * 1000:.0f}mm "
+          f"empty_picks={state['empty']}/{state['attempts']} estop={estop_ms:.0f}ms")
+    return not check.problems, "; ".join(check.problems)
+
+
 DRIVERS = {
     "sorting-by-height": drive_sorting_by_height,
     "start-stop-station": drive_start_stop_station,
@@ -2699,6 +3131,7 @@ DRIVERS = {
     "accumulation-buffer": drive_accumulation_buffer,
     "guarded-cell": drive_guarded_cell,
     "batch-dosing": drive_batch_dosing,
+    "palletising-cell": drive_palletising_cell,
 }
 
 #: The *production* window, not the whole run: every scene now runs the shared
@@ -2728,6 +3161,11 @@ DEFAULT_DURATION = {
     # each end on their own condition -- a batch reaching its number, an alarm
     # being raised -- rather than on a clock.
     "batch-dosing": 40.0,
+    # A layer is six cartons and an arm cycle is about seven seconds -- pick,
+    # lift, swing, align, place, retreat, all waiting on axis feedback rather
+    # than on a clock. Long enough for a layer to complete and the pattern to
+    # wrap onto the next one, which is the thing being checked.
+    "palletising-cell": 60.0,
 }
 
 
