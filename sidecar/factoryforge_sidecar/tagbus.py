@@ -291,8 +291,24 @@ class TagBusClient:
             for tag_id in cleared:
                 if tag_id in self.table:
                     self.table.clear_force(tag_id)
-            self._next_observe[0].update(forced_values)
-            self._next_observe[1].extend(cleared)
+            # Coalescing has to respect the order the frames arrived in. Merged
+            # independently, a tag forced, released and forced again while a
+            # hook was busy reached that hook in *both* collections -- and
+            # whoever applies the forced values and then the releases, which is
+            # the order the engine sends them in and the order this method
+            # itself applies them, ends up having dropped a pin that is still
+            # in effect. The cache above never had it, because the receive loop
+            # applies each frame as it lands; only the hooks saw it, and
+            # nothing subscribes to `observe` by default (HP-31).
+            queued_forced, queued_cleared = self._next_observe
+            for tag_id, value in forced_values.items():
+                queued_forced[tag_id] = value
+                if tag_id in queued_cleared:
+                    queued_cleared.remove(tag_id)
+            for tag_id in cleared:
+                queued_forced.pop(tag_id, None)
+                if tag_id not in queued_cleared:
+                    queued_cleared.append(tag_id)
             self._dispatch_wake.set()
         elif kind == "status":
             log.log(
@@ -367,6 +383,16 @@ class TagBusClient:
                     await self._run_hook(hook, forced, cleared)
             if values:
                 for hook in list(self._on_update):
+                    # A describe that arrived while these were being handed out
+                    # has already emptied the queue behind them, for the reason
+                    # that applies to these too: they are deltas against a tag
+                    # set nobody has any more. Stop delivering them rather than
+                    # finish the round -- `rebuild` re-reads the PLC, so there
+                    # is nothing here worth arriving late, and one of these ids
+                    # belonging to a different tag in the new scene is the whole
+                    # reason the epoch is stamped on a write.
+                    if self._next_describe is not None:
+                        break
                     await self._run_hook(hook, values)
 
     @staticmethod

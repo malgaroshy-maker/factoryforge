@@ -263,6 +263,14 @@ a hook is busy are coalesced: they are deltas, so the merge of two is the messag
 would have sent had it batched them, and a driver that has fallen behind wants the current
 state rather than a queue of history.
 
+Two rules follow from coalescing being a merge and not a queue. A `describe` ends the deltas
+behind it — including one already being handed to the hooks when it arrived, which stops
+there — because they are deltas against a tag set nobody has any more, and `rebuild` re-reads
+the plant before returning anyway. And the merge respects arrival order *across* an
+`observe`'s two collections: a tag forced, released and forced again while a hook is busy
+arrives forced, not forced *and* released, which applied in the order they are sent would
+leave the pin gone.
+
 ### Epoch ownership
 
 The **driver** owns cancellation of its own data flow. Anything still reading through the
