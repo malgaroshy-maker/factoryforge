@@ -26,6 +26,7 @@ import struct
 from dataclasses import dataclass
 
 from ..modbus import DataStore, ModbusTcpServer
+from ..modbus.server import DEFAULT_MAX_CONNECTIONS, DEFAULT_READ_TIMEOUT
 from ..tags import TagTable, TagValue
 from . import Driver, register
 
@@ -55,13 +56,37 @@ def _from_registers(type_: str, regs: list[int]) -> TagValue:
     return value - 0x10000 if value >= 0x8000 else value
 
 
+#: Addresses that reach only this machine. Binding anywhere else publishes a
+#: writable, unauthenticated simulator to everyone who can route to the host.
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
 @register("modbus-tcp")
 class ModbusTcpDriver(Driver):
-    def __init__(self, bus, host: str = "0.0.0.0", port: int = 502, **config) -> None:
+    def __init__(self, bus, host: str = "127.0.0.1", port: int = 502,
+                 max_connections: int = DEFAULT_MAX_CONNECTIONS,
+                 read_timeout: float = DEFAULT_READ_TIMEOUT, **config) -> None:
+        # Loopback by default, and binding wider is something you have to ask
+        # for. This driver used to default to "0.0.0.0" while the server class
+        # it wraps defaulted to "127.0.0.1" -- and the driver's default is the
+        # one that ships. Modbus has no authentication of any kind, so the
+        # wider bind hands anyone on the subnet write access to the machine:
+        # they can run the conveyor, fire the pusher and rewrite the counters,
+        # on a classroom network, without so much as a username.
         super().__init__(bus, host=host, port=port, **config)
         self.store = DataStore()
         self.store.on_write = self._on_master_write
-        self.server = ModbusTcpServer(self.store, host, port)
+        self.server = ModbusTcpServer(self.store, host, port,
+                                      max_connections=int(max_connections),
+                                      read_timeout=float(read_timeout))
+        if host not in _LOOPBACK:
+            log.warning(
+                "Modbus TCP will bind %s, which is reachable from outside this "
+                "machine. Modbus has no authentication: anyone who can reach "
+                "port %s can write every coil and register in the scene. Use "
+                "-o host 127.0.0.1 unless a PLC on the network has to reach it.",
+                host, port,
+            )
         self._by_tag: dict[str, Mapping] = {}
         self._by_address: dict[tuple[str, int], Mapping] = {}
         self._loop: asyncio.AbstractEventLoop | None = None

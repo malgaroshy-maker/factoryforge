@@ -31,6 +31,25 @@ SERVER_FAILURE = 0x04
 MAX_BITS = 2000
 MAX_REGS = 125
 
+#: A Modbus TCP ADU is at most 260 bytes: a 7-byte MBAP header and a 253-byte
+#: PDU. The MBAP `length` field counts the unit id plus the PDU, so it is
+#: between 2 (unit id + function code) and 254. Anything outside that is not a
+#: short read to wait on, it is a frame that will never arrive.
+MIN_MBAP_LENGTH = 2
+MAX_MBAP_LENGTH = 254
+
+#: How long a *partially delivered* frame may stay partial. There is no deadline
+#: on the gap between frames -- a master that polls once a minute is normal --
+#: but once the first byte of a header has landed, the rest of that frame is
+#: expected promptly. Without this, one peer that sends a byte and stops pins a
+#: coroutine and a connection slot for as long as the process runs.
+DEFAULT_READ_TIMEOUT = 10.0
+
+#: Nothing legitimate needs many masters at once, and the cost of a connection
+#: is a coroutine that can be made to wait. Cap it so a stranger cannot make the
+#: sidecar hold an unbounded number of them.
+DEFAULT_MAX_CONNECTIONS = 8
+
 
 class ModbusError(Exception):
     def __init__(self, code: int) -> None:
@@ -150,12 +169,30 @@ def handle_pdu(store: DataStore, pdu: bytes) -> bytes:
     raise ModbusError(ILLEGAL_FUNCTION)
 
 
+def error_response(pdu: bytes, code: int) -> bytes:
+    """The exception response for *pdu*, which may be empty.
+
+    Written out rather than inlined because the obvious spelling, `pdu[0] |
+    0x80`, indexes off the end of a zero-length PDU: a malformed frame then
+    raises IndexError inside the connection handler instead of producing the
+    reply the spec asks for, and takes the session down with it. A frame with no
+    function code has no function code to echo, so echo 0.
+    """
+    fc = pdu[0] if pdu else 0
+    return bytes([fc | 0x80, code])
+
+
 class ModbusTcpServer:
-    def __init__(self, store: DataStore, host: str = "127.0.0.1", port: int = 502) -> None:
+    def __init__(self, store: DataStore, host: str = "127.0.0.1", port: int = 502,
+                 max_connections: int = DEFAULT_MAX_CONNECTIONS,
+                 read_timeout: float = DEFAULT_READ_TIMEOUT) -> None:
         self.store = store
         self.host = host
         self.port = port
+        self.max_connections = int(max_connections)
+        self.read_timeout = float(read_timeout)
         self._server: asyncio.AbstractServer | None = None
+        self._clients: set[asyncio.StreamWriter] = set()
 
     @property
     def actual_port(self) -> int:
@@ -169,31 +206,66 @@ class ModbusTcpServer:
         log.info("Modbus TCP listening on %s:%d", self.host, self.actual_port)
 
     async def stop(self) -> None:
+        """Stop listening *and* end the sessions already established.
+
+        Closing only the listener leaves every connected master attached to a
+        datastore nothing updates any more, which is indistinguishable on the
+        wire from a running simulation that has stopped moving.
+        """
+        # Order matters, and not only for tidiness: since Python 3.12,
+        # `Server.wait_closed()` also waits for every connection handler to
+        # finish. A handler parked in readexactly() never finishes on its own,
+        # so closing the listener *first* and awaiting it deadlocks stop() for
+        # as long as one master stays connected. Close the sessions, then wait.
+        clients, self._clients = self._clients, set()
+        for writer in clients:
+            writer.close()
         if self._server:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        for writer in clients:
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+            except Exception:
+                log.debug("error closing a master session", exc_info=True)
 
     async def _client(self, reader: asyncio.StreamReader,
                       writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
+        if len(self._clients) >= self.max_connections:
+            log.warning("refusing master from %s: %d connections already open",
+                        peer, self.max_connections)
+            writer.close()
+            return
+        self._clients.add(writer)
         log.info("master connected from %s", peer)
         try:
             while True:
-                header = await reader.readexactly(7)
-                txn, proto_id, length, unit = struct.unpack(">HHHB", header)
+                # No deadline on the first byte: the gap between one master's
+                # polls is its own business. The deadline starts once a frame
+                # has, so the rest of *this* frame has to turn up.
+                first = await reader.readexactly(1)
+                rest = await asyncio.wait_for(
+                    reader.readexactly(6), self.read_timeout)
+                txn, proto_id, length, unit = struct.unpack(">HHHB", first + rest)
                 if proto_id != 0:
                     log.warning("bad protocol id %d from %s", proto_id, peer)
                     return
-                pdu = await reader.readexactly(length - 1)
+                if not MIN_MBAP_LENGTH <= length <= MAX_MBAP_LENGTH:
+                    log.warning("frame length %d from %s is out of range; closing",
+                                length, peer)
+                    return
+                pdu = await asyncio.wait_for(
+                    reader.readexactly(length - 1), self.read_timeout)
 
                 try:
                     response = handle_pdu(self.store, pdu)
                 except ModbusError as exc:
-                    response = bytes([pdu[0] | 0x80, exc.code])
+                    response = error_response(pdu, exc.code)
                 except Exception:
                     log.exception("handler failed")
-                    response = bytes([pdu[0] | 0x80, SERVER_FAILURE])
+                    response = error_response(pdu, SERVER_FAILURE)
 
                 writer.write(
                     struct.pack(">HHHB", txn, 0, len(response) + 1, unit) + response
@@ -201,6 +273,10 @@ class ModbusTcpServer:
                 await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
+        except asyncio.TimeoutError:
+            log.warning("master %s left a frame half-delivered for %gs; closing",
+                        peer, self.read_timeout)
         finally:
+            self._clients.discard(writer)
             log.info("master disconnected from %s", peer)
             writer.close()
