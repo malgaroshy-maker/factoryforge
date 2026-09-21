@@ -184,8 +184,9 @@ That is the whole build. Now prove it does something.
 entry alone, and `--self-test=partcontract` already checks nothing outside your
 file learned your type's name. Neither of them checks your machine *works*.
 
-Add a check to `--self-test=newparts` or `--self-test=lineparts` (or a new
-self-test of your own) that asserts an **effect**: not "the tag exists" but
+Add a check to `--self-test=newparts`, `--self-test=lineparts` or
+`--self-test=controlparts` (or a new self-test of your own) that asserts an
+**effect**: not "the tag exists" but
 "forcing `.fault` stopped the belt", "the reference ramped and `actual` lagged
 it", "a raised blade held a carton on a belt that was still running". A test
 that passes while the simulation does nothing is not a test, and it is
