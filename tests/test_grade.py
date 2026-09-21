@@ -1,0 +1,316 @@
+"""The headless grader: what it marks, and what it refuses to be fooled by.
+
+Most of these run the real thing end to end -- a real tag bus on a real
+ephemeral port, a controller on the other end of a real websocket -- because
+the one question worth asking about a grader is whether a program that does
+the job gets a PASS and a program that does not gets a FAIL, and neither is
+answerable from unit tests.
+
+That costs about a minute of wall clock, which is the bulk of it. The
+alternative is a grader whose only evidence is that its helper functions
+return the right numbers, and the project has been bitten by exactly that
+before (AGENTS.md gotcha 16).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+
+import grade                                      # noqa: E402
+import scene as scene_model                       # noqa: E402
+
+#: Long enough for a correct controller to clear MIN_SORTED with headroom:
+#: one carton every 1.8s, and six seconds of belt before the first one lands.
+PASS_WINDOW = 24.0
+
+
+def run(*args) -> int:
+    return grade.main([str(a) for a in args])
+
+
+# --- the feed pattern --------------------------------------------------
+
+def test_the_feed_pattern_is_reproducible_from_its_seed():
+    """A disputed mark has to be re-runnable. The seed is in the report."""
+    assert grade.feed_pattern(4321) == grade.feed_pattern(4321)
+    assert grade.feed_pattern(4321) != grade.feed_pattern(8765)
+
+
+def test_the_feed_pattern_is_not_an_alternation():
+    """A fixed tall/short/tall/short feed can be sorted by a program that
+    pushes every second carton and never reads a sensor. It would pass here
+    and fail on any real line, so the order is shuffled."""
+    runs = 0
+    for seed in range(50):
+        pattern = grade.feed_pattern(seed)
+        runs += sum(1 for a, b in zip(pattern, pattern[1:]) if a == b)
+    assert runs > 0, "no seed in 50 ever fed two cartons of the same height in a row"
+
+
+def test_every_window_of_eight_cartons_holds_both_heights():
+    """The lane minimums have to be reachable however the shuffle lands, or a
+    short run fails for a reason that is the grader's fault and not the
+    student's."""
+    for seed in range(50):
+        pattern = grade.feed_pattern(seed)
+        doubled = pattern + pattern              # the scene cycles it
+        for start in range(len(pattern)):
+            window = doubled[start:start + 8]
+            assert sum(window) >= grade.MIN_PER_LANE, (seed, start, window)
+            assert 8 - sum(window) >= grade.MIN_PER_LANE, (seed, start, window)
+
+
+# --- the timing advice -------------------------------------------------
+
+def test_the_pusher_window_is_derived_from_the_scenes_own_geometry():
+    """The advice a failing student gets is a number. It has to come from the
+    line rather than from a constant in the grader, or a change to the belt
+    speed makes the grader confidently wrong."""
+    low, high = grade._beam_to_pusher_window()
+    assert (round(low, 2), round(high, 2)) == (0.60, 1.20)
+
+    original = scene_model.BELT_SPEED
+    try:
+        scene_model.BELT_SPEED = original / 2      # a slower line waits longer
+        slow_low, slow_high = grade._beam_to_pusher_window()
+    finally:
+        scene_model.BELT_SPEED = original
+    assert slow_low > low and slow_high > high
+
+
+# --- watching, without an engine ---------------------------------------
+
+def test_the_watcher_sees_a_force_the_tag_table_would_hide():
+    """`TagTable.set` on a forced tag returns False and changes nothing
+    visible, so a run sampled only for changed values would never notice."""
+    sim = scene_model.SortingScene()
+    watched = grade.Watched(sim)
+    watched.tick(0.01)
+    assert watched.forced == {}
+
+    sim.tags.force("sensor_low.detect", True)
+    watched.tick(0.01)
+    assert "sensor_low.detect" in watched.forced
+
+
+def test_the_watcher_measures_how_long_an_output_was_held():
+    sim = scene_model.SortingScene()
+    watched = grade.Watched(sim)
+    for _ in range(10):
+        watched.tick(0.01)
+    assert watched.held_true("conveyor.rotate") == 0.0
+
+    sim.tags.set("conveyor.rotate", True)
+    for _ in range(10):
+        watched.tick(0.01)
+    assert watched.held_true("conveyor.rotate") == pytest.approx(0.5)
+    assert watched.changes("conveyor.rotate") == 1
+
+
+def _settled(ticks: int = 20):
+    """A scene run forward far enough for its counters to mean something."""
+    sim = scene_model.SortingScene()
+    watched = grade.Watched(sim, observe=grade.observe_sorting)
+    for _ in range(ticks):
+        watched.tick(0.01)
+    return sim, watched
+
+
+def test_the_sorting_verdict_reads_the_cartons_not_the_counters():
+    """The counters are simulator-owned, so a controller can only reach them
+    by forcing -- but they are still the wrong thing to mark on. This builds a
+    line where both counters tell a flattering story and both cartons went to
+    the wrong lane, and the verdict has to follow the cartons."""
+    sim, watched = _settled()
+    sim.sorted_tall.append(scene_model.Box(height=scene_model.SHORT_HEIGHT))
+    sim.sorted_short.append(scene_model.Box(height=scene_model.TALL_HEIGHT))
+    for _ in range(5):
+        watched.tick(0.01)
+
+    # One in each lane, which read alone is a perfect split.
+    assert sim.tags.visible("counter.tall") == 1
+    assert sim.tags.visible("counter.short") == 1
+
+    report = grade.Report(scene="sorting-by-height")
+    grade.grade_sorting(watched, None, report, 1.0)
+    failed = {c.id for c in report.checks if not c.ok}
+    assert "sort.tall_diverted" in failed
+    assert "sort.short_passed" in failed
+
+
+def _integrity(forces, forced_tags) -> grade.Report:
+    """Run only the integrity half, with each half of the force detection
+    supplied on its own."""
+    sim, watched = _settled(ticks=1)
+    watched.forced = dict(forced_tags)
+    engine = grade.GradedEngine(watched, port=0)
+    engine._client = object()          # a session still open at the end
+    engine.sessions = [{"connected_at": 0.0, "disconnected_at": None}]
+    engine.forces = list(forces)
+    report = grade.Report(scene="sorting-by-height")
+    grade.check_integrity(watched, engine, report, 1.0)
+    return report
+
+
+def test_a_force_seen_only_in_the_message_log_is_a_disqualification():
+    """The hole the message log covers: a force set and cleared between two
+    ticks leaves nothing pinned for the tick sampler to find."""
+    report = _integrity([{"at": 0.4, "set": ["counter.tall"], "cleared": []}], {})
+    assert report.verdict == "DISQUALIFIED"
+    assert "counter.tall" in report.headline
+
+
+def test_a_force_seen_only_in_the_tag_table_is_a_disqualification():
+    """The hole the tick sampler covers: a force set before this grader
+    started listening sends no message it will ever see."""
+    report = _integrity([], {"sensor_high.detect": 0.1})
+    assert report.verdict == "DISQUALIFIED"
+    assert "sensor_high.detect" in report.headline
+
+
+def test_a_clean_run_passes_the_integrity_half():
+    report = _integrity([], {})
+    assert report.verdict != "DISQUALIFIED"
+    assert all(c.ok for c in report.checks)
+
+
+# --- end to end --------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def good_run(tmp_path_factory) -> dict:
+    """One correct controller, graded once, read by several tests."""
+    out = tmp_path_factory.mktemp("grade") / "good.json"
+    code = run("--reference", "good", "--duration", PASS_WINDOW,
+               "--seed", 11, "--wait", 30, "--json", out)
+    return {"exit": code, "report": json.loads(out.read_text(encoding="utf-8"))}
+
+
+def test_a_controller_that_does_the_job_passes(good_run):
+    assert good_run["exit"] == 0
+    assert good_run["report"]["verdict"] == "PASS"
+    assert all(check["ok"] for check in good_run["report"]["checks"])
+
+
+def test_a_pass_is_earned_by_cartons_rather_than_by_the_clock(good_run):
+    """Gotcha 16: a check that passes while the simulation does nothing is not
+    a check. A PASS has to come with cartons in both lanes and none misrouted."""
+    evidence = good_run["report"]["evidence"]
+    assert evidence["sorted"] >= grade.MIN_SORTED
+    assert evidence["chute"]["tall"] >= grade.MIN_PER_LANE
+    assert evidence["far_end"]["short"] >= grade.MIN_PER_LANE
+    assert evidence["misrouted"] == []
+    assert evidence["chute"]["short"] == 0 and evidence["far_end"]["tall"] == 0
+
+
+def test_the_report_is_machine_readable_and_agrees_with_the_exit_code(good_run):
+    report = good_run["report"]
+    assert report["tool"] == "factoryforge-grade"
+    assert report["exit_code"] == good_run["exit"]
+    assert report["scene"] == "sorting-by-height"
+    assert isinstance(report["evidence"]["seed"], int)
+    # The per-carton ledger is the appeal record: every carton that landed,
+    # its height, its lane and when.
+    for entry in report["evidence"]["cartons"]:
+        assert set(entry) == {"carton", "height", "lane", "at"}
+        assert entry["height"] in ("tall", "short")
+        assert entry["lane"] in ("chute", "far-end")
+
+
+def test_a_timer_instead_of_the_sensor_fails_on_misrouted_cartons(tmp_path):
+    """The failure the shuffled feed exists to catch: a pusher on a fixed
+    period sorts nothing, however tidy the code looks."""
+    out = tmp_path / "blind.json"
+    code = run("--reference", "blind", "--duration", 18, "--seed", 11,
+               "--wait", 30, "--json", out)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert report["evidence"]["misrouted"], "a blind timer sorted everything correctly"
+    failed = {c["id"] for c in report["checks"] if not c["ok"]}
+    assert failed & {"sort.tall_diverted", "sort.short_passed"}
+
+
+def test_holding_the_pusher_out_fails_on_the_short_cartons(tmp_path):
+    out = tmp_path / "greedy.json"
+    code = run("--reference", "greedy", "--duration", 14, "--seed", 11,
+               "--wait", 30, "--json", out)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "sort.short_passed" in {c["id"] for c in report["checks"] if not c["ok"]}
+    assert any("held out" in line for line in report["feedback"])
+
+
+def test_a_controller_that_connects_and_does_nothing_cannot_pass(tmp_path):
+    """The run that has to fail loudly, because it is also what a broken
+    connection looks like from here."""
+    out = tmp_path / "idle.json"
+    code = run("--reference", "idle", "--duration", 6, "--seed", 11,
+               "--wait", 30, "--json", out)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "line.ran" in {c["id"] for c in report["checks"] if not c["ok"]}
+    assert any("belt never ran" in line for line in report["feedback"])
+
+
+def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
+    """A forced tag is a value that disagrees with the simulation on purpose.
+    An instructor wants to tell 'got it wrong' apart from 'tried it on', so it
+    gets its own verdict and its own exit code."""
+    out = tmp_path / "forcer.json"
+    code = run("--reference", "forcer", "--duration", 5, "--seed", 11,
+               "--wait", 30, "--json", out)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert code == 3 and report["verdict"] == "DISQUALIFIED"
+    assert set(report["evidence"]["forced_tags"]) == {"counter.tall", "counter.short"}
+    assert report["evidence"]["forces"], "the force messages themselves were not recorded"
+    # And no sorting verdict was reached at all: a disqualified run is not marked.
+    assert not any(c["id"].startswith("sort.") for c in report["checks"])
+
+
+def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
+    """A student whose sidecar never started has not failed the exercise, and
+    a marking script needs to tell the two apart."""
+    out = tmp_path / "absent.json"
+    code = run("--duration", 1, "--wait", 1, "--seed", 11, "--json", out)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert code == 2 and report["verdict"] == "ERROR"
+    assert "no controller connected" in report["headline"]
+    assert report["checks"] == []
+
+
+# --- the CLI contract --------------------------------------------------
+
+def test_an_unknown_scene_is_an_error_not_a_crash(capsys):
+    assert run("--scene", "no-such-scene") == 2
+    assert "no rubric" in capsys.readouterr().err
+
+
+def test_list_names_only_the_scenes_that_are_really_marked(capsys):
+    assert run("--list") == 0
+    listed = capsys.readouterr().out
+    assert "sorting-by-height" in listed
+    assert set(grade.RUBRICS) == {"sorting-by-height"}, (
+        "a scene was added to RUBRICS -- docs/GRADING.md claims one, and that "
+        "claim is the whole point of the 'what this does not do' section")
+
+
+async def test_two_graded_runs_can_share_a_machine():
+    """HP-53 removed fixed ports project-wide. Two exam sessions on one
+    machine must not be able to collide, so the default binds port 0 and asks
+    the OS what it got."""
+    first = grade.GradedEngine(scene_model.SortingScene(), port=0)
+    second = grade.GradedEngine(scene_model.SortingScene(), port=0)
+    await first.start()
+    await second.start()
+    try:
+        assert first.actual_port != second.actual_port
+        assert first.actual_port != 0 and second.actual_port != 0
+    finally:
+        await first.stop()
+        await second.stop()
