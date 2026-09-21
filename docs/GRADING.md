@@ -230,8 +230,8 @@ reference controllers; the machinery is general, the marking is not.
 | `sorting-by-height` | yes |
 | `start-stop-station` | yes |
 | `tank-level-control` | yes |
-| `light-curtain-sorting` | not yet |
-| `roller-line-weighing` | not yet |
+| `light-curtain-sorting` | yes |
+| `roller-line-weighing` | yes |
 | `pick-and-place-cell` | not yet |
 | `accumulation-buffer` | not yet |
 | `heat-treat-station` | yes |

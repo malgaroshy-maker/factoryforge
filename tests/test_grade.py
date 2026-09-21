@@ -381,6 +381,64 @@ def test_a_thermostat_reaches_the_oven_setpoint_and_still_fails(tmp_path):
         assert phase["ripple"] > 5.0
 
 
+def test_the_light_curtain_passes_a_controller_that_sorts_on_the_number(tmp_path):
+    code, report = graded(tmp_path, "light-curtain-sorting", "good", 62, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["misrouted"] == []
+    assert evidence["chute"] >= 2 and evidence["far_end"] >= 2
+    # Both rules were really exercised, or the pot-moving half of the rubric
+    # marked nothing.
+    assert len(evidence["thresholds_seen"]) == 2
+
+
+def test_a_threshold_written_into_the_program_fails_the_light_curtain(tmp_path):
+    """The difference between this scene and sorting-by-height: there the rule
+    is two bits of wiring, here it is a number that the run changes."""
+    code, report = graded(tmp_path, "light-curtain-sorting", "fixed", 62, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "sort.followed_the_measurement" in failed_ids(report)
+    wrong = report["evidence"]["misrouted"]
+    assert wrong, "a fixed threshold sorted every carton correctly"
+    # All of them under one threshold: that is the signature of a latched
+    # setpoint rather than of a misjudged height, and the feedback says so.
+    assert len({entry["threshold_m"] for entry in wrong}) == 1
+
+
+def test_diverting_every_second_carton_fails_the_light_curtain(tmp_path):
+    code, report = graded(tmp_path, "light-curtain-sorting", "everyother", 62, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "sort.followed_the_measurement" in failed_ids(report)
+
+
+def test_the_roller_line_passes_a_controller_that_weighs_and_spaces(tmp_path):
+    code, report = graded(tmp_path, "roller-line-weighing", "good", 70, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["shared_the_deck"] == 0
+    assert evidence["misjudged"] == []
+    # The exam has to have contained at least one carton the two instruments
+    # disagree about, or `metalonly` below would pass for want of a question.
+    assert evidence["metal_and_weight_disagree"] >= 1
+
+
+def test_rejecting_on_the_inductive_sensor_fails_when_the_limit_moves(tmp_path):
+    """Metal and over-limit are the same cartons at 3000 g and different ones
+    at 1500 g, because a tall cardboard carton weighs 2160 g."""
+    code, report = graded(tmp_path, "roller-line-weighing", "metalonly", 70, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "reject.matched_the_weight" in failed_ids(report)
+    wrong = report["evidence"]["misjudged"]
+    assert wrong and all(entry["flagged"] == entry["metal"] for entry in wrong)
+    assert any("inductive sensor disagree" in line for line in report["feedback"])
+
+
+def test_feeding_faster_than_the_deck_fails_the_roller_line(tmp_path):
+    code, report = graded(tmp_path, "roller-line-weighing", "fastfeed", 70, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"scale.singulated", "reject.matched_the_weight"} <= failed_ids(report)
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""

@@ -1302,6 +1302,536 @@ def grade_oven(watched, engine, report, duration) -> None:
                     settled=3.0, ripple=5.0, overshoot=12.0, moved=80.0)
 
 
+# --- light curtain sorting ----------------------------------------------
+#
+# Observable fact: each carton's true height, and which lane it ended in. The
+# scene made the carton, so it knows; nothing on the bus carries either.
+#
+# How a program fakes it: two ways, and both are shut.
+#
+# A program that never reads the curtain can sort an alternating feed by
+# pushing every second carton, so the feed is drawn from a shuffled cycle of
+# eight different heights rather than from two.
+#
+# A program with the threshold written into it sorts perfectly at one setting,
+# which is the whole difference between this scene and `sorting-by-height` --
+# there the rule is two bits of wiring, here it is a number on the pot. So the
+# pot is set to one value, and then to another, and every carton is marked
+# against the rule that was in force when the curtain measured *it*. A carton
+# in flight when the knob turned is judged by the old rule, which is what a
+# real line does and what makes the check fair.
+#
+# Geometry and the curtain from `engine/templates/light_curtain_sorting.json`:
+# a 12-beam array over 0.48 m, a 0.55 m diverter stroke at 1.83 m/s.
+LC_BELT_SPEED = 0.5
+LC_CURTAIN_POS = 1.2
+LC_DIVERTER_POS = 2.2
+LC_REMOVER_POS = 3.0
+LC_CATCH = 0.15
+LC_TRAVEL_TIME = 0.55 / 1.83
+LC_BEAMS = 12
+LC_CURTAIN_HEIGHT = 0.48
+
+
+def lc_beam_ladder() -> list[float]:
+    """Where each beam sits above the belt.
+
+    `LightArray.cs`: the lowest beam is 20 mm up so the shortest carton still
+    breaks one, and the rest are spread to the top of the curtain. The array
+    reports the height of the *highest blocked beam*, so a carton's measured
+    height is a rung of this ladder and never its true height -- which is why
+    the thresholds below sit between rungs and never on one.
+    """
+    return [0.02 + (LC_CURTAIN_HEIGHT - 0.02) * i / (LC_BEAMS - 1)
+            for i in range(LC_BEAMS)]
+
+
+class LightCurtainScene(PlantScene):
+    name = "light-curtain-sorting"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("belt.rotate", "Belt Conveyor (Rotate)", "bit", "output"),
+            Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
+            Tag("diverter.extend", "Diverter (Extend)", "bit", "output"),
+            Tag("height_gauge.height", "Light Array Height (m)", "float", "input"),
+            Tag("height_gauge.blocked", "Light Array Blocked", "bit", "input"),
+            Tag("diverter.extended", "Diverter (Extended)", "bit", "input"),
+            Tag("diverter.retracted", "Diverter (Retracted)", "bit", "input",
+                value=True),
+            Tag("tall_count.count", "Chute Remover (Count)", "int", "input"),
+            Tag("short_count.count", "Far End Remover (Count)", "int", "input"),
+        )
+
+        ladder = lc_beam_ladder()
+        #: Eight heights, each sitting just above a rung so the curtain reports
+        #: that rung exactly. Shuffled in blocks, so no eight consecutive
+        #: cartons are an order a program could have been written against.
+        self._rungs = list(range(1, 9))
+        self.feed = shuffled_cycle(self.rng, self._rungs, 6)
+        self._fed = 0
+        self.ladder = ladder
+
+        # Two thresholds, each halfway between two rungs, so no carton is ever
+        # a tie and a boundary case is never the reason for a mark.
+        first, second = self.rng.sample([3, 4, 5, 6], 2)
+        self.thresholds = [(ladder[first] + ladder[first - 1]) / 2,
+                           (ladder[second] + ladder[second - 1]) / 2]
+        self.script = Script([
+            (0.2, self.panel.set_setpoint(round(self.thresholds[0], 4))),
+            (1.0, self.panel.press("start")),
+            (32.0, self.panel.set_setpoint(round(self.thresholds[1], 4))),
+        ])
+
+        self.items: list[Item] = []
+        self.sorted_items: list[Item] = []
+        self._next_id = 1
+        self._emit_edge = False
+        self.extension = 0.0
+
+    # --- the plant ---
+
+    def step(self, dt: float) -> None:
+        emit = self.bit("emitter.emit")
+        if emit and not self._emit_edge:
+            rung = self.feed[self._fed % len(self.feed)]
+            self._fed += 1
+            self.items.append(Item(height=self.ladder[rung] + 0.005,
+                                   id=self._next_id))
+            self._next_id += 1
+        self._emit_edge = emit
+
+        if self.bit("belt.rotate"):
+            for item in self.items:
+                item.position += LC_BELT_SPEED * dt
+
+        target = 1.0 if self.bit("diverter.extend") else 0.0
+        rate = dt / LC_TRAVEL_TIME
+        self.extension = min(self.extension + rate, target) if target > self.extension \
+            else max(self.extension - rate, target)
+        self.tags.set("diverter.extended", self.extension >= 0.999)
+        self.tags.set("diverter.retracted", self.extension <= 0.001)
+
+        # The curtain. Measured once, on the beam break, and stamped with the
+        # rule that was in force at that moment.
+        in_curtain = [i for i in self.items
+                      if abs(i.position - LC_CURTAIN_POS) <= 0.10]
+        if in_curtain:
+            tallest = max(in_curtain, key=lambda i: i.height)
+            rung = max(y for y in self.ladder if y <= tallest.height)
+            self.tags.set("height_gauge.height", rung)
+            self.tags.set("height_gauge.blocked", True)
+            for item in in_curtain:
+                if item.measured is None:
+                    item.measured = max(y for y in self.ladder if y <= item.height)
+                    item.threshold = float(self.panel.setpoint_value)
+        else:
+            self.tags.set("height_gauge.blocked", False)
+            self.tags.set("height_gauge.height", 0.0)
+
+        still: list[Item] = []
+        for item in self.items:
+            if (self.extension > 0.5
+                    and abs(item.position - LC_DIVERTER_POS) <= LC_CATCH):
+                item.lane = "chute"
+                item.carried = True
+                self.sorted_items.append(item)
+            elif item.position >= LC_REMOVER_POS:
+                item.lane = "far-end"
+                self.sorted_items.append(item)
+            else:
+                still.append(item)
+        self.items = still
+
+        self.tags.set("tall_count.count",
+                      sum(1 for i in self.sorted_items if i.lane == "chute"))
+        self.tags.set("short_count.count",
+                      sum(1 for i in self.sorted_items if i.lane == "far-end"))
+
+
+def grade_light_curtain(watched: Watched, engine: GradedEngine, report: Report,
+                        duration: float) -> None:
+    sim: LightCurtainScene = watched.inner
+    judged = [i for i in sim.sorted_items if i.measured is not None]
+    unmeasured = [i for i in sim.sorted_items if i.measured is None]
+    chute = [i for i in sim.sorted_items if i.lane == "chute"]
+    far = [i for i in sim.sorted_items if i.lane == "far-end"]
+
+    wrong = [i for i in judged
+             if (i.measured >= i.threshold) != (i.lane == "chute")]
+    rules = sorted({round(i.threshold, 4) for i in judged})
+    per_rule = {f"{r:.3f}": sum(1 for i in judged if abs(i.threshold - r) < 1e-6)
+                for r in rules}
+
+    report.evidence.update({
+        "fed": sim._fed,
+        "sorted": len(sim.sorted_items),
+        "still_on_belt": len(sim.items),
+        "chute": len(chute),
+        "far_end": len(far),
+        "thresholds_seen": per_rule,
+        "misrouted": [{"carton": i.id, "measured_m": round(i.measured, 3),
+                       "threshold_m": round(i.threshold, 3), "lane": i.lane}
+                      for i in wrong][:20],
+        "unmeasured": len(unmeasured),
+        "diverter_out_fraction": round(watched.held_true("diverter.extend"), 3),
+    })
+
+    report.add("line.ran",
+               len(sim.sorted_items) >= 8,
+               f"{len(sim.sorted_items)} cartons reached a lane (at least 8)")
+    report.add("line.both_lanes",
+               len(chute) >= 2 and len(far) >= 2,
+               f"chute {len(chute)}, far end {len(far)} (at least 2 each)")
+    report.add("rule.both_settings_tested",
+               len(per_rule) >= 2 and min(per_rule.values()) >= 2,
+               f"cartons measured under each threshold: "
+               f"{', '.join(f'{k}m x{v}' for k, v in per_rule.items())}")
+    report.add("sort.followed_the_measurement",
+               not wrong,
+               "every carton went to the lane its measured height asked for"
+               if not wrong else
+               f"{len(wrong)} carton(s) went the wrong way: "
+               f"{[i.id for i in wrong][:10]}")
+    report.add("line.conservation",
+               sim._fed == len(sim.sorted_items) + len(sim.items),
+               f"{sim._fed} fed = {len(sim.sorted_items)} sorted + "
+               f"{len(sim.items)} still on the belt")
+
+    _light_curtain_feedback(report, watched, sim, wrong, per_rule)
+
+
+def _light_curtain_feedback(report, watched, sim, wrong, per_rule) -> None:
+    say = report.feedback.append
+    belt = watched.held_true("belt.rotate")
+    out = watched.held_true("diverter.extend")
+
+    if belt == 0.0:
+        say("The belt never ran. `belt.rotate` is yours to write.")
+        return
+    if sim._fed == 0:
+        say("No cartons were fed. `emitter.emit` makes one on each RISING edge.")
+        return
+    if out == 0.0:
+        say("The diverter never came out, so everything went past. "
+            "`height_gauge.height` is a measurement in metres and "
+            "`panel.setpoint` is the threshold to compare it against.")
+    elif out > 0.85:
+        say("The diverter was held out for nearly the whole run, so it swept "
+            "everything into the chute. It has to come back for the short ones.")
+
+    if len(per_rule) < 2:
+        say("The run turned the pot to a second threshold part way through and "
+            "not enough cartons were measured afterwards to mark it. If the line "
+            "stopped or the feed stopped, that is why.")
+
+    if wrong:
+        by_rule: dict[float, int] = {}
+        for item in wrong:
+            by_rule[round(item.threshold, 3)] = by_rule.get(round(item.threshold, 3), 0) + 1
+        if len(by_rule) == 1 and len(per_rule) > 1:
+            only = next(iter(by_rule))
+            say(f"Every misrouted carton was measured while the pot read "
+                f"{only:.3f} m, and the ones under the other setting were all "
+                f"correct. That is a threshold written into the program: read "
+                f"`panel.setpoint` at the moment you measure each carton, not "
+                f"once at startup.")
+        else:
+            worst = wrong[0]
+            say(f"Carton {worst.id} measured {worst.measured:.3f} m against a "
+                f"threshold of {worst.threshold:.3f} m and went to the "
+                f"{worst.lane}. The curtain reports the highest beam it lost, so "
+                f"the measurement is a rung of a 12-beam ladder over "
+                f"{LC_CURTAIN_HEIGHT:g} m -- compare that number, not the bit.")
+    elif len(sim.sorted_items) >= 8:
+        say(f"Sorting was clean at both thresholds: "
+            f"{', '.join(f'{k} m for {v} cartons' for k, v in per_rule.items())}, "
+            f"none misrouted.")
+
+
+def _summary_light_curtain(evidence: dict, out) -> None:
+    out(f"fed {evidence['fed']}, sorted {evidence['sorted']}, "
+        f"{evidence['still_on_belt']} still on the belt")
+    out(f"chute {evidence['chute']}, far end {evidence['far_end']}")
+    out("thresholds the run used: "
+        + ", ".join(f"{k} m for {v} cartons"
+                    for k, v in evidence["thresholds_seen"].items()))
+    for entry in evidence["misrouted"][:8]:
+        out(f"  carton {entry['carton']:>3} measured {entry['measured_m']:.3f} m "
+            f"against {entry['threshold_m']:.3f} m -> {entry['lane']}")
+
+
+# --- roller line with weighing ------------------------------------------
+#
+# Observable fact: what each carton actually weighs, and whether it ever shared
+# the deck with another one. The scene made them, so it knows both.
+#
+# How a program fakes it: by rejecting on the inductive sensor instead of the
+# scale. The brief says the steel cartons are also the heavy ones, so metal and
+# over-limit agree -- at one limit. They stop agreeing the moment the limit
+# drops below a tall cardboard carton, which weighs 2160 g where a short steel
+# one weighs 4320, and the exam moves it there. A program that flags metal
+# passes the first half of the run and misses every tall carton in the second.
+#
+# The other half is the deck itself. Two cartons on a checkweigher read as one
+# peak, and that is a real property of real checkweighers rather than a quirk
+# here: the plant records whether each carton was ever weighed alongside
+# another, and a line that feeds without holding fails on that regardless of
+# what it did with the number.
+#
+# Masses from `BoxPhysics.cs`: 0.20 x H x 0.24 at 150 kg/m3 for cardboard and
+# 900 for steel, so the four classes are 720 g, 2160 g, 4320 g and 12960 g.
+RW_SPEED = 0.4
+RW_METAL_EYE_POS = 1.2
+RW_DECK_FROM = 2.0
+RW_DECK_TO = 3.0
+RW_REMOVER_POS = 3.3
+#: How long after a carton rolls off the deck the controller has to have made
+#: its mind up. Generous: a scan plus a network round trip.
+RW_VERDICT_WINDOW = 0.6
+
+
+class RollerWeighScene(PlantScene):
+    name = "roller-line-weighing"
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(seed)
+        self._declare(
+            Tag("infeed.rotate", "Roller Conveyor (Rotate)", "bit", "output"),
+            Tag("scale.rotate", "Weighing Conveyor (Rotate)", "bit", "output"),
+            Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
+            Tag("weight_readout.value", "Weight Readout", "int", "output"),
+            Tag("scale.weight", "Weighing Conveyor Weight (g)", "int", "input"),
+            Tag("metal_check.detect", "Inductive Sensor (Detect)", "bit", "input"),
+            Tag("outfeed.count", "Remover (Count)", "int", "input"),
+        )
+
+        #: All four mass classes, shuffled in blocks of four rather than
+        #: emitted on the template's `metal_every: 3` cadence. Two reasons, and
+        #: the first is the same one the sorting line's feed has: an order a
+        #: program can guess is an order it can be written against. The second
+        #: is fairness the other way. The carton the two instruments disagree
+        #: about is the tall cardboard one -- 2160 g, over a 1500 g limit and
+        #: invisible to an inductive sensor -- and a block of four guarantees
+        #: one, so `metalonly` cannot pass on a lucky draw.
+        self.feed = shuffled_cycle(
+            self.rng, [(True, False), (False, False), (True, True), (False, True)], 8)
+        self._fed = 0
+
+        # 3000 g is above every cardboard carton and below every steel one, so
+        # metal and over-limit agree. 1500 g is below the tall cardboard one,
+        # so they stop agreeing. That is the whole exam.
+        self.limits = [3000.0, 1500.0]
+        self.script = Script([
+            (0.2, self.panel.set_setpoint(self.limits[0])),
+            (1.0, self.panel.press("start")),
+            (30.0, self.panel.set_setpoint(self.limits[1])),
+        ])
+
+        self.items: list[Item] = []
+        self.weighed: list[dict] = []
+        self._watching: list[dict] = []
+        self._next_id = 1
+        self._emit_edge = False
+        self._on_deck: dict[int, dict] = {}
+
+    def step(self, dt: float) -> None:
+        emit = self.bit("emitter.emit")
+        if emit and not self._emit_edge:
+            tall, metal = self.feed[self._fed % len(self.feed)]
+            self.items.append(Item(height=0.30 if tall else 0.10, metal=metal,
+                                   id=self._next_id))
+            self._fed += 1
+            self._next_id += 1
+        self._emit_edge = emit
+
+        infeed = self.bit("infeed.rotate")
+        deck = self.bit("scale.rotate")
+        for item in self.items:
+            moving = deck if RW_DECK_FROM <= item.position < RW_DECK_TO else infeed
+            if moving:
+                item.position += RW_SPEED * dt
+
+        on_deck = [i for i in self.items
+                   if RW_DECK_FROM <= i.position <= RW_DECK_TO]
+        self.tags.set("scale.weight", int(round(sum(i.grams for i in on_deck))))
+        self.tags.set("metal_check.detect",
+                      any(i.metal for i in self.items
+                          if abs(i.position - RW_METAL_EYE_POS) <= 0.10))
+
+        # A carton's record opens when it reaches the deck and closes when it
+        # leaves. `shared` is the plant's own answer to "was this weighed on
+        # its own", which no instrument on the line reports.
+        for item in on_deck:
+            record = self._on_deck.get(item.id)
+            if record is None:
+                record = self._on_deck[item.id] = {
+                    "carton": item.id, "grams": round(item.grams),
+                    "metal": item.metal, "shared": False, "limit": None,
+                    "flagged": False, "at": round(self.t, 2)}
+            record["shared"] = record["shared"] or len(on_deck) > 1
+
+        for item_id, record in list(self._on_deck.items()):
+            if any(i.id == item_id for i in on_deck):
+                continue
+            del self._on_deck[item_id]
+            record["limit"] = float(self.panel.setpoint_value)
+            record["until"] = self.t + RW_VERDICT_WINDOW
+            self.weighed.append(record)
+            self._watching.append(record)
+
+        # The controller's verdict: the red lamp, at any point in the window
+        # after the carton rolls off. Held permanently it flags everything and
+        # fails on the light ones; never lit it flags nothing and fails on the
+        # heavy ones, so the rule is symmetric and neither shortcut survives.
+        red = self.bit("panel.red")
+        for record in list(self._watching):
+            if red:
+                record["flagged"] = True
+            if self.t > record["until"]:
+                self._watching.remove(record)
+
+        still = []
+        for item in self.items:
+            if item.position >= RW_REMOVER_POS:
+                item.lane = "outfeed"
+            else:
+                still.append(item)
+        removed = len(self.items) - len(still)
+        if removed:
+            self.tags.set("outfeed.count",
+                          int(self.tags.visible("outfeed.count")) + removed)
+        self.items = still
+
+
+def grade_roller_weighing(watched: Watched, engine: GradedEngine, report: Report,
+                          duration: float) -> None:
+    sim: RollerWeighScene = watched.inner
+    judged = [r for r in sim.weighed if r["limit"] is not None]
+    shared = [r for r in judged if r["shared"]]
+    alone = [r for r in judged if not r["shared"]]
+    # Judged against what the carton really weighs, and every carton, including
+    # the ones that shared the deck. Restricting this to cartons weighed alone
+    # made it vacuous for exactly the runs it most needed to catch: a line that
+    # never singulates has no cartons weighed alone, so "every carton was
+    # judged correctly" passed while nothing had been judged at all.
+    wrong = [r for r in judged if (r["grams"] > r["limit"]) != r["flagged"]]
+    limits = sorted({r["limit"] for r in judged})
+    per_limit = {f"{int(l)}g": sum(1 for r in judged if r["limit"] == l)
+                 for l in limits}
+    # The cartons the two instruments disagree about: heavy cardboard. They are
+    # the ones a metal-sensing program gets wrong, so they are worth naming.
+    split = [r for r in judged if (r["grams"] > r["limit"]) != r["metal"]]
+
+    report.evidence.update({
+        "fed": sim._fed,
+        "weighed": len(judged),
+        "weighed_alone": len(alone),
+        "shared_the_deck": len(shared),
+        "limits_seen": per_limit,
+        "misjudged": [{"carton": r["carton"], "grams": r["grams"],
+                       "limit": int(r["limit"]), "flagged": r["flagged"],
+                       "metal": r["metal"]} for r in wrong][:20],
+        "metal_and_weight_disagree": len(split),
+        "outfeed": int(sim.tags.visible("outfeed.count")),
+        "red_held_fraction": round(watched.held_true("panel.red"), 3),
+    })
+
+    report.add("line.ran",
+               len(judged) >= 8 and int(sim.tags.visible("outfeed.count")) >= 6,
+               f"{len(judged)} cartons crossed the scale and "
+               f"{int(sim.tags.visible('outfeed.count'))} reached the outfeed "
+               f"(at least 8 and 6)")
+    report.add("scale.singulated",
+               not shared,
+               "every carton was weighed on its own" if not shared else
+               f"{len(shared)} carton(s) shared the deck with another, so the "
+               f"scale read the pair as one peak: "
+               f"{[r['carton'] for r in shared][:10]}")
+    report.add("reject.judged_them_all",
+               len(judged) >= 8,
+               f"{len(judged)} cartons got a verdict (at least 8, so the check "
+               f"below is about the judging and not about the sample size)")
+    report.add("limit.both_settings_tested",
+               len(per_limit) >= 2 and min(per_limit.values()) >= 2,
+               f"cartons weighed under each limit: "
+               f"{', '.join(f'{k} x{v}' for k, v in per_limit.items())}")
+    report.add("reject.matched_the_weight",
+               not wrong,
+               "every carton over the limit was flagged and no other was"
+               if not wrong else
+               f"{len(wrong)} carton(s) judged wrong: "
+               f"{[r['carton'] for r in wrong][:10]}")
+
+    _roller_feedback(report, watched, sim, judged, alone, shared, wrong, split,
+                     per_limit)
+
+
+def _roller_feedback(report, watched, sim, judged, alone, shared, wrong, split,
+                     per_limit) -> None:
+    say = report.feedback.append
+    red = watched.held_true("panel.red")
+
+    if not judged:
+        say("Nothing crossed the scale. `infeed.rotate` and `scale.rotate` are "
+            "both yours, and `emitter.emit` makes one carton per RISING edge.")
+        return
+
+    if shared:
+        say(f"{len(shared)} carton(s) were on the deck together. A checkweigher "
+            f"weighs what is on it, so two cartons read as one peak and both "
+            f"verdicts are guesses. Hold the feed while `scale.weight` is above "
+            f"zero -- a real line singulates before it weighs.")
+
+    if red > 0.9:
+        say("The red lamp was lit for essentially the whole run, which flags "
+            "every carton including the light ones.")
+    elif red == 0.0:
+        say("The red lamp never lit, so nothing was flagged. `panel.red` is how "
+            "this exercise reports a reject.")
+
+    if wrong:
+        metal_shaped = [r for r in wrong if r["flagged"] == r["metal"]]
+        if split and len(metal_shaped) >= len(wrong) * 0.8:
+            say(f"Every carton you got wrong is one where the scale and the "
+                f"inductive sensor disagree -- {len(split)} of them in this run. "
+                f"A tall cardboard carton weighs 2160 g and a short steel one "
+                f"4320 g, so at a limit of 1500 g the heavy ones are no longer "
+                f"only the metal ones. Judge on `scale.weight`, and use "
+                f"`metal_check.detect` as the second opinion it is.")
+        else:
+            worst = wrong[0]
+            say(f"Carton {worst['carton']} weighed {worst['grams']} g against a "
+                f"limit of {int(worst['limit'])} g and was "
+                f"{'flagged' if worst['flagged'] else 'passed'}. Judge each "
+                f"carton on the PEAK it showed while it was on the deck, not on "
+                f"whatever the cell reads as it rolls off.")
+
+    if len(per_limit) < 2:
+        say("The run turned the pot to a second limit part way through and not "
+            "enough cartons were weighed afterwards to mark it.")
+    elif not wrong and not shared:
+        say(f"Checkweighing was clean at both limits "
+            f"({', '.join(per_limit)}), every carton weighed on its own, and the "
+            f"{len(split)} carton(s) where mass and material disagree were "
+            f"judged on the mass.")
+
+
+def _summary_roller(evidence: dict, out) -> None:
+    out(f"fed {evidence['fed']}, weighed {evidence['weighed']} "
+        f"({evidence['weighed_alone']} alone, {evidence['shared_the_deck']} sharing "
+        f"the deck), {evidence['outfeed']} reached the outfeed")
+    out("limits the run used: "
+        + ", ".join(f"{k} for {v} cartons" for k, v in evidence["limits_seen"].items()))
+    out(f"{evidence['metal_and_weight_disagree']} carton(s) where the scale and "
+        f"the inductive sensor disagree")
+    for entry in evidence["misjudged"][:8]:
+        out(f"  carton {entry['carton']:>3} {entry['grams']:>6} g against "
+            f"{entry['limit']} g: {'flagged' if entry['flagged'] else 'passed'}"
+            f"{', metal' if entry['metal'] else ''}")
+
+
 #: Every scene this tool can mark, and what it says it marks.
 RUBRICS = {
     "sorting-by-height": {
@@ -1367,6 +1897,41 @@ RUBRICS = {
                  "alarm.beacon, alarm.horn, panel.green, panel.red are yours to "
                  "write; oven.temperature, oven.attemp, oven.fault, "
                  "panel.setpoint and the buttons are the plant's."),
+    },
+    "light-curtain-sorting": {
+        "title": "Light curtain sorting",
+        "task": ("Sort on a measurement rather than on two bits. The curtain "
+                 "reports how tall each carton is, in metres, and the pot is "
+                 "the threshold -- read it when you measure each carton, "
+                 "because this run turns it."),
+        "build": LightCurtainScene,
+        "observe": None,
+        "grade": grade_light_curtain,
+        "summary": _summary_light_curtain,
+        "duration": 65.0,
+        "references": ("good", "fixed", "everyother"),
+        "tags": ("belt.rotate, emitter.emit, diverter.extend, panel.green, "
+                 "panel.red are yours to write; height_gauge.height, "
+                 "height_gauge.blocked, diverter.extended, diverter.retracted, "
+                 "tall_count.count, short_count.count, panel.setpoint and the "
+                 "buttons are the line's."),
+    },
+    "roller-line-weighing": {
+        "title": "Roller line with weighing",
+        "task": ("Checkweigh. Judge each carton on the peak weight it shows "
+                 "crossing the deck and light panel.red for anything over the "
+                 "limit on the pot. Two cartons on the deck read as one peak, "
+                 "so hold the feed while the scale is loaded."),
+        "build": RollerWeighScene,
+        "observe": None,
+        "grade": grade_roller_weighing,
+        "summary": _summary_roller,
+        "duration": 70.0,
+        "references": ("good", "metalonly", "fastfeed"),
+        "tags": ("infeed.rotate, scale.rotate, emitter.emit, "
+                 "weight_readout.value, panel.green, panel.red are yours to "
+                 "write; scale.weight, metal_check.detect, outfeed.count, "
+                 "panel.setpoint and the buttons are the line's."),
     },
 }
 
@@ -1770,6 +2335,191 @@ async def _oven_thermostat(bus, stop):
     await _oven_body(bus, stop, gain=0.0, integral_gain=0.0, deadband=4.0)
 
 
+# --- light curtain sorting references ------------------------------------
+
+def _lc_window() -> tuple[float, float]:
+    """When the diverter must be *commanded*, measured from the beam breaking.
+
+    Computed from the scene's own geometry rather than written down, the same
+    argument `_beam_to_pusher_window` makes for the sorting line: a change to
+    the belt speed changes the advice instead of quietly making it wrong.
+    """
+    beam_break = LC_CURTAIN_POS - 0.10
+    first = (LC_DIVERTER_POS - LC_CATCH - beam_break) / LC_BELT_SPEED - LC_TRAVEL_TIME
+    last = (LC_DIVERTER_POS + LC_CATCH - beam_break) / LC_BELT_SPEED - LC_TRAVEL_TIME
+    return first, last
+
+
+async def _lc_body(bus, stop, *, fixed: float | None, every_other: bool) -> None:
+    scanner = Scanner(bus)
+    low, high = _lc_window()
+    delay = (low + high) / 2
+    # A queue and not a single slot. The command has to be issued about 1.9 s
+    # after the beam breaks and cartons arrive every 2.2 s, so there is very
+    # nearly always one stroke pending when the next carton is measured -- the
+    # first version of this kept one and let every overlapping pair lose a
+    # carton, which read from the outside exactly like a controller that had
+    # misjudged the height.
+    state = {"blocked": False, "feed": 0.0, "emit": False, "seen": 0,
+             "pending": [], "drop_at": None}
+
+    async def body(dt: float) -> None:
+        scanner.scan()
+        now = time.perf_counter()
+
+        if scanner.running:
+            state["feed"] -= dt
+            if state["feed"] <= 0.0:
+                state["emit"] = not state["emit"]
+                state["feed"] = 2.0 if state["emit"] else 0.2
+        else:
+            state["emit"] = False
+
+        blocked = scanner.bit("height_gauge.blocked")
+        if blocked and not state["blocked"] and scanner.running:
+            state["seen"] += 1
+            if every_other:
+                divert = state["seen"] % 2 == 0
+            else:
+                threshold = fixed if fixed is not None else scanner.setpoint
+                divert = scanner.num("height_gauge.height") >= threshold
+            if divert:
+                state["pending"].append(now + delay)
+        state["blocked"] = blocked
+
+        while state["pending"] and now >= state["pending"][0]:
+            state["pending"].pop(0)
+            state["drop_at"] = now + 0.5
+        extend = state["drop_at"] is not None and now < state["drop_at"]
+        if state["drop_at"] is not None and now >= state["drop_at"]:
+            state["drop_at"] = None
+        if not scanner.running:
+            extend = False
+            state["pending"].clear()
+            state["drop_at"] = None
+
+        await bus.write_many({"belt.rotate": scanner.running,
+                              "emitter.emit": state["emit"],
+                              "diverter.extend": extend,
+                              **scanner.lamps()})
+
+    await run_scan(bus, stop, body)
+
+
+async def _lc_good(bus, stop):
+    """Measures each carton and compares it against the pot, read at the moment
+    of the measurement."""
+    await _lc_body(bus, stop, fixed=None, every_other=False)
+
+
+async def _lc_fixed(bus, stop):
+    """The threshold written into the program. Sorts perfectly until somebody
+    turns the knob, which is the difference between this scene and the one next
+    door where the rule is two bits of wiring."""
+    await _lc_body(bus, stop, fixed=lc_beam_ladder()[4], every_other=False)
+
+
+async def _lc_everyother(bus, stop):
+    """Diverts every second carton and never reads the height at all. It would
+    pass an alternating feed, which is why the feed is eight shuffled heights."""
+    await _lc_body(bus, stop, fixed=None, every_other=True)
+
+
+# --- roller line with weighing references ---------------------------------
+
+async def _rw_body(bus, stop, *, on_metal: bool, feed_gap: float) -> None:
+    scanner = Scanner(bus)
+    # `metal` holds the times the inductive eye fired, not a bit. Two reasons.
+    # The eye is upstream of the deck, so by the time a carton is weighed the
+    # eye has long since let go of it -- a program reading the eye at the
+    # moment of the verdict is reading the next carton. And the eye cannot be
+    # counted against, because cardboard passes it as if the lane were empty,
+    # which is the whole nature of an inductive sensor: there is no pulse per
+    # carton to queue, only a pulse per *steel* carton, so the only way to
+    # attach one to a carton is transit time. This is what makes `metalonly`
+    # a controller that is right at one limit rather than one that is broken,
+    # and being right at one limit is the failure the scene demonstrates.
+    state = {"feed": 0.0, "emit": False, "peak": 0.0, "loaded": False,
+             "reject": False, "clear_at": None, "metal": [], "eye": False,
+             "this_is_metal": False}
+
+    async def body(dt: float) -> None:
+        scanner.scan()
+        now = time.perf_counter()
+        weight = scanner.num("scale.weight")
+
+        # Feed into space. `feed_gap` is the whole difference between the two
+        # feeding behaviours: one holds while the deck is loaded, the other
+        # does not look.
+        gate = weight < 20.0 or feed_gap < 1.0
+        if scanner.running and gate:
+            state["feed"] -= dt
+            if state["feed"] <= 0.0:
+                state["emit"] = not state["emit"]
+                state["feed"] = feed_gap if state["emit"] else 0.2
+        else:
+            state["emit"] = False
+
+        eye = scanner.bit("metal_check.detect")
+        if eye and not state["eye"]:
+            state["metal"].append(now)
+        state["eye"] = eye
+        state["metal"] = [t for t in state["metal"] if now - t < 8.0]
+
+        if weight > 20.0:
+            if not state["loaded"]:
+                state["peak"] = 0.0
+                # The eye sits 0.8 m before the deck on rollers running at
+                # 0.4 m/s, so a pulse two seconds ago belongs to the carton
+                # arriving now. A window either side, because the infeed is not
+                # a metronome.
+                state["this_is_metal"] = any(1.4 <= now - t <= 2.8
+                                             for t in state["metal"])
+            state["loaded"] = True
+            state["peak"] = max(state["peak"], weight)
+        elif state["loaded"]:
+            state["loaded"] = False
+            state["reject"] = (state["this_is_metal"] if on_metal
+                               else state["peak"] > scanner.setpoint)
+            state["clear_at"] = now + 1.2
+
+        if state["clear_at"] is not None and now >= state["clear_at"]:
+            state["reject"] = False
+            state["clear_at"] = None
+
+        await bus.write_many({"infeed.rotate": scanner.running,
+                              "scale.rotate": scanner.running,
+                              "emitter.emit": state["emit"],
+                              "weight_readout.value": int(round(weight)),
+                              "panel.green": scanner.running,
+                              "panel.red": state["reject"]})
+
+    await run_scan(bus, stop, body)
+
+
+async def _rw_good(bus, stop):
+    """Holds the feed while the deck is loaded and judges on the peak."""
+    # 3.2 s between cartons, against a 2.5 s dwell on a 1 m deck at 0.4 m/s.
+    # The gate on `scale.weight` alone cannot do this: it holds the *emitter*,
+    # and an emitted carton is five seconds of infeed away from the deck, so
+    # the gate is answering a question about where the line was rather than
+    # where it will be. Spacing is the control here, which is what the scene's
+    # own brief says.
+    await _rw_body(bus, stop, on_metal=False, feed_gap=3.2)
+
+
+async def _rw_metalonly(bus, stop):
+    """Rejects on the inductive sensor. On this line the steel cartons are also
+    the heavy ones -- until the limit drops below a tall cardboard one."""
+    await _rw_body(bus, stop, on_metal=True, feed_gap=3.2)
+
+
+async def _rw_fastfeed(bus, stop):
+    """Judges on the peak, correctly, and never holds the feed. Two cartons on
+    the deck read as one peak and both verdicts are guesses."""
+    await _rw_body(bus, stop, on_metal=False, feed_gap=0.9)
+
+
 #: `{scene: {name: controller}}`, plus the two shared ones. Every scene has a
 #: `good` that must pass and at least one wrong answer that must fail for that
 #: scene's own reason -- the rubric is only known to work when both have been
@@ -1782,6 +2532,10 @@ REFERENCES: dict[str, dict] = {
                            "fixedsp": _tank_fixedsp},
     "heat-treat-station": {"good": _oven_good, "ponly": _oven_ponly,
                            "thermostat": _oven_thermostat},
+    "light-curtain-sorting": {"good": _lc_good, "fixed": _lc_fixed,
+                              "everyother": _lc_everyother},
+    "roller-line-weighing": {"good": _rw_good, "metalonly": _rw_metalonly,
+                             "fastfeed": _rw_fastfeed},
 }
 
 _SHARED = {"idle": _idle, "forcer": _forcer}
