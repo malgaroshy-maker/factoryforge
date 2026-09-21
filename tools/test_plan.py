@@ -425,6 +425,24 @@ def section_c() -> None:
     # is one undo step.
     _self_test("C28", "the build loop: repeat placement, duplicate walks, arrow nudge", "buildflow")
 
+    # The six parts added after HP-34, asserted by what they do rather than by
+    # what tags they declare: a contactor's aux contact lagging its coil by a
+    # scan, an overload that stays out, a permissive that closes and starts
+    # nothing, a mute that expires, a cylinder mid-stroke making neither reed.
+    _self_test("C29", "the six control parts do what they do, not what they declare", "controlparts")
+
+    # Keystrokes pushed through the viewport, because "does this key stop here?"
+    # is a question only the viewport can answer -- Ctrl+C used to copy AND flip
+    # the camera, and the arrow-key nudge was inverted in every view.
+    _self_test("C30", "one keystroke does one thing, and the nudge follows the screen", "editorkeys")
+
+    # Deliberately NOT in tools/packaging/check_release.py: this scans
+    # engine/src/Editor/ for part type names, and an exported build has no .cs
+    # files to scan, so it reports SKIPPED there. A release-gate entry that
+    # always skips is a pass that proves nothing -- the exact shape this plan
+    # keeps finding. It belongs here, where the source exists.
+    _self_test("C31", "the editor still names no part type (HP-34 has not decayed)", "partcontract")
+
 
 def section_d(enabled: bool) -> None:
     print("\nD. Engine self-tests (need a display)")

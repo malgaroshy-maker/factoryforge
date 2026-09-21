@@ -36,6 +36,10 @@ SELF_TESTS = [
     "operate", "modehint", "tryscene", "scenes", "modes", "partsettings",
     "sidecar", "setpoint", "drag", "fault", "newparts", "lineparts",
     "buildflow",
+    # Behaviour of the six control parts, and the editor key contract.
+    # `partcontract` is deliberately absent: it scans .cs sources, which a
+    # .pck does not contain, so here it would skip forever and look green.
+    "controlparts", "editorkeys",
 ]
 
 
