@@ -288,6 +288,10 @@ public partial class Main : Node
         {
             AddChild(new LinePartsSelfTest { Name = "LinePartsSelfTest", Editor = _editor!, Tags = tags });
         }
+        if (_selfTest == "controlparts")
+        {
+            AddChild(new ControlPartsSelfTest { Name = "ControlPartsSelfTest", Editor = _editor!, Tags = tags });
+        }
         if (_selfTest == "editorkeys")
         {
             AddChild(new EditorKeysSelfTest { Name = "EditorKeysSelfTest", Editor = _editor!, Tags = tags });

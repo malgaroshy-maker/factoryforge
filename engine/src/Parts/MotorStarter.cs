@@ -47,9 +47,17 @@ public partial class MotorStarter : Node3D, IPart
     /// adjusted wrong constantly.</summary>
     [Export] public float TripPercent { get; set; } = 115.0f;
 
-    /// <summary>Seconds at twice the trip current before the element opens.
-    /// The curve is inverse-time from here.</summary>
-    [Export] public float TripTime { get; set; } = 8.0f;
+    /// <summary>
+    /// The trip class: seconds to trip at <em>six times</em> the trip setting,
+    /// which is roughly where a motor's starting inrush sits. Ten is a Class 10
+    /// overload, which is what most conveyor drives get.
+    ///
+    /// Stated at six times rather than at two because that is the number the
+    /// class is defined by, and because it is the one that has to be big enough
+    /// for the machine to start at all. A curve calibrated at two times looks
+    /// reasonable and trips on every inrush.
+    /// </summary>
+    [Export] public float TripTime { get; set; } = 10.0f;
 
     /// <summary>How long the contactor takes to pull in, seconds. Small, but
     /// not zero: the auxiliary contact is what a seal-in circuit latches
@@ -231,11 +239,17 @@ public partial class MotorStarter : Node3D, IPart
         if (IsClosed)
         {
             _startTimer += delta;
-            // Starting inrush, decaying to the running current. This is why a
-            // thermal overload is inverse-time and not a current limit: a motor
-            // draws six times its rating for the first moment of every start.
-            float inrush = 1.0f + (InrushFactor - 1.0f) * Mathf.Exp(-_startTimer / InrushDecay);
-            Current = FullLoadAmps * Mathf.Max(LoadPercent, 0.0f) / 100.0f * inrush;
+            // Starting inrush, decaying to the running current. Locked-rotor
+            // current is a property of the *motor* -- six times its full-load
+            // rating -- and not a multiple of whatever it happens to be pulling
+            // once it is up to speed. Scaling the running current instead made a
+            // heavily loaded motor draw eighteen times rated on start, which no
+            // overload on earth would survive and which tripped this one every
+            // time the test asked it to start.
+            float running = FullLoadAmps * Mathf.Max(LoadPercent, 0.0f) / 100.0f;
+            float lockedRotor = FullLoadAmps * InrushFactor;
+            float decay = Mathf.Exp(-_startTimer / InrushDecay);
+            Current = running + Mathf.Max(lockedRotor - running, 0.0f) * decay;
         }
         else
         {
@@ -248,12 +262,13 @@ public partial class MotorStarter : Node3D, IPart
 
     /// <summary>
     /// The trip curve. Heating goes as the square of the current over the trip
-    /// setting, which is what makes it inverse-time: twice the trip current
-    /// trips in <see cref="TripTime"/>, four times in a quarter of it, and ten
-    /// percent over takes a very long while.
+    /// setting, which is what makes an overload inverse-time: six times the
+    /// trip current fills the element in <see cref="TripTime"/>, twice the trip
+    /// current takes about twelve times as long, and ten percent over takes a
+    /// very long while indeed.
     ///
-    /// Below the trip setting the element cools, so a line that starts,
-    /// runs a while and starts again does not accumulate its way to a trip.
+    /// Below the trip setting the element cools, so a line that starts, runs a
+    /// while and starts again does not accumulate its way to a trip.
     /// </summary>
     private void StepThermal(float delta)
     {
@@ -264,11 +279,12 @@ public partial class MotorStarter : Node3D, IPart
         float ratio = Current / tripAmps;
         float curveTime = Mathf.Max(TripTime, 0.05f);
 
-        // Heat at (I/Itrip)^2 - 1 per second, scaled so ratio == 2 fills the
-        // element in TripTime. Cool at a third of that rate, which is roughly
-        // how a bimetal behaves and, more usefully, is slow enough that
-        // repeated starting still trips.
-        float rate = (ratio * ratio - 1.0f) / (3.0f * curveTime);
+        // Heat at (I/Itrip)^2 - 1 per second, scaled so ratio == InrushFactor
+        // fills the element in TripTime -- that is what the trip class means.
+        // Cool at a third of that rate, which is roughly how a bimetal behaves
+        // and, more usefully, is slow enough that repeated starting still trips.
+        float scale = (InrushFactor * InrushFactor - 1.0f) * curveTime;
+        float rate = (ratio * ratio - 1.0f) / scale;
         if (rate < 0.0f) rate /= 3.0f;
 
         ThermalState = Mathf.Clamp(ThermalState + rate * delta, 0.0f, 1.0f);
@@ -394,7 +410,7 @@ public partial class MotorStarter : Node3D, IPart
         ui.Slider("Full Load (A)", FullLoadAmps, 0.5f, 60.0f, 0.5f, value => FullLoadAmps = value);
         ui.Slider("Motor Load (%)", LoadPercent, 0.0f, 400.0f, 5.0f, value => LoadPercent = value);
         ui.Slider("Trip Setting (%)", TripPercent, 50.0f, 200.0f, 5.0f, value => TripPercent = value);
-        ui.Slider("Trip Time (s)", TripTime, 0.5f, 60.0f, 0.5f, value => TripTime = value);
+        ui.Slider("Trip Class (s @6x)", TripTime, 0.5f, 60.0f, 0.5f, value => TripTime = value);
         ui.TagPicker("Powers", LoadTag, "", TagType.Bit, TagKind.Output,
                      chosen => LoadTag = chosen);
     }
