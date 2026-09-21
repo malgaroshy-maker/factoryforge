@@ -18,12 +18,20 @@ So the thing under test is the whole chain a real line has, over the same seam
 a real PLC uses. Nothing here reaches into the controller and nothing here
 drives the scene.
 
-**The verdict comes from the cartons, not from the tags.** The scene knows how
-tall every carton it made was and which lane it ended in, and no controller can
-reach that. Counters, sensor values and actuator commands are *evidence* -- the
-part a student needs in order to fix anything -- but they are never the
-criterion, because every one of them is reachable from the bus and a criterion
-you can reach is a criterion you can fake.
+**The verdict comes from the plant, not from the tags.** The scene knows how
+tall every carton it made was and which lane it ended in, how many litres the
+pump really moved, and the tick the contactor pulled in -- and no controller
+can reach any of it. Counters, sensor values and actuator commands are
+*evidence*, the part a student needs in order to fix anything, but they are
+never the criterion, because every one of them is reachable from the bus and a
+criterion you can reach is a criterion you can fake.
+
+**And the exam changes the plant while the program runs.** Six of the ten
+scenes are gradeable only because of this: the pot moves to a second value, the
+drive's top speed doubles, the gantry slows down, the pump is re-rated. None of
+those is a value on the bus, so the only way to notice is to measure -- which
+is exactly the difference between a program written on feedback and one written
+on a stopwatch. A rubric that never moved anything would mark both the same.
 
 **Forcing is refused, not ignored.** A forced tag is a value that disagrees
 with the simulation on purpose. It is the right tool for fault injection and
@@ -42,9 +50,12 @@ Exit codes, for a marking script:
 `--json` writes the whole run: checks, per-carton ledger, measured timings,
 every force. That file is the appeal record.
 
-Honest limits are in docs/GRADING.md. The short version: one scene, the
-headless Python model of it rather than the 3D engine, and no marks for the
-operator panel.
+Honest limits are in docs/GRADING.md, and they grew rather than shrank when
+this went from one scene to ten. The short version: headless Python models of
+the plants rather than the 3D engine, so nothing here can jam or tip; no marks
+for fault injection on any scene, though every one of them has a fault tag and
+half the briefs end on it; and the operator contract itself is marked on two
+scenes out of ten.
 """
 from __future__ import annotations
 
@@ -4433,7 +4444,10 @@ def _announce(args, engine: GradedEngine, rubric: dict, seed: int) -> None:
     print(f"  {rubric['tags']}")
     print()
     print(f"  tag bus   {engine.url}")
-    print(f"  feed seed {seed}   window {args.duration:g}s")
+    # Not only the feed: the seed picks every number this run's exam chooses --
+    # the batch size, the setpoints, the thresholds, the limits -- so quoting
+    # it is what makes a disputed mark re-runnable exactly.
+    print(f"  exam seed {seed}   window {args.duration:g}s")
     print()
     print("  Connect your controller with:")
     print(f"    python -m factoryforge_sidecar connect --driver <yours> "

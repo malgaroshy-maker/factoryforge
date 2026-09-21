@@ -52,7 +52,7 @@ prints the line the student needs:
 
 ```
   tag bus   ws://127.0.0.1:61812/tagbus
-  feed seed 1288431   window 60s
+  exam seed 1288431   window 60s
 
   Connect your controller with:
     python -m factoryforge_sidecar connect --driver <yours> --port 61812 -o <options>
