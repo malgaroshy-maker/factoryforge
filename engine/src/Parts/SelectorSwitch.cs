@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -17,7 +18,7 @@ namespace FactoryForge.Parts;
 /// mutually exclusive bits would invite a program that handles two of them
 /// being true, a state the hardware cannot produce.
 /// </summary>
-public partial class SelectorSwitch : Node3D
+public partial class SelectorSwitch : Node3D, IPart
 {
     /// <summary>How many detents. Two is Off/On, three is the classic
     /// Manual / Off / Auto.</summary>
@@ -245,4 +246,52 @@ public partial class SelectorSwitch : Node3D
         _Ready();
         Detent = keep;
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>An Int, not a set of mutually exclusive bits: one switch is in
+    /// exactly one position, and publishing three bits would invite a program
+    /// that handles two of them being true.</summary>
+    public void DeclareTags(PartTagBuilder tags) =>
+        tags.Int("position", $"Selector {tags.Index} Position", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("positions", PositionCount);
+        settings.Put("labels", Labels);
+        // Where the switch was left. A real selector does not spring back, and a
+        // scene reopened mid-experiment should reopen in the mode it was in.
+        settings.Put("detent", Detent);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Whole("positions") is { } positions) PositionCount = positions;
+        if (settings.Text("labels") is { } labels) Labels = labels;
+        // Last, so the clamp sees the detent count this scene asked for rather
+        // than the default three.
+        if (settings.Whole("detent") is { } detent) Detent = detent;
+    }
+
+    /// <summary>The selector is an operator input and nothing else drives it, so
+    /// the part is always the authority: it publishes where the knob is and
+    /// never reads the tag back. That is the same one-writer rule the panel's
+    /// buttons follow.</summary>
+    public void StepPart(PartTick tick) => tick.Write("position", Detent);
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        // Both are read only while the plate and its detent marks are built, so
+        // both need the rebuild alongside them.
+        ui.Slider("Positions", PositionCount, 2, 6, 1,
+                  value => { PositionCount = (int)value; Rebuild(); });
+        ui.Text("Labels (comma)", Labels, 24, text => { Labels = text; Rebuild(); });
+    }
+
+    /// <summary>Drives the *part*, not the tag: the switch steps round a detent
+    /// and publishes its position on the next tick. Writing the tag here would
+    /// make the click and the machine two authorities for one value.</summary>
+    public PartOperation? Operation => new("selector", "position");
+
+    public void Operate(PartOperate op) => Advance();
 }

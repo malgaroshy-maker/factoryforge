@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -5,7 +6,7 @@ namespace FactoryForge.Parts;
 /// <summary>
 /// 3D 7-Segment Digital LED Display panel showing live integer tag values (e.g. box counts).
 /// </summary>
-public partial class DigitalDisplay : Node3D
+public partial class DigitalDisplay : Node3D, IPart
 {
     private Label3D _label3D = null!;
     private double _value;
@@ -145,5 +146,22 @@ public partial class DigitalDisplay : Node3D
         {
             _label3D.PixelSize = BasePixelSize * budget / natural;
         }
+    }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) =>
+        tags.Int("value", $"Display {tags.Index} Value", TagKind.Output);
+
+    public void CaptureSettings(PartSettings settings) => settings.Put("unit", Unit);
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Text("unit") is { } unit) Unit = unit;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.Has("value")) Value = tick.Whole("value");
     }
 }

@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -18,7 +19,7 @@ namespace FactoryForge.Parts;
 /// guard is shut</b>, so a broken wire reads as an open guard and stops the
 /// line, exactly like the normally-closed E-stop next to it.
 /// </summary>
-public partial class SafetyGate : Node3D
+public partial class SafetyGate : Node3D, IPart
 {
     /// <summary>How far the door slides when it opens, in metres.</summary>
     [Export] public float TravelDistance { get; set; } = 0.72f;
@@ -199,4 +200,53 @@ public partial class SafetyGate : Node3D
                 0.35f);
         }
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        // Normally closed, like the E-stop beside it: true while the guard is
+        // shut, so a broken circuit reads as "not safe".
+        .Bit("closed", $"Guard {tags.Index} Closed (NC)", TagKind.Input, initial: true)
+        .Bit("lock", $"Guard {tags.Index} Solenoid Lock", TagKind.Output)
+        .Bit("locked", $"Guard {tags.Index} Locked Shut", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("travel", TravelDistance);
+        settings.Put("slide_speed", SlideSpeed);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("travel") is { } travel) TravelDistance = travel;
+        if (settings.Number("slide_speed") is { } slide) SlideSpeed = slide;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("lock", out bool locked)) SetLocked(locked);
+
+        Step(tick.Dt);
+        tick.Write("closed", IsClosed);
+        tick.Write("locked", IsLocked && IsClosed);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Travel (m)", TravelDistance, 0.2f, 1.5f, 0.05f,
+                  value => TravelDistance = value);
+        ui.Slider("Slide Speed (m/s)", SlideSpeed, 0.2f, 3.0f, 0.1f, value => SlideSpeed = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetGate();
+        reset.Write("closed", true);
+    }
+
+    /// <summary>The door slides, or refuses while its solenoid holds it — so a
+    /// click drives the part rather than flipping the contact.</summary>
+    public PartOperation? Operation => new("guard door", "closed");
+
+    public void Operate(PartOperate op) => Toggle();
 }

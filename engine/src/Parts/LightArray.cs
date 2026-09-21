@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -11,7 +12,7 @@ namespace FactoryForge.Parts;
 /// uses: rather than inferring height from two bits, the PLC reads the height
 /// directly and can sort into as many classes as it likes.
 /// </summary>
-public partial class LightArray : Node3D
+public partial class LightArray : Node3D, IPart
 {
     /// <summary>Beams in the curtain. More beams, finer resolution.</summary>
     [Export] public int BeamCount { get; set; } = 12;
@@ -167,5 +168,45 @@ public partial class LightArray : Node3D
         IsBlocked = any;
         MeasuredHeight = any ? highest : 0.0f;
         _readout.Text = $"{MeasuredHeight * 1000.0f:0} mm";
+    }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>A measurement and a bit: how far up the curtain the tallest
+    /// blocked beam sits, and whether anything is blocked at all.</summary>
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Float("height", $"Light Array {tags.Index} Height (m)", TagKind.Input)
+        .Bit("blocked", $"Light Array {tags.Index} Blocked", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("beams", BeamCount);
+        settings.Put("curtain_height", CurtainHeight);
+        settings.Put("range", Range);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Whole("beams") is { } beams) BeamCount = beams;
+        if (settings.Number("curtain_height") is { } height) CurtainHeight = height;
+        if (settings.Number("range") is { } range) Range = range;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        tick.Write("height", (double)MeasuredHeight);
+        tick.Write("blocked", IsBlocked);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        // Both settings are read only while the curtain is built, so both need
+        // the rebuild alongside them. Until LE-01 they did not have it, and
+        // Curtain Height was the one control in the panel that moved and did
+        // nothing.
+        ui.Slider("Curtain Height (m)", CurtainHeight, 0.1f, 1.0f, 0.02f,
+                  value => { CurtainHeight = value; Rebuild(); });
+        ui.Slider("Beams", BeamCount, 2, 24, 1,
+                  value => { BeamCount = (int)value; Rebuild(); });
     }
 }

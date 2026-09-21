@@ -10,7 +10,7 @@ namespace FactoryForge.Editor;
 /// <summary>
 /// Handles interactive 3D part placement, rotation (R), deletion (Delete), and grid snapping on VoxelGrid.
 /// </summary>
-public partial class SceneEditor : Node3D
+public partial class SceneEditor : Node3D, IPartHost
 {
     [Export] public VoxelGrid Grid { get; set; } = null!;
     public TagTable Tags { get; set; } = null!;
@@ -111,55 +111,16 @@ public partial class SceneEditor : Node3D
 
         public void InvalidateTagIds() => _tagIds = null;
 
-        private static readonly Dictionary<string, string[]> TagSuffixesByType = new()
+        private static Dictionary<string, string> BuildTagIdCache(string instanceId,
+                                                                  string partType)
         {
-            ["ConveyorBelt"] = new[] { "rotate", "fault" },
-            ["RollerConveyor"] = new[] { "rotate", "fault" },
-            ["WeighingConveyor"] = new[] { "rotate", "weight", "fault" },
-            ["PusherMechanism"] = new[] { "extend", "extended", "retracted", "fault" },
-            ["PhotoelectricSensor"] = new[] { "detect" },
-            ["RetroreflectiveSensor"] = new[] { "detect" },
-            ["InductiveSensor"] = new[] { "detect" },
-            ["Emitter"] = new[] { "emit" },
-            ["ButtonPanel"] = new[] { "green", "red", "estop", "setpoint" },
-            ["StackLight"] = new[] { "green", "yellow", "red" },
-            ["DigitalDisplay"] = new[] { "value" },
-            ["LightArray"] = new[] { "height", "blocked" },
-            ["LevelTank"] = new[] { "level", "fill", "drain", "fault" },
-            ["VariableConveyor"] = new[] { "run", "speed", "actual", "fault" },
-            ["PivotDiverter"] = new[] { "divert", "diverted", "home", "fault" },
-            ["PickPlaceArm"] = new[]
-            {
-                "target", "lower", "grip", "position", "inposition",
-                "lowered", "raised", "holding", "fault",
-            },
-            ["BarcodeScanner"] = new[] { "enable", "code", "read", "present" },
-            ["AnalogGauge"] = new[] { "value" },
-            ["AlarmBeacon"] = new[] { "beacon", "horn" },
-            ["HeatingStation"] = new[] { "heater", "temperature", "attemp", "fault" },
-            ["SelectorSwitch"] = new[] { "position" },
-            ["SafetyGate"] = new[] { "closed", "lock", "locked" },
-            ["StopGate"] = new[] { "raise", "up", "down", "fault" },
-            ["TurnTable"] = new[] { "index", "athome", "atindex", "fault" },
-            ["RotaryEncoder"] = new[] { "count", "rate", "reset" },
-            ["CoolingFan"] = new[] { "run", "speed", "airflow", "fault" },
-            ["TwoHandControl"] = new[] { "left", "right", "valid" },
-        };
-
-        /// <summary>Which tag suffixes a part type owns — the one place that
-        /// question is answered, so "can this be faulted?" is derived from the
-        /// tag set rather than kept as a second list that drifts from it.</summary>
-        public static IReadOnlyList<string> SuffixesFor(string partType) =>
-            TagSuffixesByType.TryGetValue(partType, out var suffixes)
-                ? suffixes : System.Array.Empty<string>();
-
-        private static Dictionary<string, string> BuildTagIdCache(string instanceId, string partType)
-        {
-            if (!TagSuffixesByType.TryGetValue(partType, out var suffixes))
-                return new Dictionary<string, string>();
-
-            var cache = new Dictionary<string, string>(suffixes.Length);
-            foreach (var suffix in suffixes) cache[suffix] = $"{instanceId}.{suffix}";
+            // Asked of the part, through the catalog, rather than read from a
+            // hand-kept table here (HP-34). That table was a second copy of the
+            // registration switch, and a part whose tags changed in one and not
+            // the other dispatched against ids nothing owned.
+            var suffixes = PartCatalog.TagSuffixes(partType);
+            var cache = new Dictionary<string, string>(suffixes.Count);
+            foreach (string suffix in suffixes) cache[suffix] = $"{instanceId}.{suffix}";
             return cache;
         }
     }
@@ -234,7 +195,6 @@ public partial class SceneEditor : Node3D
     private MeshInstance3D? _hoverOutline;
 
     /// <summary>Emitters whose emit tag is currently high, for edge detection.</summary>
-    private readonly HashSet<string> _emitEdges = new();
     private bool _emitAlternate;
 
     /// <summary>
@@ -367,7 +327,7 @@ public partial class SceneEditor : Node3D
     /// The ghost is an ordinary part -- that is what makes it an honest preview,
     /// since it is built by the same factory and shows the real geometry -- and
     /// it was added to the scene as one. So sweeping a remover preview over the
-    /// line *deleted cartons*: Remover connects BodyEntered in _Ready and calls
+    /// line *deleted cartons*: a remover zone connects BodyEntered in _Ready and calls
     /// QueueFree on whatever arrives, and nothing about cancelling the placement
     /// brings them back. The same is true in smaller ways of every part with a
     /// collider: a belt ghost blocked cartons it was not yet part of.
@@ -557,64 +517,99 @@ public partial class SceneEditor : Node3D
         }
         else if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
         {
-            if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Z)
-            {
-                Undo();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Y)
-            {
-                Redo();
-            }
+            HandleEditorKey(keyEvent);
+        }
+    }
+
+    /// <summary>
+    /// Edit mode's keyboard, and the one rule it has: a key this consumes must
+    /// be claimed, and a key it does not want must be left alone (HP-38).
+    ///
+    /// Both halves were broken, in opposite directions and on adjacent lines.
+    /// Ctrl+C copied and did not claim, so it fell through to <c>Main</c>'s
+    /// bare <c>Key.C</c> and toggled the camera as well — one keystroke, two
+    /// actions, one of which the user did not ask for and cannot undo. Ctrl+R
+    /// rotated the selection because the rotate branch did not exclude Ctrl,
+    /// while <c>Main</c> treats Ctrl+R as "reset the simulation" — so the reset
+    /// also turned whatever was selected. Two lines below, <c>Key.N</c> was
+    /// already guarded with <c>!keyEvent.CtrlPressed</c>: the convention existed
+    /// and had been applied to one key out of three.
+    ///
+    /// Escape is deliberately not claimed. It cancels a placement here *and*
+    /// dismisses an overlay in <c>Main</c>, and those are two different things
+    /// that happen to share a key by long convention.
+    /// </summary>
+    private void HandleEditorKey(InputEventKey keyEvent)
+    {
+        bool handled = true;
+
+        if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Z)
+        {
+            Undo();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Y)
+        {
+            Redo();
+        }
             // Ctrl+S / Ctrl+O are handled above, ahead of the Run-mode return,
             // so they are unreachable here (Edit mode already returned via
             // that branch too) rather than duplicated.
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.D && _selectedPart is not null)
-            {
-                DuplicateSelectedPart();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.A)
-            {
-                SelectEverything();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.C)
-            {
-                CopySelection();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.V)
-            {
-                PasteClipboard();
-            }
-            else if (keyEvent.Keycode == Key.M && _selectedPart is not null)
-            {
-                StartMoveSelectedPart();
-            }
-            else if (keyEvent.Keycode == Key.R && _previewNode is not null)
-            {
-                _previewRotationY += Mathf.Pi / 2.0f;
-                _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
-            }
-            else if (keyEvent.Keycode == Key.R && _previewNode is null && _selectedPart is not null)
-            {
-                RotateSelectedPart();
-            }
-            else if (keyEvent.Keycode == Key.N && !keyEvent.CtrlPressed)
-            {
-                TogglePartNames();
-            }
-            else if (keyEvent.Keycode == Key.Escape)
-            {
-                ClearPreview();
-                DeselectPart();
-            }
-            else if (_selectedPart is not null && NudgeFor(keyEvent.Keycode) is { } nudge)
-            {
-                NudgeSelectedPart(nudge);
-            }
-            else if (keyEvent.Keycode == Key.Delete || keyEvent.Keycode == Key.Backspace)
-            {
-                DeleteSelectedPart();
-            }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.D && _selectedPart is not null)
+        {
+            DuplicateSelectedPart();
         }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.A)
+        {
+            SelectEverything();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.C)
+        {
+            CopySelection();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.V)
+        {
+            PasteClipboard();
+        }
+        else if (keyEvent.Keycode == Key.M && _selectedPart is not null)
+        {
+            StartMoveSelectedPart();
+        }
+        else if (keyEvent.Keycode == Key.R && !keyEvent.CtrlPressed && _previewNode is not null)
+        {
+            _previewRotationY += Mathf.Pi / 2.0f;
+            _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
+        }
+        else if (keyEvent.Keycode == Key.R && !keyEvent.CtrlPressed
+                 && _previewNode is null && _selectedPart is not null)
+        {
+            RotateSelectedPart();
+        }
+        else if (keyEvent.Keycode == Key.N && !keyEvent.CtrlPressed)
+        {
+            TogglePartNames();
+        }
+        else if (keyEvent.Keycode == Key.Escape)
+        {
+            ClearPreview();
+            DeselectPart();
+            // Shared with Main's overlay dismissal on purpose. See the summary.
+            handled = false;
+        }
+        else if (_selectedPart is not null && !keyEvent.CtrlPressed
+                 && NudgeFor(keyEvent.Keycode) is { } nudge)
+        {
+            NudgeSelectedPart(nudge);
+        }
+        else if (keyEvent.Keycode == Key.Delete || keyEvent.Keycode == Key.Backspace)
+        {
+            DeleteSelectedPart();
+        }
+        else
+        {
+            handled = false;
+        }
+
+        if (handled) ClaimInput();
     }
 
     /// <summary>Screen-space direction for an arrow key, or null for anything
@@ -732,83 +727,18 @@ public partial class SceneEditor : Node3D
             if (node is BoxPhysics box) box.QueueFree();
         }
 
+        // Every part puts itself back (HP-34). This was eleven `is <Type>`
+        // tests in a row, each one calling a differently-named reset method and
+        // then writing that part's tags by hand -- so a new part with run state
+        // was a part a reset silently left where the last run put it. Until
+        // LP-12 that was the heating station: Ctrl+R left the plate hot and the
+        // next run started from a place no experiment could reproduce.
         foreach (var part in _placedParts)
         {
-            if (part.Node is LevelTank levelTank)
-            {
-                levelTank.ResetLevel();
-                if (Tags is not null && Tags.Contains($"{part.InstanceId}.level"))
-                    Tags.Set($"{part.InstanceId}.level", 0.0);
-            }
-            if (part.Node is ButtonPanel resetPanel)
-            {
-                // A reset must not start the next run holding a struck E-stop,
-                // and must not deliver a press queued before the reset.
-                resetPanel.ResetButtons();
-                ClearPanelPulses(part.InstanceId);
-                if (Tags is not null && Tags.Contains($"{part.InstanceId}.estop"))
-                    Tags.Set($"{part.InstanceId}.estop", true);
-            }
-            if (part.Node is Emitter emitter) emitter.ResetCount();
-
-            // Everything below is state a *run* accumulates rather than a
-            // machine somebody built, so a reset has to clear it (LP-12).
-            // Until this existed, Ctrl+R on the heat-treat scene left the plate
-            // at whatever temperature the last run reached, and the next run
-            // started from a place no experiment could reproduce -- the plant's
-            // whole point is its time constant, measured from ambient.
-            if (part.Node is HeatingStation station)
-            {
-                station.ResetTemperature();
-                SetIfPresent(part.InstanceId, "temperature", (double)station.Temperature);
-                SetIfPresent(part.InstanceId, "attemp", station.AtTemperature);
-            }
-            if (part.Node is CoolingFan coolingFan)
-            {
-                coolingFan.ResetFan();
-                SetIfPresent(part.InstanceId, "airflow", 0.0);
-            }
-            if (part.Node is SafetyGate resetGate)
-            {
-                resetGate.ResetGate();
-                SetIfPresent(part.InstanceId, "closed", true);
-            }
-            if (part.Node is StopGate resetStop)
-            {
-                resetStop.ResetGate();
-                SetIfPresent(part.InstanceId, "up", false);
-                SetIfPresent(part.InstanceId, "down", true);
-            }
-            if (part.Node is TurnTable resetTable)
-            {
-                resetTable.ResetDeck();
-                SetIfPresent(part.InstanceId, "athome", true);
-                SetIfPresent(part.InstanceId, "atindex", false);
-            }
-            if (part.Node is RotaryEncoder resetEncoder)
-            {
-                resetEncoder.ResetCount();
-                SetIfPresent(part.InstanceId, "count", 0);
-                SetIfPresent(part.InstanceId, "rate", 0.0);
-            }
-            if (part.Node is TwoHandControl resetHands)
-            {
-                resetHands.ResetStation();
-                SetIfPresent(part.InstanceId, "left", false);
-                SetIfPresent(part.InstanceId, "right", false);
-                SetIfPresent(part.InstanceId, "valid", false);
-            }
-
-            if (part.Node is not Remover remover) continue;
-
-            remover.ResetCount();
-            string countTag = remover.CountTag.Length > 0
-                ? remover.CountTag
-                : $"{part.InstanceId}.count";
-            if (Tags is not null && Tags.Contains(countTag)) Tags.Set(countTag, 0);
+            if (part.Node is IPart resettable)
+                resettable.ResetPart(new PartReset(Tags, part.InstanceId));
         }
 
-        _emitEdges.Clear();
         _emitAlternate = false;
     }
 
@@ -829,7 +759,6 @@ public partial class SceneEditor : Node3D
         if (part.OwnsTags && Tags is not null)
             PartTagManager.UnregisterPartTags(part.InstanceId, Tags);
 
-        ClearPanelPulses(part.InstanceId);
         part.Node.QueueFree();
         _placedParts.Remove(part);
         _dragOrigins.Remove(part);
@@ -1247,45 +1176,14 @@ public partial class SceneEditor : Node3D
         }
     }
 
-    /// <summary>Whole-body operable parts: no sub-regions of their own, so one
-    /// click anywhere on the part's bounding box drives the one tag named here
-    /// (UX-37). Parts with independently clickable sub-regions -- a panel's
-    /// caps, a stack light's lamps, a tank's valves -- are asked directly via
-    /// their own <c>HitTest</c> instead and do not appear here.</summary>
-    private static readonly Dictionary<string, string> WholeBodyOperableTag = new()
-    {
-        ["ConveyorBelt"] = "rotate",
-        ["RollerConveyor"] = "rotate",
-        ["WeighingConveyor"] = "rotate",
-        ["PusherMechanism"] = "extend",
-        ["Emitter"] = "emit",
-        ["VariableConveyor"] = "run",
-        ["PivotDiverter"] = "divert",
-        ["PickPlaceArm"] = "lower",
-        ["BarcodeScanner"] = "enable",
-        ["AlarmBeacon"] = "beacon",
-        // The heater's one output is a percentage, so a click drives it fully
-        // on or fully off, exactly as a click on a tank valve does.
-        ["HeatingStation"] = "heater",
-        // Neither of these toggles a bit: the selector steps round a detent
-        // and the gate slides (or refuses, while its solenoid holds it). They
-        // are listed here so the hover outline and the "what is clickable"
-        // hint find them, and handled by name in OperatePart.
-        ["SelectorSwitch"] = "position",
-        ["SafetyGate"] = "closed",
-        ["StopGate"] = "raise",
-        ["TurnTable"] = "index",
-        // The fan takes two tags to start, so a click cannot simply flip this
-        // one -- see OperatePart. It is named here so the hover outline and the
-        // "what is clickable" hint find the part at all.
-        ["CoolingFan"] = "run",
-    };
-
-    /// <summary>Whole-body parts whose one operable tag is analog, so a click
-    /// means "fully on / fully off" rather than "flip the bit". Kept as a set
-    /// rather than a second dispatch table so a part cannot end up in both and
-    /// have its click mean two things.</summary>
-    private static readonly HashSet<string> AnalogOperableParts = new() { "HeatingStation" };
+    /// <summary>How a click reaches a part, or null if it is not operable by
+    /// hand. Asked of the part (HP-34): this used to be two tables here — a
+    /// dictionary from type name to its one clickable tag, and a set naming the
+    /// types whose tag is analog — and a new operable part missing from either
+    /// was a part the hover outline could not find or a click drove wrongly.
+    /// </summary>
+    private static PartOperation? OperationOf(PlacedPart part) =>
+        part.Node is IPart p ? p.Operation : null;
 
     /// <summary>
     /// Run mode's click: find the operator control under the cursor and press
@@ -1335,29 +1233,14 @@ public partial class SceneEditor : Node3D
         if (Mode != EditorMode.Run) return null;
         if (FaultToolArmed) return FindFaultTarget(from, dir)?.InstanceId;
 
-        var hit = FindOperableTarget(from, dir);
-        if (hit is not { } found) return null;
-        if (found.Part is { } part) return part.InstanceId;
-
-        foreach (var entry in _placedParts)
-        {
-            if (ReferenceEquals(entry.Node, found.Panel)) return entry.InstanceId;
-        }
-        return null;
+        return FindOperableTarget(from, dir)?.Part.InstanceId;
     }
 
     /// <summary>Part types that have a drive that can fail. Derived from the
-    /// tag set rather than listed twice: anything that registered a
+    /// tag set rather than listed twice: anything that declared a
     /// <c>.fault</c> tag can be faulted, and anything that did not, cannot.
     /// </summary>
-    public bool CanFault(string partType)
-    {
-        foreach (string suffix in PlacedPart.SuffixesFor(partType))
-        {
-            if (suffix == "fault") return true;
-        }
-        return false;
-    }
+    public bool CanFault(string partType) => PartCatalog.CanFault(partType);
 
     /// <summary>The nearest drive the ray lands on that could be failed.
     /// Shared by the click and the hover, for the same reason
@@ -1404,7 +1287,7 @@ public partial class SceneEditor : Node3D
 
     /// <summary>The pot currently being turned, if any. A drag owns the mouse
     /// until release, so nothing else in Run mode acts on the motion.</summary>
-    private ButtonPanel? _dialDrag;
+    private IDialPart? _dialDrag;
 
     public bool IsDraggingDial => _dialDrag is not null;
 
@@ -1436,150 +1319,92 @@ public partial class SceneEditor : Node3D
     {
         if (Mode != EditorMode.Run) return false;
 
-        if (FindOperableTarget(from, dir) is not { Dial: true, Panel: { } panel }) return false;
+        if (FindOperableTarget(from, dir) is not { Region: PartOperate.DialRegion } hit)
+            return false;
+        if (hit.Part.Node is not IDialPart dial) return false;
 
-        _dialDrag = panel;
+        _dialDrag = dial;
 
         // Turning the knob takes the tag back from whoever forced it. A force
         // is sticky everywhere else in the editor and deliberately is not
         // here: the pot on the panel *is* the operator, and an operator who
         // turns a knob that then snaps back has been lied to.
-        foreach (var entry in _placedParts)
-        {
-            if (!ReferenceEquals(entry.Node, panel)) continue;
-            if (Tags is not null && entry.TagIds.TryGetValue("setpoint", out var id)
-                && Tags.Contains(id))
-                Tags.ClearForce(id);
-            break;
-        }
+        if (Tags is not null && hit.Part.TagIds.TryGetValue(dial.DialTagSuffix, out var id)
+            && Tags.Contains(id))
+            Tags.ClearForce(id);
 
         return true;
     }
 
     /// <summary>Screen pixels of travel since the last motion event, positive
     /// upward.</summary>
-    public void DragDial(float pixelsUp) => _dialDrag?.DragSetpoint(pixelsUp);
+    public void DragDial(float pixelsUp) => _dialDrag?.TurnDial(pixelsUp);
 
     public void EndDialDrag() => _dialDrag = null;
 
-    /// <summary>What a ray landed on: either a panel cap (<paramref name="Panel"/>
-    /// set), or a part and, for a precise part, which of its regions
-    /// (<paramref name="Region"/>) -- shared between the click dispatch
+    /// <summary>What a ray landed on: a part, and which of its regions
+    /// (<paramref name="Region"/>) -- the empty string for a whole-body part,
+    /// and <see cref="PartOperate.DialRegion"/> for a knob that is turned
+    /// rather than pressed. Shared between the click dispatch
     /// (<see cref="PressControlAtRay"/>) and the hover highlight (UX-39), so
     /// the two can never disagree about what the cursor is over.</summary>
-    private readonly record struct OperableHit(ButtonPanel? Panel, PanelButton PanelButton,
-                                                 PlacedPart? Part, string? Region,
-                                                 bool Dial = false)
+    private readonly record struct OperableHit(PlacedPart Part, string Region)
     {
-        public Node3D? Node => (Node3D?)Panel ?? Part?.Node;
+        public Node3D Node => Part.Node;
     }
 
     /// <summary>
     /// Every part decides for itself what a click on it means (UX-37). Two
-    /// tiers, both ray-tested and compared on the same nearest-wins footing:
+    /// tiers, both ray-tested and compared on the same nearest-wins footing,
+    /// and which tier a part is in is the part's own answer
+    /// (<see cref="PartOperation.Precise"/>) rather than a list here:
     ///
-    /// * <b>Precise</b> parts (<see cref="ButtonPanel"/>, <see cref="StackLight"/>,
-    ///   <see cref="LevelTank"/>) test the ray against their own sub-regions --
-    ///   a bounding box would cover the whole housing and fire the nearest
-    ///   control no matter where on the part you clicked.
-    /// * Everything else in <see cref="WholeBodyOperableTag"/> is tested
-    ///   against its whole bounding box, the same box selection uses, and
-    ///   toggles the one tag it owns.
+    /// * A <b>precise</b> part tests the ray against its own sub-regions -- a
+    ///   panel's caps and pot, a stack light's lamps, a tank's valves, a
+    ///   two-hand station's palms. A bounding box would cover the whole housing
+    ///   and fire the nearest control no matter where on the part you clicked,
+    ///   and for the two-hand station it would put both palms under one click,
+    ///   which is precisely the defeat that part exists to refuse.
+    /// * Everything else is tested against its whole bounding box, the same box
+    ///   selection uses.
+    ///
+    /// Distances are measured along the ray in both tiers.
+    /// Distance-to-object-centre would mix two metrics in one "nearest wins"
+    /// comparison, which is exactly what let a wrong part shadow a stack
+    /// light's own lamp during UX-37's own verification.
     /// </summary>
     private OperableHit? FindOperableTarget(Vector3 from, Vector3 dir)
     {
         float nearest = float.MaxValue;
-        ButtonPanel? hitPanel = null;
-        PanelButton hitButton = default;
-        PlacedPart? hitPart = null;
-        string? hitRegion = null;
-        bool hitDial = false;
-        bool found = false;
+        OperableHit? hit = null;
 
         foreach (var entry in _placedParts)
         {
+            if (entry.Node is not IPart part) continue;
+            if (part.Operation is not { } operation) continue;
+
+            string region;
             float distance;
-            string? region;
 
-            switch (entry.Node)
+            if (operation.Precise)
             {
-                case ButtonPanel panel:
-                    // The pot is tested alongside the caps rather than in its
-                    // own separate pass. The hover highlight and the click
-                    // dispatch share this one function precisely so they can
-                    // never disagree about what the cursor is over, and a
-                    // control reachable only through a second, private ray
-                    // test would be a control the hover could not know about.
-                    if (panel.HitTestDial(from, dir))
-                    {
-                        distance = MeasureDistance(entry.Node, from, dir);
-                        if (distance >= nearest) continue;
-                        nearest = distance;
-                        found = true;
-                        hitPanel = panel;
-                        hitButton = default;
-                        hitPart = null;
-                        hitRegion = null;
-                        hitDial = true;
-                        continue;
-                    }
-                    if (panel.HitTest(from, dir) is not { } which) continue;
-                    // Measured along the ray, the same units the whole-body
-                    // parts below use -- distance-to-object-centre would mix
-                    // two different metrics in one "nearest wins" comparison,
-                    // which is exactly what let a wrong part shadow a stack
-                    // light's own lamp during UX-37's own verification.
-                    distance = MeasureDistance(entry.Node, from, dir);
-                    if (distance >= nearest) continue;
-                    nearest = distance;
-                    found = true;
-                    hitPanel = panel;
-                    hitButton = which;
-                    hitPart = null;
-                    hitRegion = null;
-                    hitDial = false;
-                    continue;
-
-                case StackLight light:
-                    if (light.HitTest(from, dir) is not { } stage) continue;
-                    distance = MeasureDistance(entry.Node, from, dir);
-                    region = stage;
-                    break;
-
-                case LevelTank tank:
-                    if (tank.HitTest(from, dir) is not { } valve) continue;
-                    distance = MeasureDistance(entry.Node, from, dir);
-                    region = valve;
-                    break;
-
-                // Two palm buttons far enough apart that one hand cannot span
-                // them. Hit-testing the bounding box would put both of them
-                // under every click, which is precisely the defeat the part
-                // exists to refuse.
-                case TwoHandControl twoHand:
-                    if (twoHand.HitTest(from, dir) is not { } palm) continue;
-                    distance = MeasureDistance(entry.Node, from, dir);
-                    region = palm;
-                    break;
-
-                default:
-                    if (!WholeBodyOperableTag.ContainsKey(entry.PartType)) continue;
-                    if (PartBounds.RayDistance(entry.Node, from, dir) is not { } boxDistance) continue;
-                    distance = boxDistance;
-                    region = null;
-                    break;
+                if (part.HitTestRegion(from, dir) is not { } found) continue;
+                region = found;
+                distance = MeasureDistance(entry.Node, from, dir);
+            }
+            else
+            {
+                if (PartBounds.RayDistance(entry.Node, from, dir) is not { } boxDistance) continue;
+                region = "";
+                distance = boxDistance;
             }
 
             if (distance >= nearest) continue;
             nearest = distance;
-            found = true;
-            hitPanel = null;
-            hitPart = entry;
-            hitRegion = region;
-            hitDial = false;
+            hit = new OperableHit(entry, region);
         }
 
-        return found ? new OperableHit(hitPanel, hitButton, hitPart, hitRegion, hitDial) : null;
+        return hit;
     }
 
     /// <summary>Run mode's click, applied. Refuses outright in Edit mode
@@ -1597,10 +1422,9 @@ public partial class SceneEditor : Node3D
         // drag path. Returning here rather than falling through is what stops
         // a click on the knob also firing whichever cap the enum happens to
         // default to.
-        if (hit.Dial) return;
+        if (hit.Region == PartOperate.DialRegion) return;
 
-        if (hit.Panel is not null) hit.Panel.Press(hit.PanelButton);
-        else if (hit.Part is not null) OperatePart(hit.Part, hit.Region);
+        OperatePart(hit.Part, hit.Region);
     }
 
     /// <summary>Ray-parameter distance to a part, for comparing candidates of
@@ -1646,7 +1470,7 @@ public partial class SceneEditor : Node3D
         // changes shape is how every other application says "grab this and
         // pull", and without it the pot is a control you have to already know
         // about to find (OP-02).
-        SetDialCursor(hit is { Dial: true });
+        SetDialCursor(hit is { Region: PartOperate.DialRegion });
     }
 
     private bool _dialCursor;
@@ -1713,24 +1537,31 @@ public partial class SceneEditor : Node3D
         },
     };
 
-    /// <summary>How many parts in the scene would respond to a click in Run
-    /// mode, and a short list naming what kinds -- the entering-Run hint
-    /// (UX-39) uses this so a scene built with nothing operable says that
-    /// plainly instead of presenting a mode that silently does nothing.
-    /// </summary>
-    /// <summary>Whether any panel in the scene carries a setpoint pot worth
-    /// telling the user about — one whose scale plate spans a real range.
-    /// A pot with min == max cannot be turned and is not worth naming.</summary>
+    /// <summary>Whether any part in the scene carries a knob worth telling the
+    /// user about — one whose scale plate spans a real range. A pot with
+    /// min == max cannot be turned and is not worth naming. Asked of the part
+    /// through <see cref="IDialPart"/>, so a second turnable control would be
+    /// found here without this method learning what it is.</summary>
     public bool HasTurnablePot()
     {
         foreach (var entry in _placedParts)
         {
-            if (entry.Node is ButtonPanel panel && panel.SetpointMax > panel.SetpointMin)
-                return true;
+            if (entry.Node is IDialPart dial && dial.DialTurnable) return true;
         }
         return false;
     }
 
+    /// <summary>How many parts in the scene would respond to a click in Run
+    /// mode, and a short list naming what kinds -- the entering-Run hint
+    /// (UX-39) uses this so a scene built with nothing operable says that
+    /// plainly instead of presenting a mode that silently does nothing.
+    ///
+    /// Both halves come from the part's own <see cref="PartOperation"/>. They
+    /// used to come from a membership test against one table and a
+    /// twenty-branch switch producing the noun, and a part missing from either
+    /// was a part this banner never mentioned -- the surest way to leave a
+    /// control undiscovered.
+    /// </summary>
     public (int Count, string Kinds) DescribeOperableParts()
     {
         var kinds = new List<string>();
@@ -1738,41 +1569,10 @@ public partial class SceneEditor : Node3D
 
         foreach (var entry in _placedParts)
         {
-            // The precise parts first, then everything with a whole-body tag.
-            // A part reachable only through its own HitTest and missing from
-            // this list is a part the Run-mode banner never mentions, which is
-            // the surest way to leave a control undiscovered (the rule
-            // docs/PART_AUTHORING.md states in Step 8).
-            if (entry.Node is not (ButtonPanel or StackLight or LevelTank or TwoHandControl)
-                && !WholeBodyOperableTag.ContainsKey(entry.PartType))
-                continue;
+            if (OperationOf(entry) is not { } operation) continue;
 
             count++;
-            string kind = entry.PartType switch
-            {
-                "ConveyorBelt" => "conveyor",
-                "RollerConveyor" => "roller conveyor",
-                "WeighingConveyor" => "weigh conveyor",
-                "PusherMechanism" => "pusher",
-                "Emitter" => "emitter",
-                "StackLight" => "stack light",
-                "LevelTank" => "tank",
-                "ButtonPanel" => "panel",
-                "VariableConveyor" => "VFD conveyor",
-                "PivotDiverter" => "diverter",
-                "PickPlaceArm" => "gantry",
-                "BarcodeScanner" => "scanner",
-                "AlarmBeacon" => "beacon",
-                "HeatingStation" => "heater",
-                "SelectorSwitch" => "selector",
-                "SafetyGate" => "guard door",
-                "StopGate" => "blade stop",
-                "TurnTable" => "turntable",
-                "CoolingFan" => "fan",
-                "TwoHandControl" => "two-hand station",
-                _ => entry.PartType,
-            };
-            if (!kinds.Contains(kind)) kinds.Add(kind);
+            if (!kinds.Contains(operation.Kind)) kinds.Add(operation.Kind);
         }
 
         return (count, string.Join(", ", kinds));
@@ -1780,94 +1580,31 @@ public partial class SceneEditor : Node3D
 
     /// <summary>Apply a click's effect once <see cref="PressControlAtRay"/> has
     /// picked a part and, for a precise part, which of its regions was hit.
-    /// Every write goes through <see cref="TagTable.Force"/>, the same call
-    /// the Tag Inspector and the property panel (UX-34) make, so a part
+    ///
+    /// The part decides what the click means (HP-34). This used to be a switch
+    /// on the type name with five special cases and a default that consulted
+    /// two more tables -- and every one of those cases exists because a click
+    /// on a real machine is not uniformly "flip the bit": a valve opens fully,
+    /// an emitter pulses, a selector steps round a detent, a guard door slides
+    /// or refuses, a fan needs an enable *and* a reference. Those are facts
+    /// about the machines, and they are now written where the machines are.
+    ///
+    /// Every write still goes through <see cref="TagTable.Force"/>, the same
+    /// call the Tag Inspector and the property panel (UX-34) make, so a part
     /// operated by hand stays sticky exactly like they do (§5.2).</summary>
-    private void OperatePart(PlacedPart entry, string? region)
+    private void OperatePart(PlacedPart entry, string region)
     {
-        var ids = entry.TagIds;
-
-        switch (entry.PartType)
-        {
-            case "StackLight" when region is not null:
-                ToggleBit(ids, region);
-                break;
-
-            case "LevelTank" when region is not null:
-                ToggleValve(ids, region);
-                break;
-
-            case "Emitter":
-                PulseBit(ids, WholeBodyOperableTag[entry.PartType]);
-                break;
-
-            // Both drive the *part*, not the tag: the part publishes its own
-            // state on the next tick. Writing the tag here instead would make
-            // the click and the machine two authorities for one value, which
-            // is the bug the panel's momentary buttons were written to avoid.
-            case "SelectorSwitch":
-                if (entry.Node is SelectorSwitch selector) selector.Advance();
-                break;
-
-            case "SafetyGate":
-                if (entry.Node is SafetyGate gate) gate.Toggle();
-                break;
-
-            case "TwoHandControl" when region is not null:
-                // Drives the part, not the tag: the station decides whether the
-                // two hands arrived together, and publishes the permissive on
-                // the next tick. Writing `.valid` from here would make a click
-                // and the relay two authorities for one bit.
-                if (entry.Node is TwoHandControl twoHand) twoHand.Press(region);
-                break;
-
-            case "CoolingFan":
-                // A fan needs an enable *and* a reference, so a click has to
-                // move both or the part looks broken: the speed would go to
-                // 100 % and nothing would turn. Driven off `run`, since that is
-                // the one that decides.
-                if (!ids.TryGetValue("run", out var fanRunId)) break;
-                if (!Tags.TryGetVisible(fanRunId, out var fanRunVal)) break;
-                bool fanOn = !(bool)fanRunVal;
-                Tags.Force(fanRunId, fanOn);
-                if (ids.TryGetValue("speed", out var fanSpeedId))
-                    Tags.Force(fanSpeedId, fanOn ? 100.0 : 0.0);
-                break;
-
-            default:
-                if (!WholeBodyOperableTag.TryGetValue(entry.PartType, out var suffix)) break;
-                if (AnalogOperableParts.Contains(entry.PartType)) ToggleValve(ids, suffix);
-                else ToggleBit(ids, suffix);
-                break;
-        }
+        if (entry.Node is not IPart part) return;
+        part.Operate(new PartOperate(Tags, entry.TagIds, entry.InstanceId, region, PulseTag));
     }
 
-    private void ToggleBit(Dictionary<string, string> ids, string suffix)
+    /// <summary>Raise a tag and release it a moment later, for a control that
+    /// means a rising edge rather than a level. The timer belongs to the scene
+    /// tree, which a part has no business reaching into.</summary>
+    private void PulseTag(string id)
     {
-        if (!ids.TryGetValue(suffix, out var id) || !Tags.TryGetVisible(id, out var current)) return;
-        Tags.Force(id, !(bool)current);
-    }
-
-    /// <summary>A rising edge, not a level -- holding a tag high spawns nothing
-    /// new (the Emitter case in <see cref="_PhysicsProcess"/> only fires on the
-    /// edge), so a click has to pulse and release rather than latch on.
-    /// Mirrors the property panel's own "Emit one" button (UX-34).</summary>
-    private void PulseBit(Dictionary<string, string> ids, string suffix)
-    {
-        if (!ids.TryGetValue(suffix, out var id)) return;
         Tags.Force(id, true);
         GetTree().CreateTimer(0.05).Timeout += () => { if (Tags.Contains(id)) Tags.ClearForce(id); };
-    }
-
-    /// <summary>A click toggles a valve fully open or fully shut -- the tag is
-    /// a percent, not a bit, but "open it and see the level move" needs no
-    /// finer control than that from a single click (a drag-to-set slider
-    /// already exists on the property panel, UX-34).</summary>
-    private void ToggleValve(Dictionary<string, string> ids, string suffix)
-    {
-        if (!ids.TryGetValue(suffix, out var id) || !Tags.TryGetVisible(id, out var current)) return;
-        double value = System.Convert.ToDouble(current);
-        Tags.Force(id, value > 0.5 ? 0.0 : 100.0);
     }
 
     /// <summary>
@@ -1924,15 +1661,13 @@ public partial class SceneEditor : Node3D
         // adopts its tags (HP-15).
         PartTagManager.NoteInstanceId(entry.PartType, newId);
 
-        // Anything holding the old id has to follow it, or it points at a tag
-        // that no longer exists: the remover's count tag, and any button pulse
-        // waiting to be cleared on the next tick.
-        if (entry.Node is Remover remover
-            && remover.CountTag.StartsWith(entry.InstanceId + "."))
-        {
-            remover.CountTag = newId + remover.CountTag[entry.InstanceId.Length..];
-        }
-        ClearPanelPulses(entry.InstanceId);
+        // Anything the part holds that names one of its own tags has to follow
+        // it, or it points at a tag that no longer exists. Which settings those
+        // are is the part's own answer (HP-34): this used to reach into a
+        // remover by name and clear a panel's pulse queue out of a dictionary
+        // here, and a third part with the same problem would have needed a
+        // third clause nobody would have thought to add.
+        if (entry.Node is IPart renaming) renaming.PrefixRenamed(entry.InstanceId, newId);
 
         var renamed = entry with { InstanceId = newId };
         renamed.InvalidateTagIds();   // `with` copies the old id cache too
@@ -2259,163 +1994,6 @@ public partial class SceneEditor : Node3D
         _history.ExecuteCommand(CompositeCommand.Of(doomed));
         MarkDirty();
         NotifyTagsChanged();
-    }
-
-    /// <summary>
-    /// Build the sorting line out of real parts.
-    /// </summary>
-    /// <param name="physical">
-    /// When true the parts are authoritative: sensors raycast against real
-    /// cartons, the pusher reports its own limit switches, an emitter spawns
-    /// rigid bodies and removers count them. When false they are views of a
-    /// <see cref="SortingScene"/> that owns the same tags and simulates the
-    /// boxes itself. The layout and the tag interface are identical either way,
-    /// which is the point: the same PLC program drives both.
-    /// </param>
-    public void RegisterDefaultSceneParts(bool physical = false)
-    {
-        ClearAllPlacedParts();
-
-        // The instance id is the tag *prefix*, never a whole tag name: the part
-        // dispatch in _Process appends the suffix ("conveyor" -> conveyor.rotate).
-        // Registering "conveyor.rotate" here silently disables the part, because
-        // "conveyor.rotate.rotate" matches nothing.
-        // Every part sits on a grid point at the work plane (see PartLayout):
-        // X and Z are multiples of the 0.5 m cell, Y is always WorkPlaneY. The
-        // scene constants are already on the grid, so the layout falls out of
-        // them — no hand-tuned offsets, and "Save Scene" round-trips cleanly.
-        const float y = PartLayout.WorkPlaneY;
-        const float lane = (float)SortingScene.ChuteLane;
-
-        double length = SortingScene.RemoverPos - SortingScene.EmitterPos;
-        var beltNode = new ConveyorBelt
-        {
-            Position = new Vector3((float)(length / 2), y, 0),
-            Size = new Vector3((float)length, PartLayout.BeltThickness, 0.5f),
-            Speed = (float)SortingScene.BeltSpeed,
-        };
-        GetParent()?.AddChild(beltNode);
-        Adopt(beltNode, SortingTags.ConveyorId, "ConveyorBelt");
-
-        // Mounting heights are what makes the scene sort: the low beam sees every
-        // box, the high beam only clears the tall ones. Range reaches from the
-        // post across to the far belt edge.
-        var sensorLowNode = new PhotoelectricSensor
-        {
-            Position = new Vector3((float)SortingScene.SensorLowPos, y, lane),
-            Range = 0.75f,
-            HeightAboveBelt = 0.04f,
-            VisualOnly = !physical,
-        };
-        GetParent()?.AddChild(sensorLowNode);
-        Adopt(sensorLowNode, SortingTags.SensorLowId, "PhotoelectricSensor");
-
-        var sensorHighNode = new PhotoelectricSensor
-        {
-            Position = new Vector3((float)SortingScene.SensorHighPos, y, lane),
-            Range = 0.75f,
-            HeightAboveBelt = 0.20f,
-            VisualOnly = !physical,
-        };
-        GetParent()?.AddChild(sensorHighNode);
-        Adopt(sensorHighNode, SortingTags.SensorHighId, "PhotoelectricSensor");
-
-        // Beside the belt, not on it: the pusher's origin is its mounting point
-        // and it strokes towards +Z, across the lane and onto the chute.
-        const float pusherStroke = 0.55f;
-        var pusherNode = new PusherMechanism
-        {
-            Position = new Vector3((float)SortingScene.PusherPos, y, -lane),
-            StrokeLength = pusherStroke,
-            // Match the simulated stroke, so the plate hits its limit exactly
-            // when the scene reports pusher.extended.
-            ExtendSpeed = pusherStroke / (float)SortingScene.PusherTravelTime,
-            VisualOnly = !physical,
-        };
-        GetParent()?.AddChild(pusherNode);
-        Adopt(pusherNode, SortingTags.PusherId, "PusherMechanism");
-
-        var chuteNode = new Chute
-        {
-            Position = new Vector3((float)SortingScene.PusherPos, y, lane),
-        };
-        GetParent()?.AddChild(chuteNode);
-        Adopt(chuteNode, "chute_1", "Chute");
-
-        var lightNode = new StackLight
-        {
-            Position = new Vector3(-lane, y, lane),
-        };
-        GetParent()?.AddChild(lightNode);
-        Adopt(lightNode, SortingTags.StackLightId, "StackLight");
-
-        // An operator station at the head of the line. Unlike the parts above it
-        // is not a view of tags SortingScene owns — nothing in the deterministic
-        // scene presses buttons — so it registers its own, in both modes. Without
-        // it in the default scene, Run mode would open onto a line with nothing
-        // to click and look broken.
-        //
-        // On the near side of the line — the same side the default camera looks
-        // from — because a button you cannot see is a button you cannot press.
-        // The caps already face +Z, which is where an operator stands looking at
-        // the machine, so it needs no rotation. Kept at the head of the line so
-        // it neither hides the sorting zone (sensors at 1.5 and 2.0, pusher at
-        // 2.5) nor sits under the parts palette down the left of the screen.
-        var panelNode = new ButtonPanel
-        {
-            Position = new Vector3(lane, y, 2.0f * lane),
-        };
-        // This line sorts on two beams, so its one analog knob is the timing
-        // pot every real diverter has: how long after the tall beam breaks
-        // the pusher fires. Turn it wrong and cartons are struck on the nose
-        // or missed entirely, which is exactly what the pot is for (OP-03).
-        panelNode.ConfigureSetpoint(0.30f, 1.80f, "s", 0.90f);
-        GetParent()?.AddChild(panelNode);
-        if (Tags is not null)
-        {
-            var (panelId, panelOwns) = PartTagManager.RegisterPartTags(panelNode, "ButtonPanel", Tags, "panel");
-            _placedParts.Add(new PlacedPart(panelNode, panelId, "ButtonPanel", panelOwns,
-                                            NextPartKey()));
-        }
-
-        // Only the rigid-body scene needs these: the deterministic scene creates
-        // and retires its own boxes in code.
-        if (physical)
-        {
-            var emitterNode = new Emitter
-            {
-                Position = new Vector3((float)SortingScene.EmitterPos, y, 0),
-            };
-            GetParent()?.AddChild(emitterNode);
-            Adopt(emitterNode, SortingTags.EmitterId, "Emitter");
-
-            var shortRemover = new Remover
-            {
-                Position = new Vector3((float)SortingScene.RemoverPos + 0.25f, y - 0.2f, 0),
-                ZoneSize = new Vector3(0.5f, 0.6f, 0.6f),
-                CountTag = SortingTags.CounterShort,
-            };
-            GetParent()?.AddChild(shortRemover);
-            Adopt(shortRemover, "remover_short", "Remover");
-
-            // Under the chute's discharge, so a diverted carton is counted once
-            // it has actually made it down the ramp.
-            var tallRemover = new Remover
-            {
-                Position = new Vector3((float)SortingScene.PusherPos, 0.15f, lane + 0.5f),
-                ZoneSize = new Vector3(0.6f, 0.4f, 0.6f),
-                CountTag = SortingTags.CounterTall,
-            };
-            GetParent()?.AddChild(tallRemover);
-            Adopt(tallRemover, "remover_tall", "Remover");
-        }
-
-        NotifyTagsChanged();
-        CallDeferred(nameof(AnnounceSceneLoaded));
-
-        void Adopt(Node3D node, string instanceId, string partType) =>
-            _placedParts.Add(new PlacedPart(node, instanceId, partType, OwnsTags: false,
-                                            NextPartKey()));
     }
 
     /// <summary>
@@ -2924,11 +2502,22 @@ public partial class SceneEditor : Node3D
         // Snap the camera's heading to the nearest quarter turn, so a nudge
         // always lands on the grid instead of sliding a part off it by a
         // fraction of a cell at every odd viewing angle.
+        //
+        // Atan2(-X, -Z), not Atan2(X, Z) (HP-39). Heading 0 is defined below as
+        // "screen right is world +X", which is the view whose camera forward is
+        // −Z — and Atan2(0, −1) is π, not 0. The two differ by exactly π at
+        // every angle, which negates both axes, so the arrow keys were inverted
+        // in *every* view and not only in the front one. The headless fallback
+        // has no camera and leaves the heading at 0, which is why
+        // --self-test=buildflow never saw it: the bug lives entirely in the
+        // branch a headless test cannot enter. --self-test=nudge supplies a real
+        // camera for that reason.
         float heading = 0.0f;
         if (GetViewport()?.GetCamera3D() is { } camera)
         {
             Vector3 forward = -camera.GlobalBasis.Z;
-            heading = Mathf.Round(Mathf.Atan2(forward.X, forward.Z) / (Mathf.Pi / 2.0f)) * (Mathf.Pi / 2.0f);
+            heading = Mathf.Round(Mathf.Atan2(-forward.X, -forward.Z) / (Mathf.Pi / 2.0f))
+                      * (Mathf.Pi / 2.0f);
         }
 
         // Screen right is world +X at heading 0, and screen "up" is away from
@@ -3215,6 +2804,10 @@ public partial class SceneEditor : Node3D
     /// selected.</summary>
     public Vector3? SelectedPosition => _selectedPart?.Node.Position;
 
+    /// <summary>The primary selection's heading, for a test that presses R and
+    /// has to see whether anything turned.</summary>
+    public float? SelectedRotationY => _selectedPart?.Node.Rotation.Y;
+
     private void PlaceCurrentPart()
     {
         if (_previewNode is null || _activePartType is null) return;
@@ -3290,7 +2883,7 @@ public partial class SceneEditor : Node3D
     /// <summary>Below this, a carton has fallen off the world and is not
     /// coming back: a live RigidBody3D with ContinuousCd doing broad- and
     /// narrow-phase work every physics step, forever, since the only despawn
-    /// paths were a Remover zone and Reset. See FF-12.</summary>
+    /// paths were a remover zone and Reset. See FF-12.</summary>
     private const float KillPlaneY = -2.0f;
 
     /// <summary>Sweeping every tick would be wasted work for something that
@@ -3322,413 +2915,72 @@ public partial class SceneEditor : Node3D
             SweepBoxes();
         }
 
+        // Every part drives itself (HP-34). This was four hundred lines of
+        // `switch (part.PartType)` with one arm per machine, in the file
+        // furthest from every one of them -- so a tag registered in
+        // PartTagManager and never dispatched here was a tag that existed,
+        // appeared in the inspector, could be forced and did nothing, which is
+        // exactly what happened to the weighing conveyor's fault contact.
         foreach (var part in _placedParts)
         {
-            var node = part.Node;
-            string instanceId = part.InstanceId;
-            var ids = part.TagIds;
+            if (part.Node is not IPart driven) continue;
 
-            switch (part.PartType)
+            // One part's throw must not take the rest of the scene down with
+            // it. Godot logs an exception out of _PhysicsProcess and carries on
+            // (gotcha 12), but the carrying-on happens *outside* this loop --
+            // so a single misbehaving part silently stopped every part placed
+            // after it, on every tick, while the log filled with one stack
+            // trace per frame.
+            //
+            // The nearest live example is a part that computes a non-finite
+            // float: TagTable.Set rejects those rather than storing them
+            // (HP-23), so a division that has gone to infinity surfaces here
+            // rather than as a wrong number on the bus. Guard the arithmetic in
+            // the part; this is what catches the one that got away, and it says
+            // which part it was.
+            try
             {
-                case "RollerConveyor":
-                case "ConveyorBelt":
-                    if (node is ConveyorBelt belt && ids.TryGetValue("rotate", out var rotateId)
-                        && Tags.TryGetVisible(rotateId, out var rotateVal))
-                    {
-                        // Fault first, so SetRunning below already knows: a
-                        // faulted drive refuses the command rather than
-                        // obeying it and being stopped again next tick.
-                        if (ids.TryGetValue("fault", out var beltFaultId)
-                            && Tags.TryGetVisible(beltFaultId, out var beltFaultVal))
-                            belt.SetFaulted((bool)beltFaultVal);
-                        belt.SetRunning((bool)rotateVal);
-                        if (Scene is not null && instanceId == "conveyor")
-                            Scene.TransportSpeed = belt.Speed;
-                    }
-                    break;
-
-                case "PusherMechanism":
-                    if (node is PusherMechanism pusher && ids.TryGetValue("extend", out var extendId)
-                        && Tags.TryGetVisible(extendId, out var extendVal))
-                    {
-                        if (ids.TryGetValue("fault", out var pusherFaultId)
-                            && Tags.TryGetVisible(pusherFaultId, out var pusherFaultVal))
-                            pusher.SetFaulted((bool)pusherFaultVal);
-                        pusher.UpdateExtension((bool)extendVal, dt);
-                        // A VisualOnly pusher mirrors a pusher the scene already
-                        // simulates, so the scene keeps the limit switches.
-                        if (!pusher.VisualOnly)
-                        {
-                            Tags.TrySet(ids["extended"], pusher.IsExtended);
-                            Tags.TrySet(ids["retracted"], pusher.IsRetracted);
-                        }
-                    }
-                    break;
-
-                case "RetroreflectiveSensor":
-                case "InductiveSensor":
-                case "PhotoelectricSensor":
-                    if (node is PhotoelectricSensor sensor && ids.TryGetValue("detect", out var detectId))
-                    {
-                        if (sensor.VisualOnly)
-                        {
-                            if (Tags.TryGetVisible(detectId, out var detectVal))
-                                sensor.SetBeamActive((bool)detectVal);
-                        }
-                        else
-                        {
-                            Tags.TrySet(detectId, sensor.IsDetected);
-                        }
-                    }
-                    break;
-
-                case "Emitter":
-                    // Rising edge only: holding the tag high must not fire a box
-                    // every frame, which is how a real emitter input behaves.
-                    if (node is Emitter emitter && ids.TryGetValue("emit", out var emitId)
-                        && Tags.TryGetVisible(emitId, out var emitVal))
-                    {
-                        bool emit = (bool)emitVal;
-                        if (emit && !_emitEdges.Contains(instanceId))
-                        {
-                            // Left off _emitEdges (not marked as fired) while
-                            // capped, so the same rising edge spawns the
-                            // instant the count drops rather than needing the
-                            // signal to re-pulse. See FF-12.
-                            if (LiveItemCount < LiveItemCap)
-                            {
-                                _emitEdges.Add(instanceId);
-                                emitter.SpawnBox(_emitAlternate);
-                                _emitAlternate = !_emitAlternate;
-                            }
-                        }
-                        else if (!emit)
-                        {
-                            _emitEdges.Remove(instanceId);
-                        }
-                    }
-                    break;
-
-                case "Remover":
-                    if (node is Remover remover)
-                    {
-                        // Not cacheable the way the others are: CountTag is a
-                        // user-editable string, not a fixed "{id}.suffix".
-                        string countTag = remover.CountTag.Length > 0
-                            ? remover.CountTag
-                            : $"{instanceId}.count";
-                        Tags.TrySet(countTag, remover.RemovedCount);
-                    }
-                    break;
-
-                case "ButtonPanel":
-                    if (node is ButtonPanel panel)
-                    {
-                        if (ids.TryGetValue("green", out var panelGreenId) && Tags.TryGetVisible(panelGreenId, out var panelGreenVal))
-                            panel.SetGreenLamp((bool)panelGreenVal);
-                        if (ids.TryGetValue("red", out var panelRedId) && Tags.TryGetVisible(panelRedId, out var panelRedVal))
-                            panel.SetRedLamp((bool)panelRedVal);
-
-                        StepPanelButtons(panel, part);
-                    }
-                    break;
-
-                case "StackLight":
-                    if (node is StackLight light)
-                    {
-                        if (ids.TryGetValue("green", out var lightGreenId) && Tags.TryGetVisible(lightGreenId, out var lightGreenVal))
-                            light.SetGreenLamp((bool)lightGreenVal);
-
-                        if (ids.TryGetValue("yellow", out var lightYellowId) && Tags.TryGetVisible(lightYellowId, out var lightYellowVal))
-                            light.SetYellowLamp((bool)lightYellowVal);
-
-                        if (ids.TryGetValue("red", out var lightRedId) && Tags.TryGetVisible(lightRedId, out var lightRedVal))
-                            light.SetRedLamp((bool)lightRedVal);
-                    }
-                    break;
-
-                case "DigitalDisplay":
-                    if (node is DigitalDisplay display && ids.TryGetValue("value", out var valueId)
-                        && Tags.TryGetVisible(valueId, out var valueVal))
-                    {
-                        display.Value = (int)valueVal;
-                    }
-                    break;
-
-                case "LightArray":
-                    if (node is LightArray curtain)
-                    {
-                        if (ids.TryGetValue("height", out var heightId))
-                            Tags.TrySet(heightId, (double)curtain.MeasuredHeight);
-                        if (ids.TryGetValue("blocked", out var blockedId))
-                            Tags.TrySet(blockedId, curtain.IsBlocked);
-                    }
-                    break;
-
-                case "LevelTank":
-                    if (node is LevelTank tank && ids.TryGetValue("level", out var levelId)
-                        && Tags.TryGetVisible(ids["fill"], out var fillVal)
-                        && Tags.TryGetVisible(ids["drain"], out var drainVal))
-                    {
-                        if (ids.TryGetValue("fault", out var tankFaultId)
-                            && Tags.TryGetVisible(tankFaultId, out var tankFaultVal))
-                            tank.SetFaulted((bool)tankFaultVal);
-
-                        // dt is scaled simulation time, so the tank obeys pause
-                        // and the time-scale control like everything else.
-                        tank.Step((float)System.Convert.ToDouble(fillVal),
-                                  (float)System.Convert.ToDouble(drainVal),
-                                  dt);
-                        Tags.TrySet(levelId, (double)tank.Level);
-                    }
-                    break;
-
-                case "VariableConveyor":
-                    if (node is VariableConveyor vfd)
-                    {
-                        // Fault first, for the same reason the plain belt does
-                        // it first: a faulted drive has to refuse the command
-                        // rather than obey it and be stopped again next tick.
-                        if (ids.TryGetValue("fault", out var vfdFaultId)
-                            && Tags.TryGetVisible(vfdFaultId, out var vfdFaultVal))
-                            vfd.SetFaulted((bool)vfdFaultVal);
-
-                        bool run = ids.TryGetValue("run", out var runId)
-                                   && Tags.TryGetVisible(runId, out var runVal) && (bool)runVal;
-                        float reference = ids.TryGetValue("speed", out var refId)
-                                          && Tags.TryGetVisible(refId, out var refVal)
-                            ? (float)System.Convert.ToDouble(refVal) : 0.0f;
-
-                        vfd.StepDrive(run, reference, dt);
-                        if (ids.TryGetValue("actual", out var actualId))
-                            Tags.TrySet(actualId, (double)vfd.ActualPercent);
-                    }
-                    break;
-
-                case "PivotDiverter":
-                    if (node is PivotDiverter diverter && ids.TryGetValue("divert", out var divertId)
-                        && Tags.TryGetVisible(divertId, out var divertVal))
-                    {
-                        if (ids.TryGetValue("fault", out var divFaultId)
-                            && Tags.TryGetVisible(divFaultId, out var divFaultVal))
-                            diverter.SetFaulted((bool)divFaultVal);
-
-                        diverter.UpdateSwing((bool)divertVal, dt);
-                        Tags.TrySet(ids["diverted"], diverter.IsDiverted);
-                        Tags.TrySet(ids["home"], diverter.IsHome);
-                    }
-                    break;
-
-                case "PickPlaceArm":
-                    if (node is PickPlaceArm arm)
-                    {
-                        if (ids.TryGetValue("fault", out var armFaultId)
-                            && Tags.TryGetVisible(armFaultId, out var armFaultVal))
-                            arm.SetFaulted((bool)armFaultVal);
-
-                        float armTarget = ids.TryGetValue("target", out var armTargetId)
-                                          && Tags.TryGetVisible(armTargetId, out var armTargetVal)
-                            ? (float)System.Convert.ToDouble(armTargetVal) : 0.0f;
-                        bool lower = ids.TryGetValue("lower", out var lowerId)
-                                     && Tags.TryGetVisible(lowerId, out var lowerVal) && (bool)lowerVal;
-                        bool grip = ids.TryGetValue("grip", out var gripId)
-                                    && Tags.TryGetVisible(gripId, out var gripVal) && (bool)gripVal;
-
-                        arm.Step(armTarget, lower, grip, dt);
-
-                        Tags.TrySet(ids["position"], (double)arm.AxisPosition);
-                        Tags.TrySet(ids["inposition"], arm.InPosition);
-                        Tags.TrySet(ids["lowered"], arm.IsLowered);
-                        Tags.TrySet(ids["raised"], arm.IsRaised);
-                        Tags.TrySet(ids["holding"], arm.IsHolding);
-                    }
-                    break;
-
-                case "BarcodeScanner":
-                    if (node is BarcodeScanner scanner)
-                    {
-                        if (ids.TryGetValue("enable", out var enableId)
-                            && Tags.TryGetVisible(enableId, out var enableVal))
-                            scanner.Enabled = (bool)enableVal;
-
-                        scanner.Scan(dt);
-
-                        Tags.TrySet(ids["code"], scanner.LastCode);
-                        // Written every tick, so the pulse falls again on the
-                        // very next one without anybody having to remember to
-                        // clear it — the panel's queue-and-drain problem does
-                        // not arise here because the read happens on the same
-                        // clock the tag is written on.
-                        Tags.TrySet(ids["read"], scanner.ReadPulse);
-                        Tags.TrySet(ids["present"], scanner.IsPresent);
-                    }
-                    break;
-
-                case "AnalogGauge":
-                    if (node is AnalogGauge gauge && ids.TryGetValue("value", out var gaugeId)
-                        && Tags.TryGetVisible(gaugeId, out var gaugeVal))
-                    {
-                        gauge.Value = (float)System.Convert.ToDouble(gaugeVal);
-                    }
-                    break;
-
-                case "AlarmBeacon":
-                    if (node is AlarmBeacon beacon)
-                    {
-                        if (ids.TryGetValue("beacon", out var beaconId)
-                            && Tags.TryGetVisible(beaconId, out var beaconVal))
-                            beacon.SetBeacon((bool)beaconVal);
-                        if (ids.TryGetValue("horn", out var hornId)
-                            && Tags.TryGetVisible(hornId, out var hornVal))
-                            beacon.SetHorn((bool)hornVal);
-                    }
-                    break;
-
-                case "HeatingStation":
-                    if (node is HeatingStation heater && ids.TryGetValue("heater", out var powerId)
-                        && Tags.TryGetVisible(powerId, out var powerVal))
-                    {
-                        if (ids.TryGetValue("fault", out var heatFaultId)
-                            && Tags.TryGetVisible(heatFaultId, out var heatFaultVal))
-                            heater.SetFaulted((bool)heatFaultVal);
-
-                        // dt is scaled simulation time, so the plant obeys
-                        // pause and the time scale — the same rule the tank
-                        // follows, and it matters more here because the time
-                        // constant is a minute rather than seconds.
-                        heater.Step((float)System.Convert.ToDouble(powerVal), dt);
-                        Tags.TrySet(ids["temperature"], (double)heater.Temperature);
-                        Tags.TrySet(ids["attemp"], heater.AtTemperature);
-                    }
-                    break;
-
-                case "SelectorSwitch":
-                    // The selector is an operator input and nothing else drives
-                    // it, so the part is always the authority: it publishes
-                    // where the knob is and never reads the tag back. That is
-                    // the same one-writer rule the panel's buttons follow.
-                    if (node is SelectorSwitch selector && ids.TryGetValue("position", out var selectorId))
-                        Tags.TrySet(selectorId, selector.Detent);
-                    break;
-
-                case "SafetyGate":
-                    if (node is SafetyGate gate)
-                    {
-                        if (ids.TryGetValue("lock", out var lockId)
-                            && Tags.TryGetVisible(lockId, out var lockVal))
-                            gate.SetLocked((bool)lockVal);
-
-                        gate.Step(dt);
-                        // Closed is the guard switch, wired as a real one is:
-                        // true while the door is shut, so a broken circuit
-                        // reads as an open guard.
-                        Tags.TrySet(ids["closed"], gate.IsClosed);
-                        Tags.TrySet(ids["locked"], gate.IsLocked && gate.IsClosed);
-                    }
-                    break;
-
-                case "WeighingConveyor":
-                    if (node is WeighingConveyor weighBelt)
-                    {
-                        // Fault first, for the reason the ConveyorBelt case
-                        // gives: a faulted drive has to refuse the command
-                        // rather than obey it and be stopped again next tick.
-                        //
-                        // This line is HP-35, and its absence is what the drift
-                        // looks like. PartTagManager registers <id>.fault for a
-                        // WeighingConveyor exactly as it does for every other
-                        // conveyor, so the tag exists, shows up in the inspector
-                        // and can be forced -- and nothing dispatched it, so
-                        // forcing it did nothing at all. SetFaulted was
-                        // inherited from ConveyorBelt and simply never called
-                        // for this subclass. Registering a tag and acting on it
-                        // are edits to two different files, and one of them was
-                        // missed.
-                        if (ids.TryGetValue("fault", out var weighFaultId)
-                            && Tags.TryGetVisible(weighFaultId, out var weighFaultVal))
-                            weighBelt.SetFaulted((bool)weighFaultVal);
-                        if (ids.TryGetValue("rotate", out var weighRotateId) && Tags.TryGetVisible(weighRotateId, out var weighRotateVal))
-                            weighBelt.SetRunning((bool)weighRotateVal);
-                        if (ids.TryGetValue("weight", out var weightId))
-                            Tags.TrySet(weightId, (int)weighBelt.MeasuredWeight);
-                    }
-                    break;
-
-                case "StopGate":
-                    if (node is StopGate stop && ids.TryGetValue("raise", out var raiseId)
-                        && Tags.TryGetVisible(raiseId, out var raiseVal))
-                    {
-                        if (ids.TryGetValue("fault", out var stopFaultId)
-                            && Tags.TryGetVisible(stopFaultId, out var stopFaultVal))
-                            stop.SetFaulted((bool)stopFaultVal);
-
-                        stop.UpdateLift((bool)raiseVal, dt);
-                        Tags.TrySet(ids["up"], stop.IsUp);
-                        Tags.TrySet(ids["down"], stop.IsDown);
-                    }
-                    break;
-
-                case "TurnTable":
-                    if (node is TurnTable table && ids.TryGetValue("index", out var indexId)
-                        && Tags.TryGetVisible(indexId, out var indexVal))
-                    {
-                        if (ids.TryGetValue("fault", out var tableFaultId)
-                            && Tags.TryGetVisible(tableFaultId, out var tableFaultVal))
-                            table.SetFaulted((bool)tableFaultVal);
-
-                        table.UpdateIndex((bool)indexVal, dt);
-                        Tags.TrySet(ids["athome"], table.IsHome);
-                        Tags.TrySet(ids["atindex"], table.IsAtIndex);
-                    }
-                    break;
-
-                case "RotaryEncoder":
-                    if (node is RotaryEncoder encoder)
-                    {
-                        bool zero = ids.TryGetValue("reset", out var encResetId)
-                                    && Tags.TryGetVisible(encResetId, out var encResetVal)
-                                    && (bool)encResetVal;
-
-                        encoder.Step(zero, dt);
-                        Tags.TrySet(ids["count"], encoder.Count);
-                        Tags.TrySet(ids["rate"], (double)encoder.Rate);
-                    }
-                    break;
-
-                case "CoolingFan":
-                    if (node is CoolingFan fan)
-                    {
-                        if (ids.TryGetValue("fault", out var fanFaultId)
-                            && Tags.TryGetVisible(fanFaultId, out var fanFaultVal))
-                            fan.SetFaulted((bool)fanFaultVal);
-
-                        bool fanRun = ids.TryGetValue("run", out var fanRunId)
-                                      && Tags.TryGetVisible(fanRunId, out var fanRunVal) && (bool)fanRunVal;
-                        float fanSpeed = ids.TryGetValue("speed", out var fanSpeedId)
-                                         && Tags.TryGetVisible(fanSpeedId, out var fanSpeedVal)
-                            ? (float)System.Convert.ToDouble(fanSpeedVal) : 0.0f;
-
-                        fan.Step(fanRun, fanSpeed, dt);
-                        Tags.TrySet(ids["airflow"], (double)fan.Airflow);
-                    }
-                    break;
-
-                case "TwoHandControl":
-                    if (node is TwoHandControl hands)
-                    {
-                        hands.Step(dt);
-                        Tags.TrySet(ids["left"], hands.LeftHeld);
-                        Tags.TrySet(ids["right"], hands.RightHeld);
-                        Tags.TrySet(ids["valid"], hands.IsValid);
-                    }
-                    break;
+                driven.StepPart(new PartTick(Tags, part.TagIds, part.InstanceId, dt, this));
+            }
+            catch (System.Exception ex)
+            {
+                // Once per part, not once per tick: at 60 Hz the second form is
+                // a 23 MB log and a window that looks hung, which is exactly
+                // how gotcha 21 presented.
+                if (_brokenParts.Add(part.InstanceId))
+                    GD.PushError($"part '{part.InstanceId}' threw during its tick; the rest of "
+                                 + $"the scene is still running, this part is not: {ex}");
             }
         }
     }
 
-    /// <summary>Tags a panel drove high on the previous tick, so they can be
-    /// dropped on this one. Keyed by instance id.</summary>
-    private readonly Dictionary<string, List<string>> _panelPulses = new();
+    /// <summary>Parts that have thrown once. See the catch in
+    /// <see cref="_PhysicsProcess"/>.</summary>
+    private readonly HashSet<string> _brokenParts = new();
+
+    // ---------- IPartHost: the little a part legitimately asks of the scene
+
+    /// <summary>Is there room under the live-carton cap for one more?</summary>
+    bool IPartHost.CanSpawnItem => LiveItemCount < LiveItemCap;
+
+    /// <summary>Tall, short, tall, short. Shared across every emitter in the
+    /// scene, so a line fed by two of them still gets a mixed stream rather
+    /// than two independent ones that happen to agree.</summary>
+    bool IPartHost.NextAlternate()
+    {
+        bool value = _emitAlternate;
+        _emitAlternate = !_emitAlternate;
+        return value;
+    }
+
+    /// <summary>The deterministic scene transports its boxes in code and
+    /// mirrors one named belt, so changing that belt's speed in the inspector
+    /// has to reach it. Which belt that is, is the scene's business and not the
+    /// belt's.</summary>
+    void IPartHost.NoteTransportSpeed(string instanceId, float speed)
+    {
+        if (Scene is not null && instanceId == SortingTags.ConveyorId) Scene.TransportSpeed = speed;
+    }
 
     /// <summary>
     /// Free any carton that has fallen off the world, and update the live
@@ -3769,67 +3021,6 @@ public partial class SceneEditor : Node3D
         }
     }
 
-    /// <summary>
-    /// Drive a panel's button tags for one tick.
-    ///
-    /// Momentary buttons are the delicate part. The click arrives on the frame
-    /// clock, the tags are written on the physics clock, and the two do not line
-    /// up — so the panel queues presses and this drains the queue. Dropping the
-    /// previous tick's pulse *before* raising this tick's is what bounds a press
-    /// to exactly one scan: a program polling the tag sees a clean edge whether
-    /// the mouse was tapped or held down for a second.
-    ///
-    /// The E-stop is level, not edge, and inverted: the contact is normally
-    /// closed, so the tag is true while the circuit is healthy.
-    /// </summary>
-    private void StepPanelButtons(ButtonPanel panel, PlacedPart part)
-    {
-        string instanceId = part.InstanceId;
-        if (!_panelPulses.TryGetValue(instanceId, out var lastTick))
-        {
-            lastTick = new List<string>();
-            _panelPulses[instanceId] = lastTick;
-        }
-
-        foreach (string id in lastTick) Tags.TrySet(id, false);
-        lastTick.Clear();
-
-        // Not cached: built only when a button is actually pressed, which is
-        // human-interaction frequency rather than the every-tick cost FF-15
-        // targeted. Existence and "written" must stay two separate checks
-        // here — TrySet's return also folds in "already true" and "forced",
-        // and skipping lastTick.Add for either of those would leave a pulse
-        // never cleared on the next tick.
-        foreach (var which in panel.ConsumePresses())
-        {
-            string id = $"{instanceId}.{PartTagManager.PanelTagSuffix(which)}";
-            if (!Tags.Contains(id)) continue;
-            Tags.Set(id, true);
-            lastTick.Add(id);
-        }
-
-        if (part.TagIds.TryGetValue("estop", out var estopId))
-            Tags.TrySet(estopId, !panel.EmergencyStopEngaged);
-
-        // The pot goes both ways (OP-02). Normally the knob is the authority
-        // and the tag reports it. While the tag is *forced* -- by the Tag
-        // Inspector, or by tools/try_scene.py driving the scene headless --
-        // the force is the authority and the knob turns to match, so a
-        // setpoint changed over the wire is visible on the panel instead of
-        // leaving the pointer lying about where the line is aimed.
-        if (part.TagIds.TryGetValue("setpoint", out var setpointId) && Tags.Contains(setpointId))
-        {
-            if (Tags.IsForced(setpointId))
-                panel.SetSetpoint((float)System.Convert.ToDouble(Tags.Visible(setpointId)));
-            else
-                Tags.Set(setpointId, (double)panel.Setpoint);
-        }
-    }
-
-    /// <summary>Forget a panel's pending pulse, so a tag it raised is not
-    /// cleared after the panel it belongs to has gone.</summary>
-    private void ClearPanelPulses(string instanceId) => _panelPulses.Remove(instanceId);
-
     private void ClearPreview()
     {
         bool wasArmed = _activePartType is not null;
@@ -3848,46 +3039,9 @@ public partial class SceneEditor : Node3D
         if (wasArmed) EmitSignal(SignalName.PlacementArmedChanged, "");
     }
 
-    private static Node3D? CreatePartNode(string partType)
-    {
-        return partType switch
-        {
-            "ConveyorBelt" => new ConveyorBelt { Size = new Vector3(1.5f, 0.12f, 0.5f) },
-            "PhotoelectricSensor" => new PhotoelectricSensor { Range = 0.6f },
-            "PusherMechanism" => new PusherMechanism { StrokeLength = 0.45f },
-            "Emitter" => new Emitter(),
-            "Remover" => new Remover(),
-            "ButtonPanel" => new ButtonPanel(),
-            "Chute" => new Chute(),
-            "StackLight" => new StackLight(),
-            "DigitalDisplay" => new DigitalDisplay(),
-            "WeighingConveyor" => new WeighingConveyor { Size = new Vector3(1.5f, 0.12f, 0.5f) },
-            "LevelTank" => new LevelTank(),
-            "LightArray" => new LightArray(),
-            "RollerConveyor" => new RollerConveyor { Size = new Vector3(1.5f, 0.12f, 0.5f) },
-            "RetroreflectiveSensor" => new PhotoelectricSensor
-            {
-                Range = 0.75f, HeightAboveBelt = 0.08f, Mode = SensingMode.Retroreflective,
-            },
-            "InductiveSensor" => new PhotoelectricSensor
-            {
-                Range = 0.75f, HeightAboveBelt = 0.06f, Mode = SensingMode.Inductive,
-            },
-            "VariableConveyor" => new VariableConveyor { Size = new Vector3(1.5f, 0.12f, 0.5f) },
-            "PivotDiverter" => new PivotDiverter(),
-            "PickPlaceArm" => new PickPlaceArm(),
-            "BarcodeScanner" => new BarcodeScanner(),
-            "AnalogGauge" => new AnalogGauge(),
-            "AlarmBeacon" => new AlarmBeacon(),
-            "HeatingStation" => new HeatingStation(),
-            "SelectorSwitch" => new SelectorSwitch(),
-            "SafetyGate" => new SafetyGate(),
-            "StopGate" => new StopGate(),
-            "TurnTable" => new TurnTable(),
-            "RotaryEncoder" => new RotaryEncoder(),
-            "CoolingFan" => new CoolingFan(),
-            "TwoHandControl" => new TwoHandControl(),
-            _ => null
-        };
-    }
+    /// <summary>Build a part node. The catalog owns the factory, beside the
+    /// part's own description, because a second switch here could disagree with
+    /// it — and a palette button that places nothing is what that
+    /// disagreement looks like (HP-34).</summary>
+    private static Node3D? CreatePartNode(string partType) => PartCatalog.Create(partType);
 }

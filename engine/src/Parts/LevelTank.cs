@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -17,7 +18,7 @@ namespace FactoryForge.Parts;
 /// controller tuned at the top of the tank overshoots at the bottom. A plain
 /// integrator would make the exercise unrealistically easy.
 /// </summary>
-public partial class LevelTank : Node3D
+public partial class LevelTank : Node3D, IPart
 {
     /// <summary>Percent per second added at a fully open fill valve.</summary>
     [Export] public float FillRate { get; set; } = 18.0f;
@@ -250,12 +251,42 @@ public partial class LevelTank : Node3D
         _heldFill = fill;
         _heldDrain = drain;
 
-        float inflow = FillRate * (fill / 100.0f);
+        // Whatever a pump has offered this tick, converted from litres per
+        // second using this tank's own capacity -- the pump knows what it is
+        // delivering and not what it is delivering into. Consumed and zeroed,
+        // so a pump that stops offering stops filling on the next tick and not
+        // whenever somebody remembers to clear a flag.
+        //
+        // The capacity is floored rather than trusted: a scene file can carry a
+        // zero, and an infinite level would be rejected by the tag table with a
+        // throw inside the tick, which is the hardest place to read one.
+        float pumped = _offeredInflow / Mathf.Max(CapacityLitres, 0.01f) * 100.0f;
+        _offeredInflow = 0.0f;
+
+        float inflow = FillRate * (fill / 100.0f) + pumped;
         float outflow = DrainRate * (drain / 100.0f) * Mathf.Sqrt(Mathf.Max(Level, 0.0f) / 100.0f);
 
         Level = Mathf.Clamp(Level + (inflow - outflow) * delta, 0.0f, 100.0f);
         ApplyLevel();
     }
+
+    /// <summary>Litres per second offered by pumps this tick, before the tank
+    /// turns them into a percentage of its own capacity.</summary>
+    private float _offeredInflow;
+
+    /// <summary>
+    /// Offer flow into this tank for this tick, in litres per second.
+    ///
+    /// Accumulated rather than applied, and consumed by <see cref="Step"/>, for
+    /// the reason <see cref="HeatingStation.AddCooling"/> gives: parts are
+    /// dispatched in placement order, so a pump placed before its tank would
+    /// land on one side of the integration and a pump placed after it on the
+    /// other, and the plant would behave differently depending on the order
+    /// somebody clicked. Adding rather than assigning also means two pumps fill
+    /// twice, which is what two pumps do.
+    /// </summary>
+    public void AddInflow(float litresPerSecond) =>
+        _offeredInflow += Mathf.Max(litresPerSecond, 0.0f);
 
     public void ResetLevel()
     {
@@ -313,4 +344,61 @@ public partial class LevelTank : Node3D
 
         _readout.Text = $"{Level:0.0} %";
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>The library's first analog part: valve openings and a level
+    /// transmitter, all in percent, all Float.</summary>
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Float("fill", $"Tank {tags.Index} Fill Valve (%)", TagKind.Output)
+        .Float("drain", $"Tank {tags.Index} Drain Valve (%)", TagKind.Output)
+        .Float("level", $"Tank {tags.Index} Level (%)", TagKind.Input)
+        // A seized valve holds its opening (FI-01) -- the analog failure, and a
+        // nastier one to diagnose than a stopped drive.
+        .Bit("fault", $"Tank {tags.Index} Valve Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("fill_rate", FillRate);
+        settings.Put("drain_rate", DrainRate);
+        settings.Put("capacity", CapacityLitres);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("fill_rate") is { } fill) FillRate = fill;
+        if (settings.Number("drain_rate") is { } drain) DrainRate = drain;
+        if (settings.Number("capacity") is { } capacity) CapacityLitres = capacity;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.Has("level") || !tick.Has("fill") || !tick.Has("drain")) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+
+        // dt is scaled simulation time, so the tank obeys pause and the
+        // time-scale control like everything else.
+        Step(tick.Number("fill"), tick.Number("drain"), tick.Dt);
+        tick.Write("level", (double)Level);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Fill Rate (%/s)", FillRate, 1.0f, 60.0f, 1.0f, value => FillRate = value);
+        ui.Slider("Drain Rate (%/s)", DrainRate, 1.0f, 60.0f, 1.0f, value => DrainRate = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetLevel();
+        reset.Write("level", 0.0);
+    }
+
+    /// <summary>Precise: the two valves are separately clickable.</summary>
+    public PartOperation? Operation => new("tank", Precise: true);
+
+    public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
+
+    public void Operate(PartOperate op) => op.ToggleAnalog(op.Region);
 }

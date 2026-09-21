@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -24,7 +25,7 @@ namespace FactoryForge.Parts;
 /// simultaneity rule, the release rule and the anti-tie-down behaviour are
 /// unchanged.
 /// </summary>
-public partial class TwoHandControl : Node3D
+public partial class TwoHandControl : Node3D, IPart
 {
     /// <summary>How far apart two presses may be and still count as
     /// simultaneous, in seconds. 0.5 s is the figure the standards use, and it
@@ -276,4 +277,62 @@ public partial class TwoHandControl : Node3D
         _lampMat.EmissionEnergyMultiplier = IsValid ? 2.8f : 0.0f;
         _lampMat.AlbedoColor = IsValid ? new Color(0.35f, 1.0f, 0.45f) : new Color(0.08f, 0.24f, 0.10f);
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>All three are Inputs: the operator drives the buttons and the
+    /// *relay* decides the permissive. `valid` is an input to the controller for
+    /// the same reason a guard switch is -- the program reads the safety
+    /// device's verdict, it does not compute it.</summary>
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("left", $"Two-Hand {tags.Index} Left Held", TagKind.Input)
+        .Bit("right", $"Two-Hand {tags.Index} Right Held", TagKind.Input)
+        .Bit("valid", $"Two-Hand {tags.Index} Permissive", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("sync_window", SyncWindow);
+        settings.Put("hold_time", HoldTime);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("sync_window") is { } window) SyncWindow = window;
+        if (settings.Number("hold_time") is { } hold) HoldTime = hold;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        Step(tick.Dt);
+        tick.Write("left", LeftHeld);
+        tick.Write("right", RightHeld);
+        tick.Write("valid", IsValid);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Sync Window (s)", SyncWindow, 0.05f, 2.0f, 0.05f, value => SyncWindow = value);
+        ui.Slider("Hold Time (s)", HoldTime, 0.5f, 6.0f, 0.1f, value => HoldTime = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetStation();
+        reset.Write("left", false);
+        reset.Write("right", false);
+        reset.Write("valid", false);
+    }
+
+    /// <summary>Precise: two palm buttons far enough apart that one hand cannot
+    /// span them. Hit-testing the bounding box would put both of them under
+    /// every click, which is precisely the defeat the part exists to
+    /// refuse.</summary>
+    public PartOperation? Operation => new("two-hand station", Precise: true);
+
+    public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
+
+    /// <summary>Drives the part, not the tag: the station decides whether the
+    /// two hands arrived together, and publishes the permissive on the next
+    /// tick.</summary>
+    public void Operate(PartOperate op) => Press(op.Region);
 }

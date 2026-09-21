@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -20,7 +21,7 @@ namespace FactoryForge.Parts;
 /// as blowing at something and achieves nothing, which is the honest behaviour
 /// and the reason the part has a reach at all.
 /// </summary>
-public partial class CoolingFan : Node3D
+public partial class CoolingFan : Node3D, IPart
 {
     /// <summary>How far the airflow carries, in metres. Stations beyond this
     /// are not cooled at all — a fan pointed at the wrong machine is a real
@@ -344,5 +345,62 @@ public partial class CoolingFan : Node3D
                 _stations.Add(station);
             }
         }
+    }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("run", $"Fan {tags.Index} Run", TagKind.Output)
+        .Float("speed", $"Fan {tags.Index} Speed Ref (%)", TagKind.Output)
+        .Float("airflow", $"Fan {tags.Index} Airflow (%)", TagKind.Input)
+        .Bit("fault", $"Fan {tags.Index} Motor Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("reach", Reach);
+        settings.Put("cooling_rate", CoolingRate);
+        settings.Put("spin_up_rate", SpinUpRate);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("reach") is { } reach) Reach = reach;
+        if (settings.Number("cooling_rate") is { } rate) CoolingRate = rate;
+        if (settings.Number("spin_up_rate") is { } spinUp) SpinUpRate = spinUp;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+
+        Step(tick.Bit("run"), tick.Number("speed"), tick.Dt);
+        tick.Write("airflow", (double)Airflow);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Reach (m)", Reach, 0.3f, 4.0f, 0.1f, value => Reach = value);
+        ui.Slider("Cooling (/s/degC)", CoolingRate, 0.05f, 3.0f, 0.05f,
+                  value => CoolingRate = value);
+        ui.Slider("Spin-up (%/s)", SpinUpRate, 5.0f, 200.0f, 5.0f, value => SpinUpRate = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetFan();
+        reset.Write("airflow", 0.0);
+    }
+
+    public PartOperation? Operation => new("fan", "run");
+
+    /// <summary>A fan needs an enable *and* a reference, so a click has to move
+    /// both or the part looks broken: the speed would go to 100 % and nothing
+    /// would turn. Driven off `run`, since that is the one that decides.</summary>
+    public void Operate(PartOperate op)
+    {
+        if (!op.TryBit("run", out bool running)) return;
+        bool on = !running;
+        op.Force("run", on);
+        op.Force("speed", on ? 100.0 : 0.0);
     }
 }

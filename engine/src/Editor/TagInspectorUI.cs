@@ -47,6 +47,18 @@ public partial class TagInspectorUI : Control
     /// step out of the way entirely.</summary>
     private readonly List<(Button Header, VBoxContainer Body, string Prefix)> _groups = new();
 
+    /// <summary>
+    /// Groups the user has collapsed by hand.
+    ///
+    /// Kept separately from <c>Body.Visible</c> because the filter also drives
+    /// that flag, and the two mean different things: "you folded this away" and
+    /// "nothing in here matches what you typed". Reading the flag as if it were
+    /// the intent is what HP-40 was — a filter hid a body, clearing the filter
+    /// put the header back and left the body hidden, and the header then said
+    /// "▾" over nothing.
+    /// </summary>
+    private readonly HashSet<string> _collapsed = new();
+
     /// <summary>Which half of the I/O to show. The kinds are from the
     /// *controller's* point of view — an Output is what the PLC writes — which
     /// is the distinction a person mapping addresses is working along.</summary>
@@ -242,10 +254,12 @@ public partial class TagInspectorUI : Control
         var groupBody = new VBoxContainer();
         _listContainer.AddChild(groupBody);
 
+        // The one place the user's own intent is recorded. Everything else
+        // reads it; nothing else writes it.
         header.Pressed += () =>
         {
-            groupBody.Visible = !groupBody.Visible;
-            header.Text = (groupBody.Visible ? "▾ " : "▸ ") + prefix;
+            if (!_collapsed.Remove(prefix)) _collapsed.Add(prefix);
+            ApplyFilter();
         };
 
         _groups.Add((header, groupBody, prefix));
@@ -370,22 +384,27 @@ public partial class TagInspectorUI : Control
             matchesInGroup[prefix] = matchesInGroup.GetValueOrDefault(prefix) + 1;
         }
 
+        bool filtering = searching || _kindFilter != KindFilter.All;
+
         foreach (var (header, body, prefix) in _groups)
         {
             int matches = matchesInGroup.GetValueOrDefault(prefix);
             header.Visible = matches > 0;
+
             // A collapsed group would hide its own matches while filtering, so
             // filtering forces every surviving group open. Collapsing is a
             // thing you do to a *full* list.
-            if (matches > 0 && (searching || _kindFilter != KindFilter.All))
-            {
-                body.Visible = true;
-                header.Text = "▾ " + prefix;
-            }
-            else if (matches == 0)
-            {
-                body.Visible = false;
-            }
+            //
+            // The branch that used to be missing is the third one: with no
+            // filter running, the body goes back to whatever the user last
+            // chose. Before HP-40 there was no such case at all -- a group the
+            // filter had hidden simply stayed hidden when the search was
+            // cleared, under a header that had reappeared and still read "▾".
+            // Every group body in the panel could be emptied that way by typing
+            // one machine's name and pressing backspace.
+            bool open = matches > 0 && (filtering || !_collapsed.Contains(prefix));
+            body.Visible = open;
+            header.Text = (open ? "▾ " : "▸ ") + prefix;
         }
     }
 

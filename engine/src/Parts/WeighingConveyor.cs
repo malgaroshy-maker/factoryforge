@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -120,4 +121,30 @@ public partial class WeighingConveyor : ConveyorBelt
         // enters or leaves, and setting Label3D.Text rebuilds its glyph mesh.
         if (_readout is not null) _readout.Text = $"{MeasuredWeight:0} g";
     }
+
+    // ---------- IPart (HP-34)
+
+    public override void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("rotate", $"WeighConveyor {tags.Index} Rotate", TagKind.Output)
+        .Int("weight", $"WeighConveyor {tags.Index} Weight", TagKind.Input)
+        .Bit("fault", $"WeighConveyor {tags.Index} Drive Fault", TagKind.Input);
+
+    /// <summary>
+    /// The fault line here is HP-35, and its absence is what the old design's
+    /// drift looked like. The tag was registered exactly as every other
+    /// conveyor's is, appeared in the inspector and could be forced -- and
+    /// nothing dispatched it, because registering a tag and acting on it were
+    /// edits to two different files. <c>SetFaulted</c> was inherited and simply
+    /// never called for this subclass. It cannot go missing again: the base
+    /// class implements the tick and the subclass has to go out of its way not
+    /// to call it.
+    /// </summary>
+    public override void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        if (tick.TryBit("rotate", out bool rotate)) SetRunning(rotate);
+        tick.Write("weight", (int)MeasuredWeight);
+    }
+
+    public override PartOperation? Operation => new("weigh conveyor", "rotate");
 }

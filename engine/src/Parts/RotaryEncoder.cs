@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -24,7 +25,7 @@ namespace FactoryForge.Parts;
 /// encoder drops onto the same grid cell as the belt it measures. The post
 /// stands clear on the +Z side.
 /// </summary>
-public partial class RotaryEncoder : Node3D
+public partial class RotaryEncoder : Node3D, IPart
 {
     /// <summary>Pulses per metre of belt travel — the encoder's resolution.
     /// 100 is a wheel of about this size on a 1000 ppr encoder, and it makes
@@ -318,5 +319,49 @@ public partial class RotaryEncoder : Node3D
         }
 
         return best;
+    }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>The count is an Int because that is what a high-speed counter
+    /// hands a program, and the rate is a Float because it is a measurement --
+    /// the same split as the light curtain's `blocked` and `height`.</summary>
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Int("count", $"Encoder {tags.Index} Count", TagKind.Input)
+        .Float("rate", $"Encoder {tags.Index} Rate (pulses/s)", TagKind.Input)
+        // A level, not an edge: holding the reset leg high holds the count at
+        // zero, exactly like a counter's own reset.
+        .Bit("reset", $"Encoder {tags.Index} Reset", TagKind.Output);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("pulses_per_metre", PulsesPerMetre);
+        settings.Put("wheel_radius", WheelRadius);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("pulses_per_metre") is { } ppm) PulsesPerMetre = ppm;
+        if (settings.Number("wheel_radius") is { } radius) WheelRadius = radius;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        Step(tick.Bit("reset"), tick.Dt);
+        tick.Write("count", Count);
+        tick.Write("rate", (double)Rate);
+    }
+
+    /// <summary>Wheel radius is build-time geometry, so it is not offered
+    /// here.</summary>
+    public void DescribeControls(IPartInspector ui) =>
+        ui.Slider("Pulses / metre", PulsesPerMetre, 10.0f, 1000.0f, 10.0f,
+                  value => PulsesPerMetre = value);
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetCount();
+        reset.Write("count", 0);
+        reset.Write("rate", 0.0);
     }
 }

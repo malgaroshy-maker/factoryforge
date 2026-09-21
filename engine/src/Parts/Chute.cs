@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -21,7 +22,7 @@ namespace FactoryForge.Parts;
 /// node itself stays square on its grid point, so saving and reloading a scene
 /// round-trips instead of tilting the ramp another notch every time.
 /// </summary>
-public partial class Chute : StaticBody3D
+public partial class Chute : StaticBody3D, IPart
 {
     public const float DefaultRampLength = 0.80f;
     public const float DefaultThickness = 0.04f;
@@ -160,5 +161,44 @@ public partial class Chute : StaticBody3D
             Position = new Vector3(0, footY - legHeight / 2.0f,
                                    (ramp * new Vector3(0, 0, RampLength / 2.0f)).Z),
         });
+    }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>Nothing. A chute is gravity and a surface; it has no I/O at
+    /// all, and the palette says so.</summary>
+    public void DeclareTags(PartTagBuilder tags) { }
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("incline", InclineAngleDegrees);
+        settings.Put("friction", SurfaceFriction);
+        settings.Put("ramp_length", RampLength);
+        // Width and thickness are the deck itself; the lip is where a carton
+        // leaves the belt, and it is the setting people reach for when cartons
+        // catch on the transfer -- exactly the tuning a reload should not undo.
+        settings.Put("ramp_width", RampWidth);
+        settings.Put("ramp_thickness", RampThickness);
+        settings.Put("lip_setback", LipSetback);
+        settings.Put("lip_drop", LipDrop);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("incline") is { } incline) InclineAngleDegrees = incline;
+        if (settings.Number("friction") is { } friction) SurfaceFriction = friction;
+        if (settings.Number("ramp_length") is { } length) RampLength = length;
+        if (settings.Number("ramp_width") is { } width) RampWidth = width;
+        if (settings.Number("ramp_thickness") is { } thickness) RampThickness = thickness;
+        if (settings.Number("lip_setback") is { } setback) LipSetback = setback;
+        if (settings.Number("lip_drop") is { } drop) LipDrop = drop;
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Incline (deg)", InclineAngleDegrees, 5.0f, 55.0f, 1.0f,
+                  value => { InclineAngleDegrees = value; Rebuild(); });
+        ui.Slider("Surface Friction", SurfaceFriction, 0.02f, 1.0f, 0.02f,
+                  value => { SurfaceFriction = value; Rebuild(); });
     }
 }

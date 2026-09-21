@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -23,7 +24,7 @@ namespace FactoryForge.Parts;
 /// is placed on the same grid cell as the belt it interrupts. The blade parks
 /// below the deck line and rises through it.
 /// </summary>
-public partial class StopGate : Node3D
+public partial class StopGate : Node3D, IPart
 {
     /// <summary>How far the blade travels, in metres. The parked position is
     /// fixed at just below the deck, so this is what decides how far it stands
@@ -227,4 +228,58 @@ public partial class StopGate : Node3D
         _rodMesh.Height = rodLength;
         _rod.Position = new Vector3(0, bladeY - BladeHeight / 2.0f - rodLength / 2.0f, 0);
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("raise", $"Stop {tags.Index} (Raise)", TagKind.Output)
+        .Bit("up", $"Stop {tags.Index} (Blade Up)", TagKind.Input)
+        // Parked, so the scene starts in the state the geometry shows.
+        .Bit("down", $"Stop {tags.Index} (Blade Down)", TagKind.Input, initial: true)
+        .Bit("fault", $"Stop {tags.Index} Drive Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("stroke", Stroke);
+        settings.Put("lift_speed", LiftSpeed);
+        settings.Put("blade_width", BladeWidth);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("stroke") is { } stroke) Stroke = stroke;
+        if (settings.Number("lift_speed") is { } lift) LiftSpeed = lift;
+        if (settings.Number("blade_width") is { } width) BladeWidth = width;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.TryBit("raise", out bool raise)) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        UpdateLift(raise, tick.Dt);
+        tick.Write("up", IsUp);
+        tick.Write("down", IsDown);
+    }
+
+    /// <summary>Blade width is build-time geometry, so a slider for it would
+    /// move and change nothing — the exact failure LE-01 shipped. It stays in
+    /// the scene file and out of this panel until the part grows a
+    /// rebuild.</summary>
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Stroke (m)", Stroke, 0.08f, 0.45f, 0.01f, value => Stroke = value);
+        ui.Slider("Lift Speed (m/s)", LiftSpeed, 0.2f, 3.0f, 0.1f, value => LiftSpeed = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetGate();
+        reset.Write("up", false);
+        reset.Write("down", true);
+    }
+
+    public PartOperation? Operation => new("blade stop", "raise");
+
+    public void Operate(PartOperate op) => op.ToggleBit("raise");
 }

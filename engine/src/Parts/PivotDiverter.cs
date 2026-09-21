@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -16,7 +17,7 @@ namespace FactoryForge.Parts;
 /// point at the near edge of the belt, the post stands there, and the blade
 /// sweeps from parked (along the lane, in -X) out across the lane.
 /// </summary>
-public partial class PivotDiverter : Node3D
+public partial class PivotDiverter : Node3D, IPart
 {
     /// <summary>Angle the blade swings to, in degrees. 45° is the classic
     /// deflector; steeper stops the carton instead of turning it.</summary>
@@ -174,4 +175,52 @@ public partial class PivotDiverter : Node3D
         // lane; a negative one would sweep it away from the belt entirely.
         _pivot.Rotation = new Vector3(0, Mathf.DegToRad(_angle), 0);
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("divert", $"Diverter {tags.Index} (Divert)", TagKind.Output)
+        .Bit("diverted", $"Diverter {tags.Index} (Diverted)", TagKind.Input)
+        // Parked, so the scene starts in the state the geometry shows.
+        .Bit("home", $"Diverter {tags.Index} (Home)", TagKind.Input, initial: true)
+        .Bit("fault", $"Diverter {tags.Index} Drive Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("divert_angle", DivertAngle);
+        settings.Put("swing_speed", SwingSpeed);
+        settings.Put("blade_length", BladeLength);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("divert_angle") is { } angle) DivertAngle = angle;
+        if (settings.Number("swing_speed") is { } swing) SwingSpeed = swing;
+        if (settings.Number("blade_length") is { } blade) BladeLength = blade;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.TryBit("divert", out bool divert)) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        UpdateSwing(divert, tick.Dt);
+        tick.Write("diverted", IsDiverted);
+        tick.Write("home", IsHome);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        // Both are read live by UpdateSwing, so neither needs a rebuild; the
+        // blade length is geometry and does, so it is deliberately not offered
+        // here rather than offered and silently ignored.
+        ui.Slider("Divert Angle (deg)", DivertAngle, 10.0f, 80.0f, 1.0f,
+                  value => DivertAngle = value);
+        ui.Slider("Swing Speed (deg/s)", SwingSpeed, 30.0f, 600.0f, 10.0f,
+                  value => SwingSpeed = value);
+    }
+
+    public PartOperation? Operation => new("diverter", "divert");
+
+    public void Operate(PartOperate op) => op.ToggleBit("divert");
 }

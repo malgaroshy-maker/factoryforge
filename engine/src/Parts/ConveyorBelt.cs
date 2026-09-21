@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -6,7 +7,7 @@ namespace FactoryForge.Parts;
 /// Conveyor belt implemented using a surface velocity constraint (ConstantLinearVelocity)
 /// on a StaticBody3D with animated tread surface texture scrolling.
 /// </summary>
-public partial class ConveyorBelt : StaticBody3D
+public partial class ConveyorBelt : StaticBody3D, IPart
 {
     [Export] public float Speed { get; set; } = 0.5f;
     [Export] public Vector3 Direction { get; set; } = Vector3.Right;
@@ -280,4 +281,65 @@ public partial class ConveyorBelt : StaticBody3D
         _lastSpeed = Speed;
         _hasAppliedVelocity = true;
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>Is this belt's speed a setting somebody chose? On a plain belt
+    /// it is. On a drive it is not — the VFD recomputes it from the speed
+    /// reference every tick, so saving it would store a sample and restore it
+    /// as configuration, and offering a slider for it would be a control
+    /// overwritten before the next frame. One flag rather than two separate
+    /// "is this a VariableConveyor" tests that could disagree.</summary>
+    protected virtual bool SpeedIsSetting => true;
+
+    public virtual void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("rotate", $"Conveyor {tags.Index} (Rotate)", TagKind.Output)
+        // The drive's own fault contact (FI-01). An Input, because nothing in
+        // the simulation computes it -- it is raised by whoever is playing
+        // maintenance, and read by the controller exactly like a sensor.
+        .Bit("fault", $"Conveyor {tags.Index} Drive Fault", TagKind.Input);
+
+    public virtual void CaptureSettings(PartSettings settings)
+    {
+        if (SpeedIsSetting) settings.Put("speed", Speed);
+        settings.Put("friction", SurfaceFriction);
+        settings.Put("size", Size);
+        // Which way the surface drives. Read by the belt and never recomputed,
+        // so it is configuration -- and it was the one belt setting a save did
+        // not carry, which meant a belt built to run backwards came back
+        // running forwards, in a line whose geometry gave no hint (HP-06).
+        settings.Put("dir", Direction);
+    }
+
+    public virtual void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("speed") is { } speed) Speed = speed;
+        if (settings.Number("friction") is { } friction) SurfaceFriction = friction;
+        if (settings.Vector("size") is { } size) Size = size;
+        if (settings.Vector("dir") is { } direction) Direction = direction;
+    }
+
+    public virtual void StepPart(PartTick tick)
+    {
+        if (!tick.TryBit("rotate", out bool rotate)) return;
+
+        // Fault first, so SetRunning below already knows: a faulted drive
+        // refuses the command rather than obeying it and being stopped again
+        // next tick.
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        SetRunning(rotate);
+        tick.Host.NoteTransportSpeed(tick.InstanceId, Speed);
+    }
+
+    public virtual void DescribeControls(IPartInspector ui)
+    {
+        if (SpeedIsSetting)
+            ui.Slider("Belt Speed (m/s)", Speed, 0.05f, 2.0f, 0.05f, value => Speed = value);
+        ui.Slider("Surface Friction", SurfaceFriction, 0.05f, 1.5f, 0.05f,
+                  value => SurfaceFriction = value);
+    }
+
+    public virtual PartOperation? Operation => new("conveyor", "rotate");
+
+    public virtual void Operate(PartOperate op) => op.ToggleBit("rotate");
 }
