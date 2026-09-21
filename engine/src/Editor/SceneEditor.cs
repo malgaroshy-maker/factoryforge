@@ -517,64 +517,99 @@ public partial class SceneEditor : Node3D, IPartHost
         }
         else if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
         {
-            if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Z)
-            {
-                Undo();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Y)
-            {
-                Redo();
-            }
+            HandleEditorKey(keyEvent);
+        }
+    }
+
+    /// <summary>
+    /// Edit mode's keyboard, and the one rule it has: a key this consumes must
+    /// be claimed, and a key it does not want must be left alone (HP-38).
+    ///
+    /// Both halves were broken, in opposite directions and on adjacent lines.
+    /// Ctrl+C copied and did not claim, so it fell through to <c>Main</c>'s
+    /// bare <c>Key.C</c> and toggled the camera as well — one keystroke, two
+    /// actions, one of which the user did not ask for and cannot undo. Ctrl+R
+    /// rotated the selection because the rotate branch did not exclude Ctrl,
+    /// while <c>Main</c> treats Ctrl+R as "reset the simulation" — so the reset
+    /// also turned whatever was selected. Two lines below, <c>Key.N</c> was
+    /// already guarded with <c>!keyEvent.CtrlPressed</c>: the convention existed
+    /// and had been applied to one key out of three.
+    ///
+    /// Escape is deliberately not claimed. It cancels a placement here *and*
+    /// dismisses an overlay in <c>Main</c>, and those are two different things
+    /// that happen to share a key by long convention.
+    /// </summary>
+    private void HandleEditorKey(InputEventKey keyEvent)
+    {
+        bool handled = true;
+
+        if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Z)
+        {
+            Undo();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.Y)
+        {
+            Redo();
+        }
             // Ctrl+S / Ctrl+O are handled above, ahead of the Run-mode return,
             // so they are unreachable here (Edit mode already returned via
             // that branch too) rather than duplicated.
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.D && _selectedPart is not null)
-            {
-                DuplicateSelectedPart();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.A)
-            {
-                SelectEverything();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.C)
-            {
-                CopySelection();
-            }
-            else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.V)
-            {
-                PasteClipboard();
-            }
-            else if (keyEvent.Keycode == Key.M && _selectedPart is not null)
-            {
-                StartMoveSelectedPart();
-            }
-            else if (keyEvent.Keycode == Key.R && _previewNode is not null)
-            {
-                _previewRotationY += Mathf.Pi / 2.0f;
-                _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
-            }
-            else if (keyEvent.Keycode == Key.R && _previewNode is null && _selectedPart is not null)
-            {
-                RotateSelectedPart();
-            }
-            else if (keyEvent.Keycode == Key.N && !keyEvent.CtrlPressed)
-            {
-                TogglePartNames();
-            }
-            else if (keyEvent.Keycode == Key.Escape)
-            {
-                ClearPreview();
-                DeselectPart();
-            }
-            else if (_selectedPart is not null && NudgeFor(keyEvent.Keycode) is { } nudge)
-            {
-                NudgeSelectedPart(nudge);
-            }
-            else if (keyEvent.Keycode == Key.Delete || keyEvent.Keycode == Key.Backspace)
-            {
-                DeleteSelectedPart();
-            }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.D && _selectedPart is not null)
+        {
+            DuplicateSelectedPart();
         }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.A)
+        {
+            SelectEverything();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.C)
+        {
+            CopySelection();
+        }
+        else if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.V)
+        {
+            PasteClipboard();
+        }
+        else if (keyEvent.Keycode == Key.M && _selectedPart is not null)
+        {
+            StartMoveSelectedPart();
+        }
+        else if (keyEvent.Keycode == Key.R && !keyEvent.CtrlPressed && _previewNode is not null)
+        {
+            _previewRotationY += Mathf.Pi / 2.0f;
+            _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
+        }
+        else if (keyEvent.Keycode == Key.R && !keyEvent.CtrlPressed
+                 && _previewNode is null && _selectedPart is not null)
+        {
+            RotateSelectedPart();
+        }
+        else if (keyEvent.Keycode == Key.N && !keyEvent.CtrlPressed)
+        {
+            TogglePartNames();
+        }
+        else if (keyEvent.Keycode == Key.Escape)
+        {
+            ClearPreview();
+            DeselectPart();
+            // Shared with Main's overlay dismissal on purpose. See the summary.
+            handled = false;
+        }
+        else if (_selectedPart is not null && !keyEvent.CtrlPressed
+                 && NudgeFor(keyEvent.Keycode) is { } nudge)
+        {
+            NudgeSelectedPart(nudge);
+        }
+        else if (keyEvent.Keycode == Key.Delete || keyEvent.Keycode == Key.Backspace)
+        {
+            DeleteSelectedPart();
+        }
+        else
+        {
+            handled = false;
+        }
+
+        if (handled) ClaimInput();
     }
 
     /// <summary>Screen-space direction for an arrow key, or null for anything
@@ -2467,11 +2502,22 @@ public partial class SceneEditor : Node3D, IPartHost
         // Snap the camera's heading to the nearest quarter turn, so a nudge
         // always lands on the grid instead of sliding a part off it by a
         // fraction of a cell at every odd viewing angle.
+        //
+        // Atan2(-X, -Z), not Atan2(X, Z) (HP-39). Heading 0 is defined below as
+        // "screen right is world +X", which is the view whose camera forward is
+        // −Z — and Atan2(0, −1) is π, not 0. The two differ by exactly π at
+        // every angle, which negates both axes, so the arrow keys were inverted
+        // in *every* view and not only in the front one. The headless fallback
+        // has no camera and leaves the heading at 0, which is why
+        // --self-test=buildflow never saw it: the bug lives entirely in the
+        // branch a headless test cannot enter. --self-test=nudge supplies a real
+        // camera for that reason.
         float heading = 0.0f;
         if (GetViewport()?.GetCamera3D() is { } camera)
         {
             Vector3 forward = -camera.GlobalBasis.Z;
-            heading = Mathf.Round(Mathf.Atan2(forward.X, forward.Z) / (Mathf.Pi / 2.0f)) * (Mathf.Pi / 2.0f);
+            heading = Mathf.Round(Mathf.Atan2(-forward.X, -forward.Z) / (Mathf.Pi / 2.0f))
+                      * (Mathf.Pi / 2.0f);
         }
 
         // Screen right is world +X at heading 0, and screen "up" is away from
@@ -2757,6 +2803,10 @@ public partial class SceneEditor : Node3D, IPartHost
     /// <summary>Where the selected part stands, or null when nothing is
     /// selected.</summary>
     public Vector3? SelectedPosition => _selectedPart?.Node.Position;
+
+    /// <summary>The primary selection's heading, for a test that presses R and
+    /// has to see whether anything turned.</summary>
+    public float? SelectedRotationY => _selectedPart?.Node.Rotation.Y;
 
     private void PlaceCurrentPart()
     {
