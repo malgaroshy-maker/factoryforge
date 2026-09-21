@@ -36,6 +36,20 @@ log = logging.getLogger(__name__)
 
 RECONNECT_DELAY = 5.0
 
+#: How often to re-attempt input writes the PLC did not accept. See
+#: `_reconcile_loop` for why dropping one is not survivable.
+INPUT_RETRY_INTERVAL = 1.0
+
+#: AGENTS.md gotcha 8: "asyncua's default 4 s connect timeout is too short for
+#: a real S7. Use timeout=10." Stated as a number here rather than left to
+#: asyncua's default, so that changing it is a decision somebody takes rather
+#: than a dependency's default quietly applying.
+CONNECT_TIMEOUT = 10.0
+
+#: Consecutive failed polls before saying so on the bus. One is a blip; a run
+#: of them is something whoever is watching the scene should be told about.
+POLL_FAILURES_BEFORE_REPORTING = 20
+
 
 class _SubHandler:
     """Receives data changes for PLC-written (sim output) nodes."""
@@ -60,6 +74,8 @@ class OpcUaClientDriver(Driver):
                  mode: str = "poll",
                  poll_interval: float = 0.05,
                  publish_interval: int = 50,
+                 input_retry_interval: float = INPUT_RETRY_INTERVAL,
+                 timeout: float = CONNECT_TIMEOUT,
                  **config) -> None:
         super().__init__(bus, url=url, **config)
         self.url = url
@@ -79,6 +95,12 @@ class OpcUaClientDriver(Driver):
         self.mode = mode
         self.poll_interval = poll_interval
         self.publish_interval = publish_interval
+        self.input_retry_interval = float(input_retry_interval)
+        # Each request to the server, the connect handshake included, must be
+        # answered inside this. A real S7-1500 does not always manage asyncua's
+        # 4s default, which is how a CPU that was simply busy came to look like
+        # a CPU that was not there. `-o timeout 20` for an unusually slow one.
+        self.timeout = float(timeout)
 
         self.mapping: dict[str, str] = dict(mapping or {})
         if mapping_file:
@@ -99,6 +121,9 @@ class OpcUaClientDriver(Driver):
         self._last_read: dict[str, TagValue] = {}
         self._stopping = False
         self._table: TagTable | None = None
+        #: Input writes the PLC has not accepted, kept until it does.
+        self._unacked: dict[str, TagValue] = {}
+        self._reconciler: asyncio.Task | None = None
 
     # --- lifecycle ---
 
@@ -111,12 +136,14 @@ class OpcUaClientDriver(Driver):
         """
         self._stopping = False
         self._runner = asyncio.create_task(self._connect_loop())
+        self._reconciler = asyncio.create_task(self._reconcile_loop())
 
     async def stop(self) -> None:
         self._stopping = True
-        if self._runner:
-            self._runner.cancel()
-            self._runner = None
+        for task in (self._runner, self._reconciler):
+            if task is not None:
+                task.cancel()
+        self._runner = self._reconciler = None
         await self._disconnect()
 
     async def _connect_loop(self) -> None:
@@ -138,8 +165,8 @@ class OpcUaClientDriver(Driver):
                 await asyncio.sleep(RECONNECT_DELAY)
 
     async def _connect(self) -> None:
-        log.info("connecting to %s", self.url)
-        self.client = Client(url=self.url)
+        log.info("connecting to %s (timeout %gs)", self.url, self.timeout)
+        self.client = Client(url=self.url, timeout=self.timeout)
         await self.client.connect()
         self.connected.set()
         await self._report("info", "plc_connected", f"connected to OPC UA server {self.url}")
@@ -151,10 +178,14 @@ class OpcUaClientDriver(Driver):
         if self._poller is not None:
             self._poller.cancel()
             self._poller = None
-        self._subscription = None
+        await self._drop_subscription()
         self._nodes.clear()
         self._by_node.clear()
         self._last_read.clear()
+        # Not carried across: the next _bind() rewrites every input from the
+        # table, which is a better source of truth than a value that failed
+        # against nodes this session no longer has.
+        self._unacked.clear()
         client, self.client = self.client, None
         if client is not None:
             try:
@@ -205,6 +236,14 @@ class OpcUaClientDriver(Driver):
         if self._poller is not None:
             self._poller.cancel()
             self._poller = None
+        # And the subscription this bind replaces, which nothing used to
+        # delete. Every scene edit republishes the description, so a scene
+        # edited ten times left ten live subscriptions on the server: nine of
+        # them still delivering into a handler whose node->tag map had moved
+        # on. Against a real S7 they are also a resource the CPU has very
+        # little of -- see gotcha 7, where one extra client session was enough
+        # to destabilise it.
+        await self._drop_subscription()
         self._last_read.clear()
 
         if plc_written:
@@ -223,6 +262,17 @@ class OpcUaClientDriver(Driver):
                 await self._write_node(tag.id, table.visible(tag.id))
 
         log.info("bound %d/%d tags on %s", len(self._nodes), len(table), self.url)
+
+    async def _drop_subscription(self) -> None:
+        """Delete the current subscription, if there is one, and forget it."""
+        subscription, self._subscription = self._subscription, None
+        if subscription is None:
+            return
+        try:
+            await subscription.delete()
+        except Exception:
+            # A server that has already gone will refuse; the point was to ask.
+            log.debug("could not delete the previous subscription", exc_info=True)
 
     async def _browse_for_tags(self, table: TagTable, skip: set[str]) -> dict[str, str]:
         """Best-effort: match node browse names against tag ids.
@@ -253,6 +303,7 @@ class OpcUaClientDriver(Driver):
         """
         ids = [tag_id for tag_id, _ in self._poll_nodes]
         nodes = [node for _, node in self._poll_nodes]
+        failures = 0
         while not self._stopping:
             await asyncio.sleep(self.poll_interval)
             client = self.client
@@ -263,9 +314,29 @@ class OpcUaClientDriver(Driver):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # Let the connect loop own reconnection; just stand down.
-                log.debug("poll read failed: %s", exc)
-                return
+                # Do not stand down. This used to `return`, which ended polling
+                # for the rest of the run. The reasoning was that the connect
+                # loop owns reconnection -- and it does, but all it ever checks
+                # is whether the *session* is alive, and a session that has
+                # survived one failed read looks perfectly healthy to it. So
+                # one timeout against a busy CPU took the driver silent, on a
+                # connection still reporting good, with a scene that went on
+                # running and a PLC that went on being ignored.
+                failures += 1
+                if failures == 1:
+                    log.debug("poll read failed: %s", exc)
+                elif failures % POLL_FAILURES_BEFORE_REPORTING == 0:
+                    # A poller retrying forever in silence is its own kind of
+                    # lie. Say so, periodically, without flooding.
+                    await self._report(
+                        "warn", "plc_read_failed",
+                        f"{failures} consecutive failed reads from {self.url}: {exc}")
+                continue
+
+            if failures:
+                log.info("polling %s recovered after %d failed read(s)",
+                         self.url, failures)
+                failures = 0
 
             changed: dict[str, TagValue] = {}
             for tag_id, raw in zip(ids, values):
@@ -297,13 +368,13 @@ class OpcUaClientDriver(Driver):
             if tag_id in self._nodes:
                 await self._write_node(tag_id, value)
 
-    async def _write_node(self, tag_id: str, value: TagValue) -> None:
+    async def _write_node(self, tag_id: str, value: TagValue) -> bool:
         node = self._nodes.get(tag_id)
         if node is None or self._table is None:
-            return
+            return False
         tag = self._table.get(tag_id)
         if tag is None:
-            return
+            return False
         variant_type = {
             "bit": ua.VariantType.Boolean,
             "int": ua.VariantType.Int32,
@@ -312,7 +383,37 @@ class OpcUaClientDriver(Driver):
         try:
             await node.write_value(ua.DataValue(ua.Variant(value, variant_type)))
         except Exception as exc:
-            log.warning("write %s failed: %s", tag_id, exc)
+            # Held, not dropped. See _reconcile_loop.
+            self._unacked[tag_id] = value
+            log.warning("write %s failed: %s — will retry", tag_id, exc)
+            return False
+        self._unacked.pop(tag_id, None)
+        return True
+
+    async def _reconcile_loop(self) -> None:
+        """Re-attempt input writes the PLC did not accept.
+
+        A failed write used to be logged and discarded, and that is not
+        recoverable on its own: the engine publishes *deltas*, so a sensor
+        whose write fails and which then holds steady is never sent again. The
+        PLC keeps the wrong value indefinitely -- on a connection that reports
+        healthy, against a scene that looks right on screen, with one line in
+        a log to say why.
+        """
+        while not self._stopping:
+            await asyncio.sleep(self.input_retry_interval)
+            if not self._unacked or not self.connected.is_set():
+                continue
+            try:
+                for tag_id, value in list(self._unacked.items()):
+                    if tag_id not in self._nodes:
+                        self._unacked.pop(tag_id, None)
+                        continue
+                    await self._write_node(tag_id, value)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("input reconcile failed", exc_info=True)
 
     def _queue_write(self, tag_id: str, value) -> None:
         """Called from the subscription handler; schedules a bus write."""

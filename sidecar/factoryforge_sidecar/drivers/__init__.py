@@ -11,6 +11,7 @@ dropped; it must never block the bus.
 from __future__ import annotations
 
 import abc
+import inspect
 import logging
 from typing import Callable, Type
 
@@ -58,6 +59,33 @@ def usable() -> dict[str, bool]:
         "opcua-server": "opcua-server" in _REGISTRY,
     }
     return {name: needs.get(name, True) for name in available()}
+
+
+def option_types(name: str) -> dict[str, str]:
+    """Each keyword the named driver's constructor takes, and its annotation.
+
+    The CLI uses this to convert `-o` values, because argparse hands over
+    strings and a type hint does not make one an int. Reading the signature
+    keeps the two in step: a driver that gains an option gets it coerced
+    without anyone remembering to add it to a table somewhere else.
+
+    Annotations come back as written -- driver modules use
+    `from __future__ import annotations`, so they are already strings, and the
+    caller only needs to recognise the leading type name.
+    """
+    cls = _REGISTRY.get(name)
+    if cls is None:
+        return {}
+    hints: dict[str, str] = {}
+    for param in inspect.signature(cls.__init__).parameters.values():
+        if param.name in ("self", "bus") or param.kind is param.VAR_KEYWORD:
+            continue
+        if param.annotation is inspect.Parameter.empty:
+            continue
+        hints[param.name] = (
+            param.annotation if isinstance(param.annotation, str)
+            else getattr(param.annotation, "__name__", str(param.annotation)))
+    return hints
 
 
 def create(name: str, bus: TagBusClient, **config) -> "Driver":

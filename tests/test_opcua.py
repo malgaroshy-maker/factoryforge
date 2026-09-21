@@ -143,15 +143,161 @@ async def test_unmapped_tags_are_reported_not_fatal(bus, fake_plc):
         await driver.stop()
 
 
+async def test_a_transient_read_error_does_not_strand_the_poller(
+        monkeypatch, engine, fake_plc, opcua_client):
+    """A failed read used to end `_poll_loop` for the rest of the run.
+
+    The reasoning was that the connect loop owns reconnection -- and it does,
+    but all it checks is whether the session is alive, and a session that
+    survived one failed read looks perfectly healthy to it. So one timeout
+    against a busy CPU took the driver silent, on a connection still reporting
+    good, with a scene that went on running and a PLC that went on being
+    ignored.
+    """
+    from asyncua import Client as AsyncuaClient
+
+    real_read = AsyncuaClient.read_values
+    refused = []
+
+    async def flaky(self, nodes):
+        if len(refused) < 3:
+            refused.append(1)
+            raise RuntimeError("BadTimeout")
+        return await real_read(self, nodes)
+
+    monkeypatch.setattr(AsyncuaClient, "read_values", flaky)
+    assert await _settle(lambda: len(refused) >= 3), "the poller stopped on the first error"
+
+    _, _, nodes = fake_plc
+    await nodes["conveyor.rotate"].write_value(
+        ua.DataValue(ua.Variant(True, ua.VariantType.Boolean)))
+    assert await _settle(lambda: engine.scene.tags.visible("conveyor.rotate")), \
+        "polling never resumed, and nothing said so"
+
+
+async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_client):
+    """A failed write used to be logged and discarded, which is not something
+    the system recovers from on its own: the engine publishes *deltas*, so a
+    sensor whose write fails and which then holds steady is never sent again.
+    The PLC keeps the wrong value indefinitely, on a connection that reports
+    healthy.
+
+    So this pushes the value exactly once, fails the first two attempts, and
+    then leaves the driver alone. Nothing else will ever send it.
+    """
+    from asyncua import Node
+
+    _, _, nodes = fake_plc
+    real_write = Node.write_value
+    refused = []
+
+    async def flaky(self, *args, **kwargs):
+        if self.nodeid.Identifier == "sensor_high.detect" and len(refused) < 2:
+            refused.append(1)
+            raise RuntimeError("BadCommunicationError")
+        return await real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Node, "write_value", flaky)
+    opcua_client.input_retry_interval = 0.2
+
+    await opcua_client.push({"sensor_high.detect": True})
+    assert len(refused) == 1, "the write was not attempted once"
+    assert await nodes["sensor_high.detect"].read_value() is False
+    assert "sensor_high.detect" in opcua_client._unacked, "the value was dropped"
+
+    assert await _settle(lambda: nodes["sensor_high.detect"].read_value(), timeout=10), \
+        "a dropped input write was never retried; the PLC kept the wrong value"
+    assert "sensor_high.detect" not in opcua_client._unacked, \
+        "an acknowledged write is still queued for retry"
+
+
+async def test_rebuilding_does_not_accumulate_subscriptions(bus, fake_plc):
+    """Every scene edit republishes the description, and each rebuild created
+    a subscription without deleting the one it replaced.
+
+    Counted on the *server*, because that is where the resource actually runs
+    out: against a real S7 these are scarce (gotcha 7, where one extra client
+    session was enough to destabilise it), and the nine stale ones were still
+    delivering into a handler whose node->tag map had moved on.
+    """
+    server, idx, _ = fake_plc
+    live = server.iserver.subscription_service.subscriptions
+    before = len(live)
+
+    mapping = {t: f"ns={idx};s={t}" for t in OUTPUTS + INPUTS}
+    driver = drivers.create("opcua-client", bus, url=PLC_ENDPOINT, mapping=mapping,
+                            mode="subscribe", publish_interval=100)
+    await driver.start()
+    try:
+        assert await _settle(lambda: driver._subscription is not None), \
+            "no subscription was ever created"
+        assert len(live) == before + 1
+
+        for epoch in range(2, 6):
+            await driver.rebuild("sorting", epoch, bus.table)
+        assert await _settle(lambda: len(live) == before + 1), \
+            f"{len(live) - before} subscriptions are live after five binds, not 1"
+    finally:
+        await driver.stop()
+
+    # Belt and braces: closing the session tears these down server-side anyway,
+    # so this holds with or without _disconnect()'s explicit delete. It is here
+    # as a standing invariant, not as proof of that line.
+    assert await _settle(lambda: len(live) == before), \
+        "stop() left a subscription on the server"
+
+
+DEAD_ENDPOINT = "opc.tcp://127.0.0.1:48499/nothing-here/"
+
+
 async def test_missing_plc_does_not_block_startup(bus):
     """If the PLC is off, start() must still return promptly."""
-    driver = drivers.create("opcua-client", bus,
-                            url="opc.tcp://127.0.0.1:48499/nothing-here/")
+    driver = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT)
     await asyncio.wait_for(driver.start(), timeout=2)
     try:
         assert not driver.connected.is_set()
     finally:
         await driver.stop()
+
+
+async def test_the_connect_timeout_is_explicit_and_configurable(monkeypatch, bus):
+    """AGENTS.md gotcha 8: "asyncua's default 4 s connect timeout is too short
+    for a real S7. Use timeout=10." The lesson was learned and written into the
+    handoff document, and the code went on constructing `Client(url=...)` with
+    no timeout at all -- so a CPU that was merely busy looked like a CPU that
+    was not there.
+    """
+    from factoryforge_sidecar.drivers import opcua_client as mod
+
+    seen: list[dict] = []
+    real_client = mod.Client
+
+    class Recording(real_client):
+        def __init__(self, url, **kwargs):
+            seen.append({"url": url, **kwargs})
+            super().__init__(url, **kwargs)
+
+    monkeypatch.setattr(mod, "Client", Recording)
+
+    driver = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT)
+    assert driver.timeout == 10.0, "the default must be the one AGENTS.md prescribes"
+    await driver.start()
+    try:
+        assert await _settle(lambda: seen), "no client was ever constructed"
+        assert seen[0]["timeout"] == 10.0, "asyncua's 4s default was left in place"
+    finally:
+        await driver.stop()
+
+    seen.clear()
+    # `-o timeout 20` arrives from the CLI as a string.
+    slow = drivers.create("opcua-client", bus, url=DEAD_ENDPOINT, timeout="20")
+    assert slow.timeout == 20.0
+    await slow.start()
+    try:
+        assert await _settle(lambda: seen)
+        assert seen[0]["timeout"] == 20.0, "a configured timeout did not reach asyncua"
+    finally:
+        await slow.stop()
 
 
 # --- server driver, driven by a real client ---
