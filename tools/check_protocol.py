@@ -14,6 +14,7 @@ catch.
 """
 from __future__ import annotations
 
+import os
 import argparse
 import asyncio
 import json
@@ -122,7 +123,9 @@ async def _next_update(ws, timeout: float, tag_id: str | None = None) -> dict | 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="ws://127.0.0.1:7411/tagbus")
+    parser.add_argument("--url",
+                        default=os.environ.get("FF_BUS_URL",
+                                               "ws://127.0.0.1:7411/tagbus"))
     parser.add_argument("--timeout", type=float, default=10.0)
     args = parser.parse_args()
 

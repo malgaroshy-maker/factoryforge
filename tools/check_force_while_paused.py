@@ -11,6 +11,7 @@ the line, force a sensor, read the PLC's response.
 """
 from __future__ import annotations
 
+import os
 import asyncio
 import sys
 from pathlib import Path
@@ -21,8 +22,13 @@ sys.path.insert(0, str(ROOT / "sidecar"))
 from factoryforge_sidecar.tagbus import TagBusClient  # noqa: E402
 
 
+#: The engine's tag bus. FF_BUS_URL lets this run against an engine
+#: started with --bus-port=N, so two runs can coexist on one machine.
+BUS_URL = os.environ.get("FF_BUS_URL", "ws://127.0.0.1:7411/tagbus")
+
+
 async def main() -> int:
-    bus = TagBusClient("ws://127.0.0.1:7411/tagbus")
+    bus = TagBusClient(BUS_URL)
     runner = asyncio.create_task(bus.run())
     try:
         await asyncio.wait_for(bus.connected.wait(), timeout=10)

@@ -8,6 +8,7 @@ Node-RED or a SCADA package. CI must never need TIA Portal or PLCSIM.
 from __future__ import annotations
 
 import asyncio
+import socket
 
 import pytest
 import pytest_asyncio
@@ -15,8 +16,22 @@ from asyncua import Client, Server, ua
 
 from factoryforge_sidecar import drivers
 
-PLC_ENDPOINT = "opc.tcp://127.0.0.1:48400/fakeplc/"
-SIM_ENDPOINT = "opc.tcp://127.0.0.1:48410/factoryforge/"
+def _free_port() -> int:
+    """A port nothing else is on, so two suites can share a machine.
+
+    These endpoints were 48400 and 48410 flat. Two pytest runs at once -- one
+    checking a branch while another checks master, or a developer's run
+    overlapping CI's -- then fought over the same two sockets, and the loser
+    failed in whichever fake_plc test happened to be first. That reads as a
+    driver bug and is not one.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+PLC_ENDPOINT = f"opc.tcp://127.0.0.1:{_free_port()}/fakeplc/"
+SIM_ENDPOINT = f"opc.tcp://127.0.0.1:{_free_port()}/factoryforge/"
 
 #: The four PLC-written tags plus the sensors we care about.
 OUTPUTS = ["conveyor.rotate", "emitter.emit", "pusher.extend", "stack_light.green"]

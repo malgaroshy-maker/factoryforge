@@ -1,4 +1,5 @@
 """Drive the running Godot 3D engine live for testing."""
+import os
 import asyncio
 import logging
 import sys
@@ -17,8 +18,13 @@ PUSH_DELAY = 0.9
 PUSH_HOLD = 0.5
 RUN_FOR = 300.0  # 5 minutes continuous live test
 
+#: The engine's tag bus. FF_BUS_URL lets this run against an engine
+#: started with --bus-port=N, so two runs can coexist on one machine.
+BUS_URL = os.environ.get("FF_BUS_URL", "ws://127.0.0.1:7411/tagbus")
+
+
 async def main():
-    bus = TagBusClient("ws://127.0.0.1:7411/tagbus")
+    bus = TagBusClient(BUS_URL)
     runner = asyncio.create_task(bus.run())
     try:
         await asyncio.wait_for(bus.connected.wait(), timeout=15)

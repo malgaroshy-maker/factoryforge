@@ -86,11 +86,34 @@ def engine(args: list[str], headless: bool = True, timeout: float = 90) -> tuple
     cmd = [GODOT or "godot"]
     if headless:
         cmd.append("--headless")
-    cmd += ["--path", str(ENGINE), "--"] + args
+    cmd += ["--path", str(ENGINE), "--", f"--bus-port={BUS_PORT}"] + args
     return run(cmd, timeout=timeout)
 
 
-def port_in_use(port: int = 7411) -> bool:
+def _free_port() -> int:
+    """An unused port, so two runs of the plan can share a machine.
+
+    Every engine this file starts binds the tag bus, and the bus port used to
+    be 7411 in six places here, three more in the tools it calls and one in
+    try_scene.py. Two runs therefore could not coexist: the second engine bound
+    nothing, reported [NO TAG BUS], and the check that was really failing was
+    never the one that got blamed. FF_BUS_PORT pins it when something outside
+    needs to know the number; otherwise the OS picks one.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+BUS_PORT = int(os.environ.get("FF_BUS_PORT") or _free_port())
+#: Inherited by check_protocol.py, check_force_*.py, drive_engine.py and
+#: try_scene.py, each of which starts or connects to the same engine.
+os.environ["FF_BUS_PORT"] = str(BUS_PORT)
+os.environ["FF_BUS_URL"] = f"ws://127.0.0.1:{BUS_PORT}/tagbus"
+
+
+def port_in_use(port: int | None = None) -> bool:
+    port = BUS_PORT if port is None else port
     with socket.socket() as probe:
         probe.settimeout(0.5)
         return probe.connect_ex(("127.0.0.1", port)) == 0
@@ -129,16 +152,17 @@ class EngineProcess:
         # 30 seconds later with "never opened port".
         if not wait_for_port_free():
             raise RuntimeError(
-                "port 7411 is still held after 20s — another engine is running. "
+                f"port {BUS_PORT} is still held after 20s — another engine is running. "
                 "Close it before running the plan.")
 
-        cmd = [GODOT or "godot", "--headless", "--path", str(ENGINE), "--"] + self.args
+        cmd = ([GODOT or "godot", "--headless", "--path", str(ENGINE), "--",
+                f"--bus-port={BUS_PORT}"] + self.args)
         self._handle = open(self.log, "w", encoding="utf-8", errors="replace")
         self.proc = subprocess.Popen(cmd, stdout=self._handle, stderr=subprocess.STDOUT)
 
         # __exit__ does not run when __enter__ raises, so everything below has to
         # clean up after itself (HP-30). Without this, an engine that came up but
-        # never bound the port was left running -- and it is still holding 7411,
+        # never bound the port was left running -- and it is still holding the bus
         # so the *next* check waits 20 seconds for a free port and fails too. One
         # orphan poisons the rest of the run and the reported failure is never
         # the real one.
@@ -148,11 +172,11 @@ class EngineProcess:
             for _ in range(120):
                 with socket.socket() as probe:
                     probe.settimeout(0.25)
-                    if probe.connect_ex(("127.0.0.1", 7411)) == 0:
+                    if probe.connect_ex(("127.0.0.1", BUS_PORT)) == 0:
                         time.sleep(0.5)      # let the describe go out
                         return self
                 time.sleep(0.25)
-            raise RuntimeError("engine never opened port 7411")
+            raise RuntimeError(f"engine never opened port {BUS_PORT}")
         except BaseException:
             # BaseException, not Exception: Ctrl-C during that minute of waiting
             # is the most likely way to get here and leaks the same process.
@@ -174,6 +198,10 @@ class EngineProcess:
 
 
 def sidecar(args: list[str], timeout: float = 60) -> tuple[int, str]:
+    # `connect` talks to the engine this file started, which is not on the
+    # default port unless FF_BUS_PORT said so.
+    if args and args[0] == "connect" and "--port" not in args:
+        args = args + ["--port", str(BUS_PORT)]
     return run([sys.executable, "-m", "factoryforge_sidecar"] + args, cwd=SIDECAR, timeout=timeout)
 
 
@@ -464,11 +492,20 @@ def section_f() -> None:
                bool(match) and match.group(1) != "None" and int(match.group(2)) > 0,
                f"scene={match.group(1)} tags={match.group(2)}" if match else "no connect line")
 
-        code, out = sidecar(["connect", "--driver", "modbus-tcp", "--duration", "6"], timeout=90)
+        # Its own free port, not 502. Proving the bus port was shareable turned
+        # up two more fixed ones underneath it: two concurrent runs of this
+        # section failed here and in F3 on "only one usage of each socket
+        # address", while every other check passed. A driver's listening port
+        # is as much a shared resource as the bus is.
+        code, out = sidecar(["connect", "--driver", "modbus-tcp", "--duration", "6",
+                             "-o", "port", str(_free_port())], timeout=90)
         record("F2", "modbus-tcp server starts and reports its address map",
                "Modbus address map" in out, "" if "Modbus address map" in out else out.strip()[-120:])
 
-        code, out = sidecar(["connect", "--driver", "opcua-server", "--duration", "8"], timeout=120)
+        code, out = sidecar(["connect", "--driver", "opcua-server", "--duration", "8",
+                             "-o", "endpoint",
+                             f"opc.tcp://127.0.0.1:{_free_port()}/factoryforge/"],
+                            timeout=120)
         record("F3", "opcua-server starts and reports an endpoint",
                "OPC UA server:" in out, "" if "OPC UA server:" in out else out.strip()[-120:])
 
@@ -542,7 +579,15 @@ def section_g() -> None:
     with EngineProcess("--duration=30") as eng:
         handle = open(g5_log, "w", encoding="utf-8", errors="replace")
         sidecar_proc = subprocess.Popen(
-            [sys.executable, "-m", "factoryforge_sidecar", "connect", "--driver", "mock", "--duration", "20"],
+            # --port explicitly: this is the one sidecar launch that does not go
+            # through sidecar(), so it does not inherit that helper's injection
+            # and would otherwise look for the engine on the default port while
+            # EngineProcess put it on a free one. That failure reads as "the
+            # sidecar did not notice the engine die", which is this check's real
+            # subject -- so it fails for a reason that looks exactly like the
+            # thing being tested.
+            [sys.executable, "-m", "factoryforge_sidecar", "connect", "--driver", "mock",
+             "--duration", "20", "--port", str(BUS_PORT)],
             cwd=SIDECAR, stdout=handle, stderr=subprocess.STDOUT)
         time.sleep(2.0)   # let it connect and receive the describe
         eng.proc.terminate()
@@ -598,7 +643,7 @@ def section_h() -> None:
         # EngineProcess.__enter__ waits out between checks.
         if not wait_for_port_free():
             record(f"H{i}", f"{scene_id}: try_scene.py drives it to a real PASS", False,
-                   "port 7411 still held from a previous check")
+                   f"port {BUS_PORT} still held from a previous check")
             continue
         # 210s, not 90: the longest exercises in the set are long because the
         # plant is, not because the harness is slow. The heat-treat run holds a

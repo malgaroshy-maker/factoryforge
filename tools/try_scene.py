@@ -57,7 +57,10 @@ logging.disable(logging.WARNING)
 
 from factoryforge_sidecar.tagbus import TagBusClient  # noqa: E402
 
-PORT = 7411
+#: The engine's tag bus. FF_BUS_PORT lets this run against a port other
+#: than the default, so two exercises can run at once on one machine --
+#: this spawns its own engine, so it has to agree with it about the port.
+PORT = int(os.environ.get("FF_BUS_PORT", "7411"))
 
 
 def find_godot() -> str | None:
@@ -90,7 +93,8 @@ class Engine:
     file gives something to show the user if the connect step times out."""
 
     def __init__(self, godot: str, entry: dict) -> None:
-        args = [godot, "--headless", "--path", str(ENGINE), "--"]
+        args = [godot, "--headless", "--path", str(ENGINE), "--",
+                f"--bus-port={PORT}"]
         if entry["path"]:
             args.append(f"--scene={entry['path']}")
 
