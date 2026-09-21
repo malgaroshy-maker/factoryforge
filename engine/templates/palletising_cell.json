@@ -1,0 +1,91 @@
+{
+  "name": "palletising-cell",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "emitter",
+      "type": "Emitter",
+      "position": [-3.4, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "metal_every": "0", "tall_every": "0" }
+    },
+    {
+      "id": "infeed",
+      "type": "VariableConveyor",
+      "position": [-2.4, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "friction": "0.8", "size_x": "2", "size_y": "0.12", "size_z": "0.5",
+        "max_speed": "0.7", "accel_rate": "35"
+      }
+    },
+    {
+      "id": "pickstation",
+      "type": "ConveyorBelt",
+      "position": [-0.8, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "speed": "0.4", "friction": "0.9", "size_x": "1.2", "size_y": "0.12", "size_z": "0.5"
+      }
+    },
+    {
+      "id": "stop",
+      "type": "StopGate",
+      "position": [-0.45, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "atpick",
+      "type": "PhotoelectricSensor",
+      "position": [-0.6, 0.5, 0.35],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "range": "0.7", "height": "0.05", "mode": "Diffuse", "visual_only": "false" }
+    },
+    {
+      "id": "arm",
+      "type": "ArticulatedArm",
+      "position": [-0.57, 0.5, -0.85],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "upper_arm": "0.72", "forearm": "0.58", "shoulder_height": "0.78",
+        "joint_speed": "70", "tolerance": "1.0",
+        "waist_limit": "165", "shoulder_min": "-35", "shoulder_max": "105", "elbow_max": "150"
+      }
+    },
+    {
+      "id": "pallet",
+      "type": "PalletStation",
+      "position": [0.1, 0.5, -0.85],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "columns": "3", "rows": "2", "layers": "3",
+        "pitch_x": "0.24", "pitch_z": "0.28", "layer_height": "0.12",
+        "alternate": "true", "pallet_width": "0.9", "pallet_depth": "0.8"
+      }
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [-2.6, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "setpoint_min": "10", "setpoint_max": "100", "setpoint_unit": "%", "setpoint": "70"
+      }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [-1.6, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "onpallet",
+      "type": "DigitalDisplay",
+      "position": [1.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "unit": "off" }
+    }
+  ]
+}

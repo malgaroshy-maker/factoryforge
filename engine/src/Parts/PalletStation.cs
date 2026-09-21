@@ -74,6 +74,16 @@ public partial class PalletStation : Node3D, IPart
     /// inspector: the panel offers sliders, text and tag pickers, and a
     /// two-state setting rendered as a slider from 0 to 1 is worse than one
     /// that lives in the scene file where a template can set it.
+    ///
+    /// <b>What this turns is the grid, not the carton.</b> The slot positions
+    /// rotate, so the seams between cartons land somewhere different on each
+    /// layer, which is most of what an interlock buys structurally. Turning the
+    /// carton itself takes a wrist roll, and <see cref="ArticulatedArm"/> has
+    /// three axes and no fourth — which is exactly why a real palletising robot
+    /// has one. The drop marker shows the orientation the pattern wants; a
+    /// three-axis arm simply cannot deliver it, and pretending otherwise by
+    /// spinning the carton in code would hide a limit worth seeing. Pitches are
+    /// sized so the turned grid fits without it.
     /// </summary>
     [Export] public bool AlternateLayers { get; set; } = true;
 

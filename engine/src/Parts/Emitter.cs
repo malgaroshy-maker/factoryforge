@@ -66,12 +66,48 @@ public partial class Emitter : Node3D, IPart
     /// existing scenes emitting cardboard only.</summary>
     [Export] public int MetalEvery { get; set; }
 
+    /// <summary>
+    /// How often a tall carton comes down the line.
+    ///
+    /// <c>-1</c>, the default, takes the alternation from the host, which is
+    /// what a sorting line needs: two emitters feeding one lane must not each
+    /// decide independently, or the "mixed stream" is two independent streams
+    /// that happen to agree. <c>0</c> never emits a tall one, <c>1</c> emits
+    /// nothing else, and N emits every Nth.
+    ///
+    /// This exists because a palletiser is a one-SKU machine and the library
+    /// had no way to say so. A layer height has to be the carton height, and a
+    /// stream alternating 0.10 m and 0.30 m cartons cannot have one -- the
+    /// stack a cell built out of it toppled on the second layer, which is
+    /// correct physics and an impossible scene.
+    ///
+    /// Saved but deliberately absent from the inspector, the same call
+    /// <see cref="PalletStation.AlternateLayers"/> makes: the panel offers
+    /// sliders, text and tag pickers, and a four-way meaning packed onto a
+    /// slider that starts at -1 is worse than a setting a template sets.
+    /// </summary>
+    [Export] public int TallEvery { get; set; } = -1;
+
     private int _emitted;
 
     /// <summary>Zero the metal cadence counter. Called on scene reset so the
     /// metal phase does not drift from wherever the previous run left it —
     /// the regression contract requires a reset to fully reset.</summary>
-    public void ResetCount() => _emitted = 0;
+    public void ResetCount() { _emitted = 0; _shaped = 0; }
+
+    /// <summary>Cartons emitted since the last reset, for the tall cadence.
+    /// Separate from <see cref="_emitted"/> so the metal phase and the shape
+    /// phase cannot be made to share a period by accident.</summary>
+    private int _shaped;
+
+    /// <summary>Is the next carton a tall one? See <see cref="TallEvery"/> for
+    /// why the default defers to the host.</summary>
+    private bool NextIsTall(PartTick tick)
+    {
+        if (TallEvery < 0) return tick.Host.NextAlternate();
+        _shaped++;
+        return TallEvery > 0 && _shaped % TallEvery == 0;
+    }
 
     public BoxPhysics SpawnBox(bool isTall)
     {
@@ -105,6 +141,7 @@ public partial class Emitter : Node3D, IPart
     public void CaptureSettings(PartSettings settings)
     {
         settings.Put("metal_every", MetalEvery);
+        settings.Put("tall_every", TallEvery);
         // How far above the belt a carton is released. Two millimetres by
         // default, and the number somebody changes when cartons bounce or clip
         // on spawn -- a fix that silently reverted on every reload.
@@ -114,6 +151,7 @@ public partial class Emitter : Node3D, IPart
     public void ApplySettings(PartSettings settings)
     {
         if (settings.Whole("metal_every") is { } metal) MetalEvery = metal;
+        if (settings.Whole("tall_every") is { } tall) TallEvery = tall;
         if (settings.Number("drop_clearance") is { } clearance) DropClearance = clearance;
     }
 
@@ -130,7 +168,7 @@ public partial class Emitter : Node3D, IPart
         if (!tick.Host.CanSpawnItem) return;
 
         _edgeSpent = true;
-        SpawnBox(tick.Host.NextAlternate());
+        SpawnBox(NextIsTall(tick));
     }
 
     public void DescribeControls(IPartInspector ui) =>

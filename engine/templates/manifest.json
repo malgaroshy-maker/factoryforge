@@ -118,5 +118,17 @@
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · pump.run · pump.speed · pump.flow · pump.fault · meter.rate · meter.total · meter.reset · tank.level · tank.drain · flow_gauge.value · total_display.value · level_readout.value · panel.green · panel.red",
       "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent."
     }
+  },
+  {
+    "id": "palletising-cell",
+    "title": "Palletising cell",
+    "blurb": "A jointed arm and a pallet that knows its own pattern. The arm takes angles, the station publishes a place, and turning one into the other is the program.",
+    "path": "res://templates/palletising_cell.json",
+    "scene": "palletising-cell",
+    "brief": {
+      "task": "Stack cartons on the pallet in the pattern the station asks for. The arm does not take a position -- it takes three joint angles -- so you solve for them: the waist is a bearing, the elbow comes out of the law of cosines on the shoulder-elbow-tool triangle, and the shoulder is the angle up to the target plus the angle the upper arm stands off it. The station publishes pallet.nextx / nexty / nextz in metres from its own centre, and every part's origin sits on the same work plane, so those numbers and the arm's own arm.height are in one frame. Pulse pallet.index once per carton placed, and pallet.change when it fills.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · infeed.run · infeed.speed · pickstation.rotate · stop.raise · atpick.detect · emitter.emit · arm.waist · arm.shoulder · arm.elbow · arm.grip · arm.atwaist · arm.atshoulder · arm.atelbow · arm.reach · arm.height · arm.stretch · arm.inposition · arm.limit · arm.holding · pallet.nextx · pallet.nexty · pallet.nextz · pallet.slot · pallet.layer · pallet.count · pallet.layerdone · pallet.full · pallet.index · pallet.change · onpallet.value · panel.green · panel.red",
+      "done": "Six cartons make a layer, the seventh starts the next one a layer height higher and turned a quarter-turn, and after three layers pallet.full goes high and further index pulses do nothing until you change the pallet. Then fly a carton straight from the pick to a slot in one move instead of lifting, swinging on the waist and descending -- the tool bows a long way off the line between the two poses and drags the carton through the stack, which is why a real cell uses approach points. Finally ask for a slot the arm cannot reach (move the pallet, or wind arm.shoulder past its stop and watch arm.limit): the honest answer is to stop, not to go as close as you can get."
+    }
   }
 ]
