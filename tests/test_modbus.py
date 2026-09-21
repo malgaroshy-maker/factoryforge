@@ -8,6 +8,7 @@ result back from a discrete input -- with no 3D and no Siemens software.
 from __future__ import annotations
 
 import asyncio
+import logging
 import struct
 from unittest.mock import MagicMock
 
@@ -16,6 +17,9 @@ import pytest_asyncio
 from pymodbus.client import AsyncModbusTcpClient
 
 from factoryforge_sidecar import drivers
+from factoryforge_sidecar.drivers.modbus_tcp import (
+    INT32_MAX, INT32_MIN, _from_registers, _to_registers,
+)
 from factoryforge_sidecar.modbus import DataStore, ModbusTcpServer, error_response, handle_pdu
 from factoryforge_sidecar.modbus.server import ILLEGAL_ADDRESS, ILLEGAL_FUNCTION
 from factoryforge_sidecar.tags import Tag, TagTable
@@ -134,15 +138,16 @@ async def test_master_reads_a_sensor(engine, modbus, master):
     assert result.bits[0] is True
 
 
-async def test_int_tags_map_to_input_registers(engine, modbus, master):
+async def test_int_tags_map_to_a_pair_of_input_registers(engine, modbus, master):
+    """32-bit signed, big-endian -- the range an Int tag actually promises."""
     engine.scene.sorted_tall.extend([object()] * 3)
     address = _addr(modbus, "counter.tall")
     for _ in range(100):
-        result = await master.read_input_registers(address, count=1)
-        if result.registers[0] == 3:
+        result = await master.read_input_registers(address, count=2)
+        if _from_registers("int", result.registers) == 3:
             break
         await asyncio.sleep(0.05)
-    assert result.registers[0] == 3
+    assert _from_registers("int", result.registers) == 3
 
 
 async def test_initial_state_is_seeded_before_any_update(modbus, master):
@@ -277,6 +282,7 @@ class RecordingBus:
 
     def __init__(self) -> None:
         self.statuses: list[tuple[str, str, str]] = []
+        self.written: dict = {}
 
     def on_describe(self, hook) -> None: ...
     def on_update(self, hook) -> None: ...
@@ -284,6 +290,9 @@ class RecordingBus:
 
     async def status(self, level, code, message) -> None:
         self.statuses.append((level, code, message))
+
+    async def write_many(self, values) -> None:
+        self.written.update(values)
 
 
 def table_of(*names) -> TagTable:
@@ -365,6 +374,66 @@ async def test_a_map_change_is_announced_because_the_wire_cannot_be(mapper):
 
     await mapper.rebuild("scene", 3, table_of("belt_a.rotate", "conveyor.rotate"))
     assert len(mapper.bus.statuses) == 1, "an unchanged map was announced anyway"
+
+
+# --- integers that carry the range the tag promises ---------------------------
+
+@pytest.mark.parametrize("value", [
+    0, 3, -1, 32_767,
+    32_768,             # the first value the old one-register encoding wrapped
+    -32_769, 100_000, -100_000, INT32_MAX, INT32_MIN,
+])
+def test_an_int_round_trips_beyond_sixteen_bits(value):
+    """An Int tag is 32-bit on both sides of the bus. It used to be encoded as
+    `[int(value) & 0xFFFF]` and read back as signed 16-bit, so a carton counter
+    passing 32,767 came out as -32,768 -- and the PLC believed it, because
+    nothing on the Modbus wire says how wide a tag is meant to be."""
+    assert _from_registers("int", _to_registers("int", value)) == value
+
+
+def test_a_value_too_large_for_an_int_tag_is_refused_not_wrapped():
+    for value in (INT32_MAX + 1, INT32_MIN - 1):
+        with pytest.raises(ValueError) as exc:
+            _to_registers("int", value)
+        assert str(value) in str(exc.value)
+
+
+async def test_an_int_tag_takes_two_registers(mapper):
+    await mapper.rebuild("scene", 1, TagTable([
+        Tag("counter.tall", "Tall", "int", "input"),
+        Tag("counter.short", "Short", "int", "input"),
+    ]))
+    assert mapper._by_tag["counter.tall"].width == 2
+    # "counter.short" sorts first, so it takes 3x0-3x1 and tall follows at 3x2.
+    assert mapper._by_tag["counter.short"].address == 0
+    assert mapper._by_tag["counter.tall"].address == 2, "the pair was not reserved"
+
+
+async def test_a_master_write_of_a_large_int_arrives_intact(mapper):
+    """The other direction: a PLC writing a setpoint past 16 bits."""
+    await mapper.rebuild("scene", 1, TagTable([
+        Tag("setpoint.count", "Setpoint", "int", "output")]))
+    mapper._loop = asyncio.get_running_loop()
+    address = mapper._by_tag["setpoint.count"].address
+
+    mapper.store.write_registers(address, _to_registers("int", 100_000))
+    assert await _settle(lambda: mapper.bus.written), "nothing reached the bus"
+    assert mapper.bus.written == {"setpoint.count": 100_000}
+
+
+async def test_an_out_of_range_int_leaves_the_previous_value_on_the_wire(mapper, caplog):
+    table = TagTable([Tag("counter.tall", "Tall", "int", "input")])
+    await mapper.rebuild("scene", 1, table)
+    address = mapper._by_tag["counter.tall"].address
+    await mapper.push({"counter.tall": 42})
+    assert _from_registers("int", mapper.store.input_registers[address:address + 2]) == 42
+
+    with caplog.at_level(logging.ERROR):
+        await mapper.push({"counter.tall": INT32_MAX + 1})
+    assert _from_registers("int", mapper.store.input_registers[address:address + 2]) == 42, \
+        "an unrepresentable value was wrapped onto the wire"
+    assert any("counter.tall" in r.getMessage() for r in caplog.records), \
+        "it was dropped without saying so"
 
 
 def test_the_driver_binds_loopback_unless_told_otherwise():

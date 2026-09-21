@@ -8,8 +8,8 @@ Address mapping, derived from `kind` (which is from the controller's POV):
 
     sim output, bit    -> coil              (master writes)
     sim input,  bit    -> discrete input    (master reads)
-    sim output, int    -> holding register  (master writes)
-    sim input,  int    -> input register    (master reads)
+    sim output, int    -> 2 holding registers, 32-bit signed big-endian
+    sim input,  int    -> 2 input registers, 32-bit signed big-endian
     sim output, float  -> 2 holding registers, IEEE-754 big-endian
     sim input,  float  -> 2 input registers, IEEE-754 big-endian
 
@@ -47,18 +47,35 @@ class Mapping:
     type: str           # "bit" | "int" | "float"
 
 
+#: An Int tag is a 32-bit signed integer on both sides of the bus -- C#'s `int`
+#: in the engine, Python's unbounded one narrowed to match. This is the range a
+#: value has to fit to be transportable at all.
+INT32_MIN, INT32_MAX = -(2 ** 31), 2 ** 31 - 1
+
+
 def _to_registers(type_: str, value: TagValue) -> list[int]:
+    """Big-endian, two registers, for both Int and Float.
+
+    An Int used to be `[int(value) & 0xFFFF]`: one register, reinterpreted on
+    the way back as a signed 16-bit number. A carton counter passing 32,767
+    came out the other side as -32,768 and the PLC believed it, because there
+    is nothing on the Modbus wire that says how wide a tag is meant to be. The
+    tag promises 32 bits, so the transport carries 32.
+    """
     if type_ == "float":
         return list(struct.unpack(">HH", struct.pack(">f", float(value))))
-    # Modbus registers are unsigned on the wire; two's complement for negatives.
-    return [int(value) & 0xFFFF]
+    number = int(value)
+    if not INT32_MIN <= number <= INT32_MAX:
+        raise ValueError(
+            f"{number} does not fit an Int tag, which is 32-bit signed "
+            f"({INT32_MIN}..{INT32_MAX})")
+    return list(struct.unpack(">HH", struct.pack(">i", number)))
 
 
 def _from_registers(type_: str, regs: list[int]) -> TagValue:
     if type_ == "float":
         return struct.unpack(">f", struct.pack(">HH", regs[0], regs[1]))[0]
-    value = regs[0] & 0xFFFF
-    return value - 0x10000 if value >= 0x8000 else value
+    return struct.unpack(">i", struct.pack(">HH", regs[0], regs[1]))[0]
 
 
 #: The conventional Modbus prefixes, as a student would write them next to a
@@ -104,6 +121,7 @@ class ModbusTcpDriver(Driver):
         self._known: dict[str, Mapping] = {}
         self._next = {"coils": 0, "discrete_inputs": 0,
                       "holding_registers": 0, "input_registers": 0}
+        self._warned: set[str] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -127,8 +145,8 @@ class ModbusTcpDriver(Driver):
         """Which block a tag belongs in, and how many addresses it takes."""
         if tag.type == "bit":
             return ("coils" if tag.kind == "output" else "discrete_inputs"), 1
-        block = "holding_registers" if tag.kind == "output" else "input_registers"
-        return block, (2 if tag.type == "float" else 1)
+        # Two registers for Int as well as Float: see _to_registers.
+        return ("holding_registers" if tag.kind == "output" else "input_registers"), 2
 
     def _assign(self, tag) -> Mapping | None:
         """The address for *tag* — the one it already has, wherever possible.
@@ -238,13 +256,29 @@ class ModbusTcpDriver(Driver):
             self.server.host, self.port,
         )
 
+    def _warn_once(self, key: str, message: str) -> None:
+        """A tag updated every tick would otherwise repeat the same complaint
+        until it buries everything else."""
+        if key not in self._warned:
+            self._warned.add(key)
+            log.error("%s", message)
+
     def _write_store(self, mapping: Mapping, value: TagValue) -> None:
         if mapping.type == "bit":
             block = (self.store.coils if mapping.block == "coils"
                      else self.store.discrete_inputs)
             block[mapping.address] = bool(value)
             return
-        regs = _to_registers(mapping.type, value)
+        try:
+            regs = _to_registers(mapping.type, value)
+        except ValueError as err:
+            # Refused rather than wrapped. A value the transport cannot carry
+            # is worth a line in the log; a value it carries as its own
+            # negative is not something anyone downstream can detect.
+            self._warn_once(mapping.tag_id,
+                            f"{mapping.tag_id}: {err}; "
+                            "leaving the previous value on the wire")
+            return
         block = (self.store.holding_registers if mapping.block == "holding_registers"
                  else self.store.input_registers)
         block[mapping.address:mapping.address + len(regs)] = regs
