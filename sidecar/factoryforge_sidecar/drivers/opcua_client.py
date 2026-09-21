@@ -178,7 +178,7 @@ class OpcUaClientDriver(Driver):
         if self._poller is not None:
             self._poller.cancel()
             self._poller = None
-        self._subscription = None
+        await self._drop_subscription()
         self._nodes.clear()
         self._by_node.clear()
         self._last_read.clear()
@@ -236,6 +236,14 @@ class OpcUaClientDriver(Driver):
         if self._poller is not None:
             self._poller.cancel()
             self._poller = None
+        # And the subscription this bind replaces, which nothing used to
+        # delete. Every scene edit republishes the description, so a scene
+        # edited ten times left ten live subscriptions on the server: nine of
+        # them still delivering into a handler whose node->tag map had moved
+        # on. Against a real S7 they are also a resource the CPU has very
+        # little of -- see gotcha 7, where one extra client session was enough
+        # to destabilise it.
+        await self._drop_subscription()
         self._last_read.clear()
 
         if plc_written:
@@ -254,6 +262,17 @@ class OpcUaClientDriver(Driver):
                 await self._write_node(tag.id, table.visible(tag.id))
 
         log.info("bound %d/%d tags on %s", len(self._nodes), len(table), self.url)
+
+    async def _drop_subscription(self) -> None:
+        """Delete the current subscription, if there is one, and forget it."""
+        subscription, self._subscription = self._subscription, None
+        if subscription is None:
+            return
+        try:
+            await subscription.delete()
+        except Exception:
+            # A server that has already gone will refuse; the point was to ask.
+            log.debug("could not delete the previous subscription", exc_info=True)
 
     async def _browse_for_tags(self, table: TagTable, skip: set[str]) -> dict[str, str]:
         """Best-effort: match node browse names against tag ids.

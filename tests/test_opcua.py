@@ -211,6 +211,42 @@ async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_cli
         "an acknowledged write is still queued for retry"
 
 
+async def test_rebuilding_does_not_accumulate_subscriptions(bus, fake_plc):
+    """Every scene edit republishes the description, and each rebuild created
+    a subscription without deleting the one it replaced.
+
+    Counted on the *server*, because that is where the resource actually runs
+    out: against a real S7 these are scarce (gotcha 7, where one extra client
+    session was enough to destabilise it), and the nine stale ones were still
+    delivering into a handler whose node->tag map had moved on.
+    """
+    server, idx, _ = fake_plc
+    live = server.iserver.subscription_service.subscriptions
+    before = len(live)
+
+    mapping = {t: f"ns={idx};s={t}" for t in OUTPUTS + INPUTS}
+    driver = drivers.create("opcua-client", bus, url=PLC_ENDPOINT, mapping=mapping,
+                            mode="subscribe", publish_interval=100)
+    await driver.start()
+    try:
+        assert await _settle(lambda: driver._subscription is not None), \
+            "no subscription was ever created"
+        assert len(live) == before + 1
+
+        for epoch in range(2, 6):
+            await driver.rebuild("sorting", epoch, bus.table)
+        assert await _settle(lambda: len(live) == before + 1), \
+            f"{len(live) - before} subscriptions are live after five binds, not 1"
+    finally:
+        await driver.stop()
+
+    # Belt and braces: closing the session tears these down server-side anyway,
+    # so this holds with or without _disconnect()'s explicit delete. It is here
+    # as a standing invariant, not as proof of that line.
+    assert await _settle(lambda: len(live) == before), \
+        "stop() left a subscription on the server"
+
+
 DEAD_ENDPOINT = "opc.tcp://127.0.0.1:48499/nothing-here/"
 
 
