@@ -27,6 +27,16 @@ public partial class TagBusServer : Node
     private readonly Dictionary<string, object> _lastSent = new();
     private readonly Dictionary<string, object> _lastForced = new();
 
+    /// <summary>Sidecars being turned away, each held only long enough to
+    /// finish its handshake, hear why, and be closed. See
+    /// <see cref="PumpRefusals"/>.</summary>
+    private readonly List<(WebSocketPeer Peer, bool Told, ulong Deadline)> _refusing = new();
+
+    /// <summary>How long a refused peer is given to finish its handshake before
+    /// it is dropped without ceremony. It only has to say hello over loopback;
+    /// anything slower than this is not a sidecar.</summary>
+    private const ulong RefusalTimeoutMs = 5000;
+
     public TagTable Tags { get; set; } = new();
     public string SceneName { get; set; } = "untitled";
     /// <summary>Did the socket actually bind? False means no driver can ever
@@ -76,16 +86,29 @@ public partial class TagBusServer : Node
 
     private void AcceptPending()
     {
+        PumpRefusals();
         if (!_listener.IsConnectionAvailable()) return;
         var stream = _listener.TakeConnection();
         if (stream is null) return;
 
-        if (HasClient)
+        // The current client's state is only ever as fresh as the last Poll().
+        // A sidecar that vanished *without* a close frame — a crash, a killed
+        // process, a pulled cable — still reads as Open until it is polled, and
+        // this runs before PumpClient does that. So poll here, before judging a
+        // new connection: without it the first reconnect after a crash is
+        // refused as a "second sidecar" while the first one is already gone.
+        // Measured against this engine before the fix: 15 attempts, 15 refusals,
+        // every one of them recovering only on the following frame. Python's
+        // engine_stub answered the same reconnect immediately, which makes it a
+        // parity divergence and not only a robustness bug (HP-19).
+        if (_client is not null)
         {
-            // Refuse rather than silently multiplexing.
-            stream.DisconnectFromHost();
-            GD.Print("tag bus: refused a second sidecar");
-            return;
+            _client.Poll();
+            if (_client.GetReadyState() == WebSocketPeer.State.Closed)
+            {
+                GD.Print("tag bus: sidecar disconnected");
+                DropClient();
+            }
         }
 
         var peer = new WebSocketPeer();
@@ -94,7 +117,65 @@ public partial class TagBusServer : Node
             GD.PushWarning("tag bus: websocket handshake failed");
             return;
         }
+
+        if (_client is not null)
+        {
+            // Refuse rather than silently multiplexing — but say why, on the
+            // bus. This used to be `stream.DisconnectFromHost()`, which tore
+            // the TCP connection down before the websocket handshake finished,
+            // so the second sidecar saw "did not receive a valid HTTP
+            // response" and never learned that another sidecar was the reason.
+            // engine_stub.py has always completed the handshake and answered
+            // with a status; the two engines have to answer this the same way.
+            _refusing.Add((peer, false, Time.GetTicksMsec() + RefusalTimeoutMs));
+            GD.Print("tag bus: refused a second sidecar");
+            return;
+        }
         _client = peer;
+    }
+
+    /// <summary>Carry each refused sidecar as far as being told why.
+    ///
+    /// A peer cannot be sent anything until its handshake completes, and that
+    /// takes a poll or two, so the refusal cannot be done inline in
+    /// <see cref="AcceptPending"/> — it is a tiny state machine of its own.
+    /// </summary>
+    private void PumpRefusals()
+    {
+        for (int i = _refusing.Count - 1; i >= 0; i--)
+        {
+            var (peer, told, deadline) = _refusing[i];
+            peer.Poll();
+            var state = peer.GetReadyState();
+            if (state == WebSocketPeer.State.Closed || Time.GetTicksMsec() > deadline)
+            {
+                if (state != WebSocketPeer.State.Closed) peer.Close();
+                _refusing.RemoveAt(i);
+                continue;
+            }
+            if (state != WebSocketPeer.State.Open || told) continue;
+
+            peer.SendText(new JsonObject
+            {
+                ["t"] = "status",
+                ["level"] = "error",
+                ["code"] = "already_connected",
+                ["message"] = "another sidecar is already connected",
+            }.ToJsonString());
+            peer.Close(1000, "another sidecar is already connected");
+            _refusing[i] = (peer, true, deadline);
+        }
+    }
+
+    /// <summary>Forget the current client and everything derived from it. The
+    /// delta baselines belong to one session: kept across a reconnect they
+    /// would suppress the first change of the next one.</summary>
+    private void DropClient()
+    {
+        _client = null;
+        _greeted = false;
+        _lastSent.Clear();
+        _lastForced.Clear();
     }
 
     private void PumpClient()
@@ -108,10 +189,7 @@ public partial class TagBusServer : Node
                 break;
             case WebSocketPeer.State.Closed:
                 GD.Print("tag bus: sidecar disconnected");
-                _client = null;
-                _greeted = false;
-                _lastSent.Clear();
-                _lastForced.Clear();
+                DropClient();
                 return;
             default:
                 return; // still connecting or closing
@@ -270,12 +348,14 @@ public partial class TagBusServer : Node
             case "write":
                 // A write in flight across a scene change would otherwise land
                 // on whatever tag inherited that id.
-                if (msg["epoch"]?.GetValue<int>() != Epoch) return;
+                if (!TryEpoch(msg, out var writeEpoch)) return;
+                if (writeEpoch != Epoch) return;
                 ApplyWrites(msg["values"]?.AsObject());
                 break;
 
             case "force":
-                if (msg["epoch"]?.GetValue<int>() != Epoch) return;
+                if (!TryEpoch(msg, out var forceEpoch)) return;
+                if (forceEpoch != Epoch) return;
                 List<string>? badForces = null;
                 if (msg["values"]?.AsObject() is { } forces)
                     foreach (var (id, node) in forces)
@@ -334,6 +414,28 @@ public partial class TagBusServer : Node
             Status("warn", "unknown_tags", $"ignored unknown tags: {string.Join(", ", unknown)}");
         if (rejected is not null)
             Status("warn", "bad_value", $"rejected bad values: {string.Join("; ", rejected)}");
+    }
+
+    /// <summary>The frame's <c>epoch</c>, which must be an integer.
+    ///
+    /// Says so on the bus when it is not, rather than letting the frame decide
+    /// its own fate by accident. <c>GetValue&lt;int&gt;()</c> threw on anything
+    /// that was not one, so a string epoch escaped into PumpClient's catch-all
+    /// and came back as a bad_message with a .NET type name in it — while the
+    /// Python engine dropped the same frame in silence and, for a fractional
+    /// epoch like <c>3.0</c>, *applied* it, because Python compares 3.0 == 3.
+    /// One frame, three different outcomes across two engines (HP-19).
+    /// A missing or malformed epoch is now bad_message on both; an epoch that
+    /// is an integer but not the current one is still dropped silently, which
+    /// is what docs/tag-bus.md has always said a stale write gets.</summary>
+    private bool TryEpoch(JsonObject msg, out int epoch)
+    {
+        epoch = 0;
+        if (msg["epoch"] is JsonValue value && value.TryGetValue<int>(out epoch))
+            return true;
+        Status("warn", "bad_message",
+            $"{msg["t"]}: epoch must be an integer, got {msg["epoch"]?.ToJsonString() ?? "nothing"}");
+        return false;
     }
 
     private static object ToClr(JsonNode node)

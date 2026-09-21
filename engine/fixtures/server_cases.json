@@ -3,6 +3,8 @@
 
   "_roles": "<type>_<kind>, e.g. bit_output, int_input, float_output. The first tag of each combination in the describe wins.",
 
+  "_scenarios": "Most cases describe themselves entirely in prepare/write/force/raw/expect_* and are one connection and a burst of frames. The lifecycle half is choreography between two connections -- who gets refused, what a reconnect is told, which epoch a frame is stamped with -- so those cases name a 'scenario' instead, and tools/check_protocol.py's _SCENARIOS holds the runner for each. The first round of this file deliberately left that half out: HP-31 and HP-33 were about to reshape those same orderings, and pinning them before reshaping them would have pinned the bug. Both have landed.",
+
   "cases": [
     {
       "name": "a bad bit does not take the rest of its batch with it",
@@ -159,6 +161,83 @@
       "needs": [],
       "raw": "this is not json",
       "expect_status": ["bad_message"]
+    },
+
+    {
+      "name": "an epoch that is a string is refused, not guessed at",
+      "why": "HP-19. The epoch stamp is the engine's only defence against a frame in flight across a scene change, so a frame that does not carry a usable one cannot be acted on -- the engine cannot tell current from stale. C# threw out of GetValue<int>() into its catch-all and answered bad_message with a .NET type name in it; Python dropped the same frame in silence. Same frame, two answers.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "raw": "{\"t\":\"write\",\"epoch\":\"@epoch\",\"values\":{\"@bit_output\":true}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@bit_output": false }
+    },
+    {
+      "name": "an epoch with a fractional part is refused by both, not applied by one",
+      "why": "HP-19, and the worse half of it. Python compares 3.0 == 3 as true, so a write stamped with a fractional epoch was APPLIED by one engine and refused by the other. Nothing in the protocol makes 3.0 an epoch.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "raw": "{\"t\":\"write\",\"epoch\":@epoch.0,\"values\":{\"@bit_output\":true}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@bit_output": false }
+    },
+    {
+      "name": "a write carrying no epoch at all is refused",
+      "why": "HP-19. Both engines used to drop this without a word, which is the one outcome that teaches a driver author nothing: `docs/tag-bus.md` says the sidecar must stamp every write, and a write that did not is a bug in the sidecar rather than a stale frame.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "raw": "{\"t\":\"write\",\"values\":{\"@bit_output\":true}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@bit_output": false }
+    },
+    {
+      "name": "a force with an unusable epoch is refused the same way a write is",
+      "why": "HP-19. Forcing is the deliberate exception to the direction rule, not to the epoch rule: a force in flight across a scene change pins whichever tag inherited the id.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "raw": "{\"t\":\"force\",\"epoch\":\"@epoch\",\"values\":{\"@bit_output\":true}}",
+      "expect_status": ["bad_message"],
+      "expect_values": { "@bit_output": false },
+      "expect_forced": []
+    },
+
+    {
+      "name": "the greeting is hello then describe, each carrying exactly its fields",
+      "why": "HP-19, lifecycle. This is what would have caught FF-10 -- `hello` silently missing `tick_ms` while the sidecar filled in a default -- and until now it only ran from the CLI, against whichever engine the CLI was pointed at. As a case it runs against both.",
+      "scenario": "greeting",
+      "needs": []
+    },
+    {
+      "name": "a second sidecar is told why it is being refused",
+      "why": "HP-19, lifecycle. Only one sidecar may connect -- two drivers writing the same output tag is a bug, not a feature -- but 'refused' has to mean the same thing on both engines. The C# server tore the TCP connection down before the websocket handshake finished, so the second sidecar saw 'did not receive a valid HTTP response' and could not tell 'another driver has it' from 'the engine is not running'. engine_stub has always completed the handshake and answered with a status. The refused client must also never be handed the tag set or an epoch, and the sidecar that was there first must keep its session.",
+      "scenario": "second_client",
+      "needs": []
+    },
+    {
+      "name": "a sidecar that vanished without closing does not lock the next one out",
+      "why": "HP-19, lifecycle. A crash is not an orderly close, and the engine's idea of who is connected is only as fresh as its last poll. The C# server checked that idea BEFORE refreshing it, so the first reconnect after a crash was refused as a second sidecar -- 15 of 15 attempts, every one recovering only on the following frame. engine_stub answered the same reconnect immediately.",
+      "scenario": "abrupt_reconnect",
+      "needs": []
+    },
+    {
+      "name": "reconnecting re-describes: same tags, a fresh epoch, the values kept",
+      "why": "HP-19, lifecycle. A sidecar coming back is handed the truth and not a blank table: whatever the last controller wrote is still what the machine is doing, and the epoch it is given must be one no earlier frame can pass for.",
+      "scenario": "reconnect",
+      "needs": ["bit_output"]
+    },
+    {
+      "name": "a write stamped with the epoch from before the last describe is dropped",
+      "why": "HP-19, epoch semantics, over the wire rather than simulated: a reconnect IS a re-describe. Without the stamp, a write in flight across a scene change lands on whatever tag inherited that id. The case then sends the same write with the epoch it was actually given, so it cannot pass against an engine that has simply stopped accepting writes.",
+      "scenario": "stale_epoch",
+      "frame": "write",
+      "needs": ["bit_output"]
+    },
+    {
+      "name": "a force stamped with a stale epoch is dropped too",
+      "why": "HP-19. A stale force is worse than a stale write: it pins the tag that inherited the id, and nothing clears it because nobody knows it is there.",
+      "scenario": "stale_epoch",
+      "frame": "force",
+      "needs": ["bit_output"]
     }
   ]
 }

@@ -21,6 +21,26 @@ Only one sidecar may be connected at a time. A second connection is rejected wit
 `status.error`. This is deliberate — two drivers writing the same output tag is a bug, not a
 feature.
 
+### Connection lifecycle
+
+One shape, and both engines answer it identically — `engine/fixtures/server_cases.json`
+drives every line of this over the wire against each of them.
+
+- Every connection is greeted with `hello` and then `describe`, in that order, before
+  anything else. A reconnect is greeted exactly like a first connection.
+- The engine is the authority, so a reconnecting sidecar is handed the current state, not a
+  blank table: whatever the last controller wrote is still what the machine is doing.
+- Every `describe` advances the `epoch`, including the one a reconnect gets, so no frame
+  composed against an earlier connection can pass for a current one.
+- A **second** sidecar is refused *after* its handshake completes, with
+  `{"t":"status","level":"error","code":"already_connected"}`, and the connection is then
+  closed. It is never sent `hello`, the tag set, or an epoch. Refusing it at the socket
+  instead would leave it unable to tell "another driver has this engine" from "there is no
+  engine here", and the two answers call for opposite responses.
+- A sidecar that vanishes **without** closing — a crash, a killed process — does not hold
+  the seat. The engine's idea of who is connected has to be refreshed before it is used to
+  turn anybody away, or the first reconnect after a crash is refused as a second sidecar.
+
 ## Transport
 
 JSON text frames over a WebSocket on `ws://127.0.0.1:7411/tagbus`.
@@ -126,6 +146,17 @@ the tag set.
 
 Without this, a `write` in flight during a scene change lands on whatever tag inherited that
 id in the new scene. Drivers should rebuild their address maps whenever `epoch` changes.
+
+The stamp is an **integer**, and the two failures are not the same failure:
+
+- An epoch that is an integer but not the current one is **stale**. The frame is dropped in
+  silence — a driver's map briefly lagging a scene edit is normal, and the driver re-reads
+  and republishes on its next `rebuild`.
+- An epoch that is missing, or is not an integer at all (a string, `3.0`, `true`), is
+  **malformed**. The engine cannot tell current from stale, so it refuses the frame and says
+  so with `bad_message`. That is a bug in the sidecar rather than a race, and silence there
+  teaches nobody anything. `3.0` is worth naming: Python compares `3.0 == 3` as true, so one
+  engine applied it while the other refused it — the same frame with two answers.
 
 ### `write` — sidecar → engine
 

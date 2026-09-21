@@ -124,7 +124,11 @@ class EngineStub:
     async def _on_message(self, msg: dict) -> None:
         kind = msg.get("t")
         if kind == "write":
-            if msg.get("epoch") != self.epoch:
+            # A frame with no usable epoch draws bad_message (the ProtocolError
+            # goes back to the caller's handler); one carrying an epoch that is
+            # simply not current is dropped in silence, which is what a stale
+            # write has always got. See proto.parse_epoch and HP-19.
+            if proto.parse_epoch(msg) != self.epoch:
                 # A write in flight across a scene change would otherwise land on
                 # whatever tag inherited that id.
                 log.debug("dropping stale write (epoch %s, now %s)",
@@ -132,7 +136,7 @@ class EngineStub:
                 return
             await self._apply_writes(proto.parse_values(msg))
         elif kind == "force":
-            if msg.get("epoch") != self.epoch:
+            if proto.parse_epoch(msg) != self.epoch:
                 return
             # Per value, exactly as `write` is: `force` runs the same coercion
             # and had the same escape route out of the connection handler.
