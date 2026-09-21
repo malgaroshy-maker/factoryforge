@@ -135,16 +135,29 @@ class EngineProcess:
         cmd = [GODOT or "godot", "--headless", "--path", str(ENGINE), "--"] + self.args
         self._handle = open(self.log, "w", encoding="utf-8", errors="replace")
         self.proc = subprocess.Popen(cmd, stdout=self._handle, stderr=subprocess.STDOUT)
-        # Wait for the port rather than sleeping a guessed amount: on a cold
-        # start the .NET runtime can take several seconds to come up.
-        for _ in range(120):
-            with socket.socket() as probe:
-                probe.settimeout(0.25)
-                if probe.connect_ex(("127.0.0.1", 7411)) == 0:
-                    time.sleep(0.5)      # let the describe go out
-                    return self
-            time.sleep(0.25)
-        raise RuntimeError("engine never opened port 7411")
+
+        # __exit__ does not run when __enter__ raises, so everything below has to
+        # clean up after itself (HP-30). Without this, an engine that came up but
+        # never bound the port was left running -- and it is still holding 7411,
+        # so the *next* check waits 20 seconds for a free port and fails too. One
+        # orphan poisons the rest of the run and the reported failure is never
+        # the real one.
+        try:
+            # Wait for the port rather than sleeping a guessed amount: on a cold
+            # start the .NET runtime can take several seconds to come up.
+            for _ in range(120):
+                with socket.socket() as probe:
+                    probe.settimeout(0.25)
+                    if probe.connect_ex(("127.0.0.1", 7411)) == 0:
+                        time.sleep(0.5)      # let the describe go out
+                        return self
+                time.sleep(0.25)
+            raise RuntimeError("engine never opened port 7411")
+        except BaseException:
+            # BaseException, not Exception: Ctrl-C during that minute of waiting
+            # is the most likely way to get here and leaks the same process.
+            self.__exit__(None, None, None)
+            raise
 
     def output(self) -> str:
         return self.log.read_text(encoding="utf-8", errors="replace") if self.log.exists() else ""
@@ -486,12 +499,24 @@ def section_f() -> None:
 def section_g() -> None:
     print("\nG. Robustness")
 
+    # G1 used to write this file and then launch the engine with no `--scene=`
+    # pointing at it, so the corrupt file was never opened and the check asserted
+    # nothing but that an ordinary startup starts (HP-08). It passed, and it
+    # would have passed just as well with the loader destroying the open scene
+    # before parsing -- which is exactly what it was doing.
+    #
+    # Three claims now, because "does not stop startup" was never the whole of
+    # it: the engine comes up, it says which file it refused and why, and it does
+    # *not* claim to have loaded it.
     bad = USER_DIR / "testplan_corrupt.json"
     bad.parent.mkdir(parents=True, exist_ok=True)
     bad.write_text("{ this is not json at all ]", encoding="utf-8")
-    code, out = engine(["--duration=6"], timeout=90)
-    record("G1", "a corrupt scene file on disk does not stop startup",
-           code == 0 and "engine ready" in out, f"exit={code}")
+    code, out = engine(["--scene=user://testplan_corrupt.json", "--duration=6"], timeout=90)
+    refused = "Could not open scene" in out and "testplan_corrupt.json" in out
+    record("G1", "a corrupt scene file is refused by name, and startup survives it",
+           code == 0 and "engine ready" in out and refused
+           and "Loaded scene from user://testplan_corrupt.json" not in out,
+           f"exit={code}; refused={refused}")
 
     code, out = engine(["--duration=6", "--nonsense-flag=1"], timeout=90)
     record("G2", "an unknown CLI flag is ignored rather than fatal",

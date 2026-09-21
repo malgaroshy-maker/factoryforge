@@ -81,7 +81,10 @@ public partial class LinePartsSelfTest : Node
             case 340: CheckStopGateReleased(); StartTurnTableProbe(); return;
             case 360: RecordDeckStart(); return;
             case 520: CheckTurnTable(); return;
-            case 522: break;
+            case 522: SweepARemoverPreviewOverACarton(); return;
+            case 560: CheckTheCartonSurvivedThePreview(); return;
+            case 580: CheckThePlacedRemoverStillRemoves(); return;
+            case 582: break;
             default: return;
         }
 
@@ -160,6 +163,80 @@ public partial class LinePartsSelfTest : Node
             file?.StoreString(data.ToJson());
         }
         Editor.LoadSceneFromFile(path);
+    }
+
+    // ---------- HP-41: a preview is a picture, not a machine
+
+    private BoxPhysics? _previewVictim;
+
+    /// <summary>
+    /// Arm a Remover and hold its ghost over a carton, which is what somebody
+    /// does for several seconds while deciding where to put it.
+    ///
+    /// The preview is an ordinary part -- that is what makes it an honest
+    /// preview -- and it was added to the scene as one, so a Remover ghost
+    /// deleted every carton it passed over. Remover connects BodyEntered in
+    /// _Ready and calls QueueFree on whatever arrives, and cancelling the
+    /// placement cannot bring them back: the cartons are simply gone, from a
+    /// gesture that placed nothing.
+    ///
+    /// Run on real physics ticks, not the hand-turned dispatch. The deletion
+    /// happens through an Area3D signal from the physics server, so a
+    /// hand-turned test could not see the failure at all -- and a test that
+    /// cannot see the failure mode is not coverage.
+    /// </summary>
+    private void SweepARemoverPreviewOverACarton()
+    {
+        Editor.SetMode(EditorMode.Edit);
+
+        _previewVictim = new BoxPhysics { IsTall = false };
+        Editor.GetParent().AddChild(_previewVictim);
+        // Well clear of every other probe in this scene, on the work plane so it
+        // sits in the middle of a remover's 0.4 m zone -- and frozen, so it
+        // stays there.
+        //
+        // Freezing is not a convenience. The first version let it fall, and it
+        // dropped clean through the zone in the twenty ticks between arming the
+        // ghost and looking: "the carton survived" would then have been true
+        // because nothing ever touched it, which is a test that passes while the
+        // simulation does nothing. The position assertion below keeps that
+        // honest.
+        _previewVictim.GlobalPosition = new Vector3(0.0f, PartLayout.WorkPlaneY, 12.0f);
+        _previewVictim.Freeze = true;
+
+        Editor.SetPlacementPart("Remover");
+        Expect(Editor.HasPlacementPreview, "the remover tool is armed");
+        Editor.MovePreviewTo(new Vector3(0.0f, PartLayout.WorkPlaneY, 12.0f));
+    }
+
+    private void CheckTheCartonSurvivedThePreview()
+    {
+        var box = _previewVictim!;
+        bool alive = GodotObject.IsInstanceValid(box) && !box.IsQueuedForDeletion();
+        Expect(alive,
+               "a carton under a remover *preview* is still there — the ghost is a "
+               + "picture of a machine, not a machine");
+
+        // And it is still *in* the zone, so "it survived" cannot be satisfied by
+        // a carton that fell out of reach before anything could touch it.
+        Expect(alive && Mathf.Abs(box.GlobalPosition.Y - PartLayout.WorkPlaneY) < 0.1f
+                     && Mathf.Abs(box.GlobalPosition.Z - 12.0f) < 0.1f,
+               $"and it stayed inside the ghost's zone while it was there "
+               + $"(at {(alive ? box.GlobalPosition.ToString() : "gone")})");
+
+        // Now put it down for real. Without this the fix could be "previews do
+        // nothing" rather than "previews do not run", and nothing here would
+        // notice the difference.
+        Editor.PlacePreviewAt(new Vector3(0.0f, PartLayout.WorkPlaneY, 12.0f));
+        Editor.CancelPlacement();
+    }
+
+    private void CheckThePlacedRemoverStillRemoves()
+    {
+        var box = _previewVictim!;
+        Expect(!GodotObject.IsInstanceValid(box) || box.IsQueuedForDeletion(),
+               "and the same remover, once actually placed, does take the carton — "
+               + "the preview was inert, not the part");
     }
 
     // ---------- LP-01 blade stop

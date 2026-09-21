@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using FactoryForge.Editor;
+using FactoryForge.Parts;
 using FactoryForge.TagBus;
 using Godot;
 
@@ -61,6 +62,11 @@ public partial class SceneSelfTest : Node
             CheckDispatchSurvives();
             CheckClearUndo();
             CheckRotateAndDuplicate();
+            CheckACopiedRemoverCountsItsOwn();
+            CheckASaveThatCannotLandSaysSo();
+            CheckAFailedSaveLeavesTheLastGoodFile();
+            CheckABadFileLeavesTheOpenSceneAlone();
+            CheckRenameDoesNotHandItsIdToTheNextPart();
         }
         catch (System.Exception ex)
         {
@@ -103,6 +109,13 @@ public partial class SceneSelfTest : Node
                 case "WeighingConveyor":
                     props["speed"] = "0.77";
                     props["friction"] = "0.66";
+                    // A belt driving the other way. Nothing about the geometry
+                    // shows it, which is why losing it on a reload was invisible
+                    // (HP-06).
+                    props["dir_x"] = "-1";
+                    props["dir_y"] = "0";
+                    props["dir_z"] = "0";
+                    if (AllTypes[i] == "RollerConveyor") props["roller_spacing"] = "0.19";
                     break;
                 case "PhotoelectricSensor":
                 case "RetroreflectiveSensor":
@@ -120,6 +133,10 @@ public partial class SceneSelfTest : Node
                 case "Chute":
                     props["incline"] = "37";
                     props["friction"] = "0.11";
+                    props["ramp_width"] = "0.71";
+                    props["ramp_thickness"] = "0.043";
+                    props["lip_setback"] = "0.31";
+                    props["lip_drop"] = "0.027";
                     break;
                 case "LevelTank":
                     props["fill_rate"] = "22";
@@ -131,6 +148,7 @@ public partial class SceneSelfTest : Node
                     break;
                 case "Emitter":
                     props["metal_every"] = "4";
+                    props["drop_clearance"] = "0.031";
                     break;
                 case "Remover":
                     props["count_tag"] = "counter.tall";
@@ -268,6 +286,10 @@ public partial class SceneSelfTest : Node
                 case "WeighingConveyor":
                     ExpectNear(props, "speed", 0.77f, part.Type);
                     ExpectNear(props, "friction", 0.66f, part.Type);
+                    ExpectNear(props, "dir_x", -1.0f, part.Type);
+                    ExpectNear(props, "dir_z", 0.0f, part.Type);
+                    if (part.Type == "RollerConveyor")
+                        ExpectNear(props, "roller_spacing", 0.19f, part.Type);
                     break;
                 case "PhotoelectricSensor":
                 case "RetroreflectiveSensor":
@@ -287,6 +309,10 @@ public partial class SceneSelfTest : Node
                 case "Chute":
                     ExpectNear(props, "incline", 37.0f, part.Type);
                     ExpectNear(props, "friction", 0.11f, part.Type);
+                    ExpectNear(props, "ramp_width", 0.71f, part.Type);
+                    ExpectNear(props, "ramp_thickness", 0.043f, part.Type);
+                    ExpectNear(props, "lip_setback", 0.31f, part.Type);
+                    ExpectNear(props, "lip_drop", 0.027f, part.Type);
                     break;
                 case "LevelTank":
                     ExpectNear(props, "fill_rate", 22.0f, part.Type);
@@ -298,6 +324,7 @@ public partial class SceneSelfTest : Node
                     break;
                 case "Emitter":
                     ExpectNear(props, "metal_every", 4.0f, part.Type);
+                    ExpectNear(props, "drop_clearance", 0.031f, part.Type);
                     break;
                 case "Remover":
                     Expect(props.GetValueOrDefault("count_tag") == "counter.tall",
@@ -445,6 +472,327 @@ public partial class SceneSelfTest : Node
         Editor.Undo();
         Expect(Editor.PlacedPartIds().ToHashSet().SetEquals(beforeDuplicate),
                "undoing a duplicate removes exactly the part it added");
+    }
+
+    /// <summary>
+    /// HP-16. A copy must not inherit a setting that names somebody else's tag.
+    ///
+    /// Copy already resets instance ids, for a reason it states: a pasted part
+    /// that adopted the tags of the one it came from would give two parts one
+    /// belt. Remover.CountTag is the same problem one level down and was not
+    /// reset, so duplicating a remover that counts into `counter.tall` gave two
+    /// removers writing one counter — the display went up twice per carton and
+    /// neither part looked wrong.
+    ///
+    /// The fix drops the key rather than rewriting it, which is why one rule
+    /// covers both cases: an empty CountTag already means "my own {id}.count"
+    /// everywhere it is read.
+    /// </summary>
+    private void CheckACopiedRemoverCountsItsOwn()
+    {
+        const string probeId = "probe_remover";
+
+        var original = Editor!.NodeFor(probeId) as Remover;
+        Expect(original is not null, "the remover probe is in the scene");
+        if (original is null) return;
+        Expect(original.CountTag == "counter.tall",
+               $"and counts into somebody else's tag to begin with (got '{original.CountTag}')");
+
+        // Ctrl+D
+        Expect(Editor.SelectPartForInspection(probeId), "the remover can be selected");
+        Editor.DuplicateSelectedPart();
+        string copyId = Editor.SelectedInstanceId ?? "";
+        Expect(copyId.Length > 0 && copyId != probeId, $"the duplicate is a new part ('{copyId}')");
+
+        var copy = Editor.NodeFor(copyId) as Remover;
+        Expect(copy is not null, "the duplicate is a Remover");
+        Expect(copy is not null && copy.CountTag != "counter.tall",
+               $"and does not carry the original's count tag (got '{copy?.CountTag}')");
+        Expect(copy is not null && copy.CountTag.Length == 0,
+               "it counts into its own tag, which is what an empty CountTag means");
+        Expect(PartTagManager.HasTagsFor(copyId, Tags), "and it registered a count tag of its own");
+        Expect(Tags.Contains($"{copyId}.count"),
+               $"specifically {copyId}.count, the one an empty CountTag resolves to");
+
+        // The original is untouched: this is about the copy, not about breaking
+        // the part it came from.
+        Expect(original.CountTag == "counter.tall",
+               $"the original still counts where it did (got '{original.CountTag}')");
+
+        Editor.Undo();
+
+        // Ctrl+C / Ctrl+V, which is the other route and a different command.
+        Expect(Editor.SelectPartForInspection(probeId), "the remover can be selected again");
+        Editor.CopySelection();
+        Editor.PasteClipboard();
+        var pastedIds = Editor.SelectedInstanceIds();
+        Expect(pastedIds.Count == 1, $"the paste put one part down (got {pastedIds.Count})");
+
+        if (pastedIds.Count == 1 && Editor.NodeFor(pastedIds[0]) is Remover pasted)
+        {
+            Expect(pasted.CountTag != "counter.tall",
+                   $"a pasted remover does not carry the count tag either (got '{pasted.CountTag}')");
+            Expect(Tags.Contains($"{pastedIds[0]}.count"),
+                   $"and counts into {pastedIds[0]}.count");
+        }
+        else
+        {
+            Expect(false, "the pasted part is a Remover");
+        }
+
+        Editor.Undo();
+    }
+
+    /// <summary>
+    /// HP-01. A save that cannot land has to say so, and has to leave the title
+    /// bar saying there are unsaved changes.
+    ///
+    /// The old code was <c>file?.StoreString(json)</c> followed unconditionally
+    /// by <c>IsDirty = false</c> and "Saved scene to …", so a path that could
+    /// not be opened at all reported success and cleared the one indicator a
+    /// person has that their work is still only in memory.
+    ///
+    /// The unwritable path here is a file *inside* a file: `user://` exists, the
+    /// scene file in it exists, and nothing can be created underneath it on any
+    /// filesystem. No permissions to set up, no platform-specific read-only
+    /// directory, and it fails at the open rather than part-way through.
+    /// </summary>
+    private void CheckASaveThatCannotLandSaysSo()
+    {
+        Editor!.MarkDirty();
+        Expect(Editor.IsDirty, "the scene starts this check with unsaved changes");
+
+        string impossible = $"{ScenePath}/not_a_directory/scene.json";
+        bool reported = Editor.SaveSceneToFile(impossible);
+
+        Expect(!reported, "a save to a path that cannot be opened reports failure");
+        Expect(Editor.IsDirty,
+               "and leaves the scene marked unsaved, so the title bar still says so");
+        Expect(!Godot.FileAccess.FileExists(impossible),
+               "and wrote nothing");
+
+        // The ordinary path still works, or the check above would pass for a
+        // save that had simply stopped working.
+        Expect(Editor.SaveSceneToFile("user://selftest_scene_ok.json"),
+               "a save to a writable path still reports success");
+        Expect(!Editor.IsDirty, "and clears the unsaved marker");
+    }
+
+    /// <summary>
+    /// HP-47. A save that does not complete must leave the file that was
+    /// already there.
+    ///
+    /// Opening a file for writing truncates it, so the old code destroyed the
+    /// last good scene before writing a byte of the new one. Any interruption
+    /// after that point — a crash, a full disk, a drive pulled out — left a
+    /// truncated file where a working scene used to be, and for most people
+    /// that file is the only copy.
+    ///
+    /// The interruption is arranged by putting a *directory* where the
+    /// half-written file wants to go. It is a stand-in for "the write did not
+    /// complete", and what it proves is the ordering: the destination is not
+    /// opened for writing at all until a finished file exists beside it.
+    /// </summary>
+    private void CheckAFailedSaveLeavesTheLastGoodFile()
+    {
+        const string target = "user://selftest_scene_atomic.json";
+        const string partial = target + ".part";
+
+        Expect(Editor!.SaveSceneToFile(target), "the first save lands");
+        Expect(!Godot.FileAccess.FileExists(partial),
+               "and leaves no half-written file beside the real one");
+
+        string good = ReadAll(target);
+        Expect(good.Length > 0, "the saved scene has content to compare against");
+
+        // Make the scene genuinely different, so "the old file survived" cannot
+        // be satisfied by a save that wrote the same bytes back.
+        int wasCount = Editor.PlacedPartIds().Count;
+        Editor.SelectPartByIndex(0);
+        Editor.DeleteSelectedPart();
+        Expect(Editor.PlacedPartIds().Count == wasCount - 1,
+               "the scene changed between the two saves");
+
+        // Block the half-written file's path with a directory nothing can open
+        // as a file.
+        Expect(Godot.DirAccess.MakeDirAbsolute(partial) == Error.Ok,
+               "the interruption can be arranged");
+
+        bool landed = Editor.SaveSceneToFile(target);
+        Expect(!landed, "a save that cannot complete reports failure");
+        Expect(Editor.IsDirty, "and leaves the scene marked unsaved");
+
+        string after = ReadAll(target);
+        Expect(after == good,
+               $"and the scene file that was already there is untouched "
+               + $"({after.Length} characters, was {good.Length})");
+        Expect(SceneData.FromJson(after) is not null,
+               "so the last good scene is still loadable");
+
+        // Clear the blockage and save again: replacing a file that already
+        // exists is the ordinary case, and a rename-into-place that only worked
+        // onto an empty slot would break every save after the first.
+        Godot.DirAccess.RemoveAbsolute(partial);
+
+        Expect(Editor.SaveSceneToFile(target), "and a save over the existing file still lands");
+        string replaced = ReadAll(target);
+        Expect(replaced != good, "replacing it actually changed the file");
+        Expect(SceneData.FromJson(replaced)?.Parts.Count == wasCount - 1,
+               "with the scene as it now stands");
+        Expect(!Godot.FileAccess.FileExists(partial), "and no half-written file left over");
+    }
+
+    /// <summary>
+    /// HP-02, HP-07 and HP-15's file half: one validation boundary, and every
+    /// way a scene file can be unusable has to be refused on the far side of it.
+    ///
+    /// The loader used to call ClearAllPlacedParts() *first* and parse
+    /// afterwards, so opening a corrupt file destroyed the scene you had before
+    /// it discovered it could not read the new one. Three shapes reached it and
+    /// "parse first" only covers the first: Deserialize throwing on malformed
+    /// JSON, returning null for a file containing `null`, and a part whose
+    /// position array is too short to build a Vector3 — which threw later still,
+    /// part-way through rebuilding, with some parts already placed and the rest
+    /// gone.
+    ///
+    /// Each case is asserted the same way, because the claim is the same one:
+    /// the scene that was open is still open, part for part.
+    /// </summary>
+    private void CheckABadFileLeavesTheOpenSceneAlone()
+    {
+        Editor!.LoadSceneFromFile(ScenePath);
+        var intact = Editor.PlacedPartIds().ToHashSet();
+        string sceneName = Editor.SceneName;
+        Expect(intact.Count > 1, "there is a real scene open to be destroyed");
+
+        RefuseAndKeepTheScene("malformed JSON", "{ \"name\": \"broken\", \"parts\": [",
+                              intact, sceneName);
+        RefuseAndKeepTheScene("a file that is only null", "null", intact, sceneName);
+        RefuseAndKeepTheScene("an empty file", "", intact, sceneName);
+
+        // HP-02's third shape: well-formed JSON, structurally unusable. This one
+        // did not throw at the parse at all -- it threw inside the rebuild, at
+        // new Vector3(p.Position[0], p.Position[1], p.Position[2]).
+        RefuseAndKeepTheScene("a part with a two-element position",
+            """
+            { "name": "short", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        RefuseAndKeepTheScene("a part with no type",
+            """
+            { "name": "typeless", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // HP-07: a format this build does not understand. Unknown *keys* are
+        // ignored on purpose, which is right for a forward-compatible field and
+        // wrong for a whole future format -- a version 2 scene would have loaded
+        // quietly and lost whatever it did not recognise.
+        RefuseAndKeepTheScene("a scene file from a newer format",
+            """
+            { "name": "from-the-future", "version": "9.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // HP-15's file half: an instance id is a tag prefix, so two parts under
+        // one id means two machines answering one PLC output. Adopting them is
+        // worse than refusing the file, because the second part registers no
+        // tags of its own and the pair silently drive each other's.
+        RefuseAndKeepTheScene("two parts sharing one instance id",
+            """
+            { "name": "colliding", "version": "1.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] },
+              { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [3.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // And the boundary still lets a good file through, or every assertion
+        // above would be satisfied by a loader that had simply stopped working.
+        Expect(Editor.LoadSceneFromFile(ScenePath), "a valid scene file still opens");
+        Expect(Editor.PlacedPartIds().ToHashSet().SetEquals(intact),
+               "with all of its parts");
+    }
+
+    private void RefuseAndKeepTheScene(string what, string json,
+                                       HashSet<string> intact, string sceneName)
+    {
+        const string bad = "user://selftest_scene_bad.json";
+        using (var file = Godot.FileAccess.Open(bad, Godot.FileAccess.ModeFlags.Write))
+        {
+            Expect(file is not null, $"the {what} case can be written");
+            file?.StoreString(json);
+        }
+
+        bool opened = Editor!.LoadSceneFromFile(bad);
+        Expect(!opened, $"{what} is refused");
+
+        var now = Editor.PlacedPartIds().ToHashSet();
+        Expect(now.SetEquals(intact),
+               $"and the open scene survives {what} ({now.Count} parts, was {intact.Count})");
+        Expect(Editor.SceneName == sceneName,
+               $"and keeps its name through {what} (got '{Editor.SceneName}')");
+    }
+
+    /// <summary>
+    /// HP-15's editor half. Renaming did not advance the type's counter, so
+    /// renaming conveyorbelt_1 to conveyorbelt_2 and then placing a new conveyor
+    /// minted conveyorbelt_2 — which found tags already under that prefix and
+    /// *adopted* them rather than registering its own. Two parts, one tag set,
+    /// no sign anywhere.
+    ///
+    /// Note this is not the part key HP-37 added. That key is the undo history's
+    /// idea of identity and is private to the editor; an instance id is a tag
+    /// prefix, shared with every driver and every PLC program written against
+    /// the scene. A unique command key says nothing about tag uniqueness.
+    /// </summary>
+    private void CheckRenameDoesNotHandItsIdToTheNextPart()
+    {
+        Editor!.ClearAllPlacedParts();
+        PartTagManager.ResetCounters();
+
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(new Vector3(0, 0, 0));
+        Editor.CancelPlacement();
+
+        string first = Editor.PlacedPartIds()[0];
+        Editor.SelectPartByIndex(0);
+
+        // Rename it to the name the *next* placement would otherwise mint.
+        string wanted = $"conveyorbelt_{int.Parse(first.Split('_')[^1]) + 1}";
+        Expect(Editor.TryRenamePart(first, wanted, out string problem),
+               $"the part can be renamed to '{wanted}' ({problem})");
+
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(new Vector3(3.0f, 0, 0));
+        Editor.CancelPlacement();
+
+        var ids = Editor.PlacedPartIds();
+        Expect(ids.Count == 2, $"there are two conveyors (got {ids.Count})");
+        Expect(ids.ToHashSet().Count == ids.Count,
+               $"and they have different instance ids (got [{string.Join(",", ids)}])");
+
+        // The real damage, stated directly: each one has to own its own tags.
+        // The adopting part registered none, so deleting the renamed one took
+        // the survivor's `rotate` with it.
+        foreach (string id in ids)
+            Expect(PartTagManager.HasTagsFor(id, Tags), $"{id} has tags of its own");
+
+        Editor.SelectPartByIndex(0);
+        Editor.DeleteSelectedPart();
+        string survivor = Editor.PlacedPartIds()[0];
+        Expect(PartTagManager.HasTagsFor(survivor, Tags),
+               $"and deleting one leaves the other's tags alone ({survivor})");
+    }
+
+    private static string ReadAll(string path)
+    {
+        using var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Read);
+        return file?.GetAsText() ?? "";
     }
 
     private void ExpectNear(IDictionary<string, string> props, string key, float want, string type)

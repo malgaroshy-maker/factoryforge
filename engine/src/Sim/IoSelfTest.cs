@@ -55,6 +55,7 @@ public partial class IoSelfTest : Node
         try
         {
             CheckRename();
+            CheckRenameKeepsForces();
             CheckExport();
         }
         catch (System.Exception ex)
@@ -129,6 +130,47 @@ public partial class IoSelfTest : Node
         Expect(Tags.Contains("operator_station.start") && Tags.Contains("operator_station.estop"),
                "a refused RenameInstance moved nothing at all");
         Tags.Remove("spare.start");
+
+        Expect(Editor.TryRenamePart("operator_station", "panel", out _), "rename back");
+    }
+
+    /// <summary>
+    /// HP-17. A force has to move with the tag it is pinned to.
+    ///
+    /// Renaming removes and rebuilds every tag under the prefix, and
+    /// TagTable.Remove drops the force with it — which is right for a part being
+    /// deleted and wrong here. So a rename quietly released every force on the
+    /// part. The unsafe direction is the point: force a motor off while the PLC
+    /// is commanding it on, rename the part, and the rename *starts the motor*.
+    /// The safest control in the inspector, undone by an action that sounds like
+    /// paperwork, with nothing to say it happened.
+    /// </summary>
+    private void CheckRenameKeepsForces()
+    {
+        // panel.estop is normally closed -- true is healthy -- so forcing it
+        // false is the safe state a person pins while they work on something.
+        // The underlying value is left true, so a released force is visible as
+        // the value springing back rather than as nothing at all.
+        Tags.Set("panel.estop", true);
+        Tags.Force("panel.estop", false);
+        Expect(Tags.IsForced("panel.estop"), "the E-stop is forced before the rename");
+        Expect((bool)Tags.Visible("panel.estop") == false, "and reads as struck");
+
+        Expect(Editor!.TryRenamePart("panel", "operator_station", out string problem),
+               $"the forced part can be renamed ({problem})");
+
+        Expect(Tags.IsForced("operator_station.estop"),
+               "the force moved to the new tag id rather than being released");
+        Expect(Tags.Contains("operator_station.estop")
+               && (bool)Tags.Visible("operator_station.estop") == false,
+               "and still reads as struck, not as healthy again");
+
+        // Releasing it still works afterwards, or "forced" could be a flag
+        // nothing can clear.
+        Tags.ClearForce("operator_station.estop");
+        Expect(!Tags.IsForced("operator_station.estop"), "and can still be released");
+        Expect((bool)Tags.Visible("operator_station.estop"),
+               "revealing the underlying value the force was hiding");
 
         Expect(Editor.TryRenamePart("operator_station", "panel", out _), "rename back");
     }

@@ -37,11 +37,22 @@ public class EditorCommandHistory
         _redoStack.Clear();
     }
 
+    /// <summary>
+    /// Undo the last step.
+    ///
+    /// The entry moves stacks only after its <c>Undo</c> has returned. It used
+    /// to be popped first, so a command that threw — which every move and rotate
+    /// command could, by writing into a node a delete had already freed — lost
+    /// the history entry as well as raising the exception. The step vanished
+    /// from both stacks and the scene was left half-undone, with nothing on
+    /// screen to say so.
+    /// </summary>
     public bool Undo()
     {
         if (_undoStack.Count == 0) return false;
-        var cmd = _undoStack.Pop();
+        var cmd = _undoStack.Peek();
         cmd.Undo();
+        _undoStack.Pop();
         _redoStack.Push(cmd);
         return true;
     }
@@ -49,8 +60,9 @@ public class EditorCommandHistory
     public bool Redo()
     {
         if (_redoStack.Count == 0) return false;
-        var cmd = _redoStack.Pop();
+        var cmd = _redoStack.Peek();
         cmd.Execute();
+        _redoStack.Pop();
         _undoStack.Push(cmd);
         return true;
     }

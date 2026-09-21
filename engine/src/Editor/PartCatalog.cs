@@ -133,6 +133,11 @@ public static class PartCatalog
         return types;
     }
 
+    /// <summary>Is this a part type this build can actually build? Asked by the
+    /// scene loader, so a file naming a part that does not exist here is
+    /// reported rather than silently dropped (HP-02).</summary>
+    public static bool IsKnownType(string partType) => Find(partType) is not null;
+
     public static PartInfo? Find(string partType)
     {
         foreach (var info in All)
