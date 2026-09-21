@@ -27,11 +27,22 @@ siemens = [
 plcsim = [
     "pythonnet>=3.0; platform_system=='Windows'",
 ]
+# MQTT (M1.5). Optional because the driver is for IIoT scenarios rather than
+# for talking to a PLC, and a Siemens-only install should not carry it.
+#
+# paho rather than aiomqtt, which the roadmap named: aiomqtt drives the socket
+# through `loop.add_reader`, and Windows' default ProactorEventLoop has no such
+# method. See the driver's module docstring.
+mqtt = [
+    "paho-mqtt>=2.0",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "pymodbus>=3.6",
     "asyncua>=1.1",
+    # tests/test_mqtt.py brings its own broker, so this is the client half only.
+    "paho-mqtt>=2.0",
 ]
 
 [project.scripts]
