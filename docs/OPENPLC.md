@@ -237,9 +237,11 @@ cd OpenPLC_v3/webserver/core
 sudo ./openplc
 ```
 
-`sudo` because the runtime asks for a real-time scheduling priority and locks
-its memory; it runs without, printing two warnings and a fatter jitter
-distribution.
+`sudo` because the runtime asks for a real-time scheduling priority. It runs
+perfectly well without: checked, and all that changes is one line —
+`WARNING: Failed to set main thread to real-time priority` — and a fatter
+jitter distribution. The 0.3 s of slack in the catch window is wide enough that
+this run would not have noticed either way.
 
 Within a second or two the sidecar's status line should come alive:
 
@@ -344,7 +346,7 @@ better than OPC UA — it is a different flavour of the same sampling problem.
 | Boxes emitted, nothing ever diverted | `PusherExtend` is not mapped, or `PUSH_DELAY` is wrong for your geometry. |
 | Occasional tall box slips through | Timing margin — see above. Lower the polling period or raise `PUSH_HOLD`. |
 | Counters climb in jumps of 65536, or go negative | One half of an Int is being read as the whole thing, or the two halves are swapped. `3x0` is the **high** word of `counter.short` and `3x1` the low. |
-| The compile links but `openplc` exits immediately | Another instance is holding port 43628, or the S7 server could not bind port 102 (needs root). |
+| The compile links but `openplc` exits immediately | Another instance is holding port 43628. The runtime binds it on startup and one is already yours if a previous run did not shut down. |
 
 ---
 
