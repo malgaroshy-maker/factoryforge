@@ -29,6 +29,11 @@ except ImportError:
 _BIT = re.compile(r"^DBX(\d+)\.([0-7])$", re.I)
 _DWORD = re.compile(r"^DBD(\d+)$", re.I)
 
+#: How long to wait before trying a PLC that would not answer again.
+RECONNECT_DELAY = 5.0
+#: Seconds between DB polls. Well above Windows' 15.6ms asyncio clock floor.
+POLL_INTERVAL = 0.05
+
 
 def _parse_address(address: str) -> tuple[str, int, int] | None:
     """Parse a Siemens absolute DB address.
@@ -84,8 +89,34 @@ class S7Snap7Driver(Driver):
             self._addresses[tag_id] = parsed
         self._client: Any = None
         self._running = False
-        self._task: asyncio.Task | None = None
+        self._runner: asyncio.Task | None = None
+        self._poller: asyncio.Task | None = None
         self._table: TagTable | None = None
+        #: Set while a PLC session is up. The CLI and the tests both need a way
+        #: to ask "is this driver actually talking to anything?", which used to
+        #: have no answer at all.
+        self.connected = asyncio.Event()
+        # One snap7 Client is one socket and one ctypes handle, shared by the
+        # poller, by push() and by the connect loop. Moving the calls onto
+        # threads without this lock is not a concurrency design -- it is the
+        # same data race with a thread pool in front of it.
+        self._io_lock = asyncio.Lock()
+
+    # --- blocking calls, off the loop and one at a time ---
+
+    async def _io(self, fn, *args):
+        """Run one snap7 call off the event loop, serialized against the rest.
+
+        Every snap7 entry point is a synchronous ctypes call into a C library.
+        Calling one directly from a coroutine stops the tag bus, the write
+        flusher and every other driver for its full duration -- and for a PLC
+        that has just gone away that duration is a socket timeout, not a
+        millisecond.
+        """
+        async with self._io_lock:
+            return await asyncio.to_thread(fn, *args)
+
+    # --- lifecycle ---
 
     async def start(self) -> None:
         self._running = True
@@ -98,33 +129,101 @@ class S7Snap7Driver(Driver):
                 '(or pip install -e "sidecar[siemens]")'
             )
 
-        try:
-            self._client = snap7.client.Client()
-            self._client.connect(self.host, self.rack, self.slot)
-            log.info("Connected to S7 PLC at %s (rack %d, slot %d)", self.host, self.rack, self.slot)
-            self._task = asyncio.create_task(self._poll_loop())
-        except Exception as err:
-            log.error("Failed to connect to S7 PLC at %s: %s", self.host, err)
+        self.connected.clear()
+        # Connecting must not block start(), and a failure must not be the end
+        # of it. This used to catch the exception, log it, and return -- after
+        # which the CLI printed "driver 's7-snap7' started" over a driver that
+        # had never connected, had no poll task, and would never try again.
+        self._runner = asyncio.create_task(self._connect_loop())
+        self._poller = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
         self._running = False
-        if self._task:
-            self._task.cancel()
+        for task in (self._runner, self._poller):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._runner = self._poller = None
+        await self._drop(None)
+
+    async def _connect_loop(self) -> None:
+        """Keep a session up, retrying for as long as the driver is running."""
+        while self._running:
+            if self._client is None:
+                await self._try_connect()
+                if self._client is None:
+                    await asyncio.sleep(RECONNECT_DELAY)
+                    continue
+            await asyncio.sleep(1.0)
+
+    async def _try_connect(self) -> None:
+        client = snap7.client.Client()
+        try:
+            await self._io(client.connect, self.host, self.rack, self.slot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        if self._client and HAS_SNAP7:
-            try:
-                self._client.disconnect()
+                client.destroy()
             except Exception:
                 pass
+            await self._report(
+                "warn", "plc_disconnected",
+                f"not connected to S7 PLC at {self.host}: {err} — "
+                f"retrying every {RECONNECT_DELAY:g}s",
+            )
+            return
+
+        self._client = client
+        self.connected.set()
+        # A fresh session earns the right to complain again: the point of
+        # _warned is to stop one fault repeating 20x a second, not to silence
+        # the next one forever.
+        self._warned.clear()
+        await self._report(
+            "info", "plc_connected",
+            f"connected to S7 PLC at {self.host} (rack {self.rack}, slot {self.slot})",
+        )
+
+    async def _drop(self, why: str | None) -> None:
+        """Let go of the session so the connect loop builds a new one."""
+        client, self._client = self._client, None
+        self.connected.clear()
+        if client is None:
+            return
+        try:
+            await self._io(client.disconnect)
+        except Exception:
+            log.debug("error while disconnecting from %s", self.host, exc_info=True)
+        if why is not None:
+            await self._report("warn", "plc_disconnected",
+                               f"S7 connection to {self.host} lost: {why}")
+
+    async def _still_connected(self) -> bool:
+        """A read can fail because the mapping is wrong or because the PLC has
+        gone; only the second wants a reconnect, and snap7 is what knows."""
+        client = self._client
+        if client is None:
+            return False
+        try:
+            return bool(await self._io(client.get_connected))
+        except Exception:
+            return False
+
+    # --- data flow ---
 
     async def rebuild(self, scene: str, epoch: int, table: TagTable) -> None:
         self._table = table
 
     async def push(self, values: dict[str, TagValue]) -> None:
-        if not self._client or not HAS_SNAP7 or not self._table:
+        await self._write_inputs(values)
+
+    async def _write_inputs(self, values: dict[str, TagValue]) -> None:
+        client, table = self._client, self._table
+        if client is None or not HAS_SNAP7 or table is None:
             return
 
         # Only the bytes that actually hold simulator-written values, and only
@@ -139,19 +238,20 @@ class S7Snap7Driver(Driver):
         # unlikely rather than impossible; putting the two directions in
         # different bytes of the DB makes it impossible, and is worth doing in
         # any DB you control.
-        try:
-            wanted: dict[int, list[tuple[str, int, TagValue, str]]] = {}
-            for tag_id, value in values.items():
-                tag = self._table.get(tag_id)
-                addr = self._addresses.get(tag_id)
-                if tag is None or addr is None or tag.kind != "input":
-                    continue
-                kind, byte, bit = addr
-                wanted.setdefault(byte, []).append((kind, bit, value, tag.type))
+        wanted: dict[int, list[tuple[str, int, TagValue, str]]] = {}
+        for tag_id, value in values.items():
+            tag = table.get(tag_id)
+            addr = self._addresses.get(tag_id)
+            if tag is None or addr is None or tag.kind != "input":
+                continue
+            kind, byte, bit = addr
+            wanted.setdefault(byte, []).append((kind, bit, value, tag.type))
 
-            for byte, items in wanted.items():
-                width = 1 if all(k == "bit" for k, _, _, _ in items) else 4
-                block = bytearray(self._client.db_read(self.db_number, byte, width))
+        for byte, items in wanted.items():
+            width = 1 if all(k == "bit" for k, _, _, _ in items) else 4
+            try:
+                block = bytearray(
+                    await self._io(client.db_read, self.db_number, byte, width))
                 for kind, bit, value, tag_type in items:
                     if kind == "bit":
                         snap7.util.set_bool(block, 0, bit, bool(value))
@@ -159,35 +259,52 @@ class S7Snap7Driver(Driver):
                         snap7.util.set_real(block, 0, float(value))
                     else:
                         snap7.util.set_dint(block, 0, int(value))
-                self._client.db_write(self.db_number, byte, block)
-        except Exception as err:
-            log.error("writing DB%d: %s", self.db_number, err)
+                await self._io(client.db_write, self.db_number, byte, block)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                log.error("writing DB%d byte %d: %s", self.db_number, byte, err)
 
     async def _poll_loop(self) -> None:
         while self._running:
-            if self._client and HAS_SNAP7 and self._table:
-                try:
-                    span = self._span()
-                    data = bytearray(self._client.db_read(self.db_number, 0, span))
-                    changes: dict[str, TagValue] = {}
+            await asyncio.sleep(POLL_INTERVAL)
+            client, table = self._client, self._table
+            if client is None or not HAS_SNAP7 or table is None:
+                continue
+            try:
+                data = bytearray(
+                    await self._io(client.db_read, self.db_number, 0, self._span()))
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                self._explain(err)
+                if not await self._still_connected():
+                    await self._drop("the PLC stopped answering")
+                continue
 
-                    for tag in self._table.by_kind("output"):
-                        addr = self._addresses.get(tag.id)
-                        if addr is None:
-                            continue
-                        kind, byte, bit = addr
-                        if kind == "bit":
-                            changes[tag.id] = snap7.util.get_bool(data, byte, bit)
-                        elif tag.type == "float":
-                            changes[tag.id] = snap7.util.get_real(data, byte)
-                        else:
-                            changes[tag.id] = snap7.util.get_dint(data, byte)
+            changes: dict[str, TagValue] = {}
+            for tag in table.by_kind("output"):
+                addr = self._addresses.get(tag.id)
+                if addr is None:
+                    continue
+                kind, byte, bit = addr
+                if kind == "bit":
+                    changes[tag.id] = snap7.util.get_bool(data, byte, bit)
+                elif tag.type == "float":
+                    changes[tag.id] = snap7.util.get_real(data, byte)
+                else:
+                    changes[tag.id] = snap7.util.get_dint(data, byte)
 
-                    if changes:
-                        await self.bus.write_many(changes)
-                except Exception as err:
-                    self._explain(err)
-            await asyncio.sleep(0.05)
+            if changes:
+                await self.bus.write_many(changes)
+
+    async def _report(self, level: str, code: str, message: str) -> None:
+        log.log({"info": logging.INFO, "warn": logging.WARNING}.get(level, logging.ERROR),
+                "%s", message)
+        try:
+            await self.bus.status(level, code, message)
+        except Exception:
+            log.debug("could not report status upstream", exc_info=True)
 
     def _span(self) -> int:
         """Bytes to read to cover every mapped address."""
