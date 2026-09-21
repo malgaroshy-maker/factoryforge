@@ -336,6 +336,13 @@ class TagBusClient:
         finished. Updates already queued are dropped with it: they are deltas
         against a tag set nobody has any more, and the describe carries the
         current value of every tag in the new one.
+
+        This runs on the receive loop, so the gate closes when the describe
+        *arrives* rather than when the dispatcher reaches it. That distinction
+        is the whole of HP-33 once hooks moved off the receive loop: a driver
+        wedged in `push()` is holding the previous epoch's address map exactly
+        as one that has not rebuilt yet is, and the dispatcher cannot get to
+        the describe to say so (HP-31, HP-33).
         """
         self._next_describe = (self.scene or "", self.epoch, self.table)
         self._next_updates = {}
