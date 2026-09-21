@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 DescribeHook = Callable[[str, int, TagTable], Awaitable[None]]
 #: Called with the changed input values whenever the engine sends an update.
 UpdateHook = Callable[[dict[str, TagValue]], Awaitable[None]]
+#: Called with (forced values, released ids) whenever the engine's forced state
+#: changes. Deliberately separate from `UpdateHook`: `Driver` subscribes to
+#: updates and a driver's `push()` writes what it is handed straight into the
+#: PLC, so routing observed output state through that hook would send a
+#: simulator-invented value into a PLC-owned node (HP-13).
+ObserveHook = Callable[[dict[str, TagValue], list[str]], Awaitable[None]]
 #: Called with no arguments when the bus connection drops.
 DisconnectHook = Callable[[], Awaitable[None]]
 
@@ -45,6 +51,7 @@ class TagBusClient:
         self._tick_ms = proto.DEFAULT_TICK_MS
         self._on_describe: list[DescribeHook] = []
         self._on_update: list[UpdateHook] = []
+        self._on_observe: list[ObserveHook] = []
         self._on_disconnect: list[DisconnectHook] = []
 
     # --- hooks ---
@@ -62,6 +69,11 @@ class TagBusClient:
 
     def on_update(self, hook: UpdateHook) -> None:
         self._on_update.append(hook)
+
+    def on_observe(self, hook: ObserveHook) -> None:
+        """Watch the engine's forced state. Not something `Driver` subscribes
+        to — see `ObserveHook` for why that would be a worse bug than HP-13."""
+        self._on_observe.append(hook)
 
     def on_disconnect(self, hook: DisconnectHook) -> None:
         self._on_disconnect.append(hook)
@@ -86,11 +98,17 @@ class TagBusClient:
         async with self._pending_lock:
             self._pending[tag_id] = coerced
 
-        # Reflect it locally too. For an output tag the client is the authority
-        # — the engine never echoes one back, because the controller is what
-        # drives it — so without this, read() on an output returns its default
-        # forever. That made a live status display show `rotate=0` while the
-        # belt it commands was visibly running.
+        # Reflect it locally too. For an output tag the client is ordinarily
+        # the authority — the engine never echoes one back, because the
+        # controller is what drives it — so without this, read() on an output
+        # returns its default forever. That made a live status display show
+        # `rotate=0` while the belt it commands was visibly running.
+        #
+        # `set` and not `observe`: a forced output absorbs this silently, so
+        # the pin the engine reported on the observe channel keeps winning and
+        # read() goes on telling the truth about what the motor is doing
+        # (HP-13). The underlying value still updates, so releasing the force
+        # reveals the command the PLC is actually holding.
         self.table.set(tag_id, coerced)
 
     async def write_many(self, values: dict[str, TagValue]) -> None:
@@ -212,22 +230,42 @@ class TagBusClient:
     async def _handle(self, msg: dict) -> None:
         kind = msg.get("t")
         if kind == "describe":
-            scene, epoch, tags = proto.parse_describe(msg)
+            scene, epoch, tags, forced = proto.parse_describe(msg)
             self.scene, self.epoch = scene, epoch
-            self.table = TagTable(tags)
+            table = TagTable(tags)
+            # The values in a describe are already the *visible* ones, so
+            # pinning each forced tag to the value it arrived with reproduces
+            # the engine's view exactly.
+            for tag_id in forced:
+                table.force(tag_id, table.value(tag_id))
+            self.table = table
             # A new epoch invalidates anything queued against the old tag set.
             async with self._pending_lock:
                 self._pending.clear()
-            log.info("scene %r epoch %d, %d tags", scene, epoch, len(tags))
+            log.info("scene %r epoch %d, %d tags (%d forced)",
+                     scene, epoch, len(tags), len(forced))
             for hook in self._on_describe:
                 await hook(scene, epoch, self.table)
         elif kind == "update":
             values = proto.parse_values(msg)
             for tag_id, value in values.items():
                 if tag_id in self.table:
-                    self.table.set(tag_id, value)
+                    self.table.observe(tag_id, value)
             for hook in self._on_update:
                 await hook(values)
+        elif kind == "observe":
+            forced_values, cleared = proto.parse_observe(msg)
+            # Applied before the hooks, and before any `update` in the same
+            # tick, because the engine sends `observe` first: a release has to
+            # be in the table before the value it reveals arrives.
+            for tag_id, value in forced_values.items():
+                if tag_id in self.table:
+                    self.table.force(tag_id, value)
+            for tag_id in cleared:
+                if tag_id in self.table:
+                    self.table.clear_force(tag_id)
+            for hook in self._on_observe:
+                await hook(forced_values, cleared)
         elif kind == "status":
             log.log(
                 {"info": logging.INFO, "warn": logging.WARNING}.get(

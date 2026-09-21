@@ -133,6 +133,32 @@ A tick with no changes sends nothing at all — an idle scene should produce zer
 Float comparison uses an epsilon (default `1e-6`) so that physics jitter in the last bits does
 not generate a message every single tick.
 
+### `observe` — engine → sidecar
+
+```json
+{ "t": "observe", "tick": 14203, "forced": { "conveyor_1.rotate": false }, "cleared": ["sensor_high.detect"] }
+```
+
+**Delta-only**, like `update`, and sent on the same tick — but *before* it.
+`forced` names the tags the engine currently has pinned and the value each is
+pinned to; `cleared` names tags whose force has just been released. A scene with
+nothing forced never produces one.
+
+This is what makes a force visible from the sidecar. `update` carries `input`
+tags only, so without it a `conveyor_1.rotate` forced off while the PLC
+commands it on reads as *on* from every driver and every status display — which
+defeats the one diagnostic forcing exists for.
+
+It is a separate message rather than a field on `update` for a reason worth
+stating plainly: drivers hang their `push()` hook off `update`, and a driver's
+`push()` writes what it is handed into the PLC. Routing observed *output* state
+through that hook would write a simulator-invented value back into a node the
+PLC owns — a worse fault than the one it fixes. Nothing subscribes to `observe`
+by default; it updates the sidecar's cache, so `read()` tells the truth.
+
+Ordering matters and is fixed: `observe` precedes `update` within a tick, so a
+release reaches the sidecar before the value it reveals.
+
 ### `force` — sidecar → engine
 
 ```json
@@ -145,7 +171,12 @@ automated testing possible — you can assert a PLC program's response to a sens
 stuck on without physically arranging boxes.
 
 Forced tags keep their forced value until cleared. The engine echoes forced state in
-`describe`. Do not use `force` as a shortcut for `write`.
+`describe` — as a `"forced": true` field on the tag — and republishes every later change
+to it on `observe`. Do not use `force` as a shortcut for `write`.
+
+A forced tag still absorbs writes underneath the pin: the engine stores the written value
+so that releasing the force reveals whatever the controller is currently commanding,
+rather than the value that was in effect when the force was applied.
 
 ### `status` — either direction
 

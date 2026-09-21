@@ -148,6 +148,23 @@ class TagTable:
             return False
         return changed
 
+    def observe(self, tag_id: str, value: TagValue) -> bool:
+        """Record a value the *authority* says is already in effect.
+
+        Only the sidecar's cache uses this. The engine reports the value it can
+        see, which is the value after its own forces have been applied, so a
+        reported value must land on top of a local force pin rather than be
+        absorbed underneath it the way a simulator write is. Without it a tag
+        whose forced value the engine changed would read as whatever the pin
+        said when the sidecar first heard about it.
+        """
+        if tag_id in self._forced:
+            return self.force(tag_id, value)
+        return self.set(tag_id, value)
+
+    def forced_ids(self) -> list[str]:
+        return list(self._forced)
+
     def force(self, tag_id: str, value: TagValue) -> bool:
         tag = self._tags[tag_id]
         coerced = tag.coerce(value)

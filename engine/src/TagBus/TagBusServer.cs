@@ -25,6 +25,7 @@ public partial class TagBusServer : Node
     private TcpServer _listener = new();
     private WebSocketPeer? _client;
     private readonly Dictionary<string, object> _lastSent = new();
+    private readonly Dictionary<string, object> _lastForced = new();
 
     public TagTable Tags { get; set; } = new();
     public string SceneName { get; set; } = "untitled";
@@ -110,6 +111,7 @@ public partial class TagBusServer : Node
                 _client = null;
                 _greeted = false;
                 _lastSent.Clear();
+                _lastForced.Clear();
                 return;
             default:
                 return; // still connecting or closing
@@ -156,6 +158,12 @@ public partial class TagBusServer : Node
         _lastSent.Clear();
         foreach (var tag in Tags) _lastSent[tag.Id] = Tags.Visible(tag.Id);
 
+        // `describe` already carries every force, so the observe channel starts
+        // from that baseline rather than repeating it on the next tick.
+        _lastForced.Clear();
+        foreach (var tag in Tags)
+            if (Tags.IsForced(tag.Id)) _lastForced[tag.Id] = Tags.Visible(tag.Id);
+
         Send(new JsonObject
         {
             ["t"] = "describe",
@@ -170,6 +178,10 @@ public partial class TagBusServer : Node
     public void SendUpdates()
     {
         if (!HasClient) return;
+        // Before the update, not after: a release has to reach the sidecar
+        // ahead of the value it reveals, or the sidecar absorbs that value
+        // underneath a pin it is about to drop.
+        SendObservations();
         JsonObject? changed = null;
         foreach (var tag in Tags.ByKind(TagKind.Input))
         {
@@ -187,6 +199,45 @@ public partial class TagBusServer : Node
             ["t"] = "update",
             ["tick"] = TickCount,
             ["values"] = changed,
+        });
+    }
+
+    /// <summary>Publish changes to the forced state, delta-only (HP-13).
+    ///
+    /// A separate message from `update` on purpose. `update` is simulator-input
+    /// delivery and every driver's push() hook hangs off it; a driver that
+    /// writes whatever it is handed would push a simulator-forced output
+    /// straight back into the PLC node that owns it, which is a worse bug than
+    /// the one this closes. Mirrors EngineStub._send_observations.</summary>
+    private void SendObservations()
+    {
+        JsonObject? forced = null;
+        JsonArray? cleared = null;
+        var current = new Dictionary<string, object>();
+
+        foreach (var tag in Tags)
+        {
+            if (!Tags.IsForced(tag.Id)) continue;
+            var visible = Tags.Visible(tag.Id);
+            current[tag.Id] = visible;
+            if (_lastForced.TryGetValue(tag.Id, out var prev) && Equals(prev, visible))
+                continue;
+            (forced ??= new JsonObject())[tag.Id] = JsonValue.Create(visible);
+        }
+        foreach (var id in _lastForced.Keys)
+            if (!current.ContainsKey(id)) (cleared ??= new JsonArray()).Add(id);
+
+        if (forced is null && cleared is null) return;
+
+        _lastForced.Clear();
+        foreach (var entry in current) _lastForced[entry.Key] = entry.Value;
+
+        Send(new JsonObject
+        {
+            ["t"] = "observe",
+            ["tick"] = TickCount,
+            ["forced"] = forced ?? new JsonObject(),
+            ["cleared"] = cleared ?? new JsonArray(),
         });
     }
 

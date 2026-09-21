@@ -132,3 +132,64 @@ async def test_stale_epoch_writes_are_dropped(engine, bus, mock):
     await asyncio.sleep(0.1)
 
     assert engine.scene.tags.visible("conveyor.rotate") is True
+
+
+# --- HP-13: a forced output must read as forced from the sidecar ---
+
+async def _until(predicate, timeout: float = 2.0, what: str = "condition"):
+    """Wait until *predicate* holds, against a real deadline.
+
+    Gotcha 2: on Windows an `asyncio.sleep` under ~15.6 ms returns immediately,
+    so counting iterations of a short sleep measures nothing at all. The tick
+    here is deliberately above that floor and the deadline is read off the
+    loop's own clock, so this waits for real time to pass rather than for a
+    number of laps.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        if predicate():
+            return
+        if loop.time() >= deadline:
+            raise AssertionError(f"{what} not reached within {timeout}s")
+        await asyncio.sleep(0.02)
+
+
+async def test_forcing_an_output_is_visible_to_the_sidecar(engine, bus, mock):
+    """HP-13. The engine updates *inputs* only, and the sidecar fills its own
+    outputs in optimistically from what it wrote -- so a motor forced off while
+    the PLC commands it on used to read as on, which defeats the exact
+    diagnostic forcing exists for.
+    """
+    await mock.set("conveyor.rotate", True)
+    await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is True,
+                 what="the engine accepting the write")
+    assert bus.read("conveyor.rotate") is True
+
+    engine.scene.tags.force("conveyor.rotate", False)
+    await _until(lambda: bus.read("conveyor.rotate") is False,
+                 what="the sidecar observing the force")
+    assert bus.table.is_forced("conveyor.rotate")
+
+    # And it survives the next local write. The client reflects its own output
+    # writes locally; that must not paper over a force in effect.
+    await mock.set("conveyor.rotate", True)
+    await _until(lambda: engine.scene.tags.value("conveyor.rotate") is True,
+                 what="the engine storing the write underneath the force")
+    assert bus.read("conveyor.rotate") is False
+
+    engine.scene.tags.clear_force("conveyor.rotate")
+    await _until(lambda: not bus.table.is_forced("conveyor.rotate"),
+                 what="the sidecar observing the release")
+    assert bus.read("conveyor.rotate") is True
+
+
+async def test_describe_carries_forced_state(engine, bus, mock):
+    """The `forced` flag docs/tag-bus.md puts in `describe` was parsed and
+    thrown away, so a sidecar connecting to an already-forced scene had no way
+    to know."""
+    engine.scene.tags.force("sensor_high.detect", True)
+    await engine.send_describe()
+    await _until(lambda: bus.table.is_forced("sensor_high.detect"),
+                 what="the forced flag surviving describe")
+    assert bus.read("sensor_high.detect") is True

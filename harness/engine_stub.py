@@ -36,6 +36,7 @@ class EngineStub:
         self._server: websockets.WebSocketServer | None = None
         self._client: websockets.WebSocketServerProtocol | None = None
         self._last_sent: dict[str, TagValue] = {}
+        self._last_forced: dict[str, TagValue] = {}
         self._stop = asyncio.Event()
 
     @property
@@ -95,6 +96,10 @@ class EngineStub:
         """Publish the current tag set and bump the epoch."""
         self.epoch += 1
         self._last_sent = self.scene.tags.snapshot()
+        # `describe` already carries every force, so the observe channel starts
+        # from that baseline rather than repeating it on the next tick.
+        self._last_forced = {tid: self.scene.tags.visible(tid)
+                             for tid in self.scene.tags.forced_ids()}
         await self._send(proto.describe(
             self.scene.name, self.epoch, self.scene.tags.to_json()))
 
@@ -177,7 +182,32 @@ class EngineStub:
                 accumulator = 0.0
 
             if steps:
+                await self._send_observations()
                 await self._send_updates()
+
+    async def _send_observations(self) -> None:
+        """Publish changes to the forced state, delta-only (HP-13).
+
+        Sent *before* `_send_updates` on the same tick: a release has to reach
+        the sidecar before the value it reveals, or the sidecar absorbs the
+        revealed value underneath a pin it is about to drop.
+
+        This is a separate message from `update` on purpose. `update` is
+        simulator-input delivery, drivers hang `push()` off it, and a driver
+        that writes what it is handed would push a simulator-forced output
+        straight back into the PLC node that owns it.
+        """
+        if self._client is None:
+            return
+        current = {tid: self.scene.tags.visible(tid)
+                   for tid in self.scene.tags.forced_ids()}
+        forced = {tid: v for tid, v in current.items()
+                  if tid not in self._last_forced or self._last_forced[tid] != v}
+        cleared = [tid for tid in self._last_forced if tid not in current]
+        if not forced and not cleared:
+            return
+        self._last_forced = current
+        await self._send(proto.observe(self.tick_count, forced, cleared))
 
     async def _send_updates(self) -> None:
         """Send only the input tags that actually changed."""
