@@ -66,7 +66,7 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 
 | flag | |
 |---|---|
-| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–80) |
+| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–80). **Shortening it can fail a correct program**: the exam's second phase starts at a fixed moment, and a window that ends before a plant has settled in it marks a ramp as a hold |
 | `--wait` | seconds to wait for a controller before giving up (default 120) |
 | `--seed` | the feed pattern and the numbers the exam picks. Reported either way, so a mark is reproducible |
 | `--json PATH` | the whole run, machine-readable; `-` for stdout |
