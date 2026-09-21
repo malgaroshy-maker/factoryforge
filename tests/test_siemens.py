@@ -423,21 +423,40 @@ async def test_a_snap7_call_does_not_stop_the_event_loop(plc, fake_bus):
     their whole duration the tag bus, the write flusher and every other driver
     stopped -- and for a PLC that has just gone away that duration is a socket
     timeout, not a millisecond."""
-    plc.call_delay = 0.4
+    # A whole second, so that "still in flight" and "the loop kept its turn"
+    # are separated by a wide margin rather than by a few milliseconds. The
+    # failure being measured is a one-second stall; the assertion tolerates
+    # 0.2s, so a loaded machine cannot blur the two.
+    plc.call_delay = 1.0
     driver = make_snap7(fake_bus)
     loop = asyncio.get_running_loop()
     try:
         await driver.start()
-        assert await settle(lambda: plc.in_flight > 0, timeout=2), \
+        assert await settle(lambda: plc.in_flight > 0, timeout=5), \
             "no snap7 call was ever observed in flight -- it ran to completion " \
             "without the loop getting a turn, which is the bug"
 
-        before = loop.time()
-        await asyncio.sleep(0.05)
-        lag = loop.time() - before
+        # Sampled repeatedly, and judged on the best sample. A genuinely
+        # blocked loop delays every sample in the window; an unlucky OS
+        # scheduling hiccup delays one. Taking the minimum measures the thing
+        # this test names rather than the machine's mood at one instant.
+        lags = []
+        for _ in range(10):
+            if plc.in_flight == 0:
+                break
+            before = loop.time()
+            await asyncio.sleep(0.02)
+            lags.append(loop.time() - before)
+
+        assert lags, "the call finished before anything could be measured"
         assert plc.in_flight > 0, "the call finished first; nothing was proven"
-        assert lag < 0.2, f"the event loop was blocked for {lag:.2f}s by a snap7 call"
+        assert min(lags) < 0.2, (
+            f"the event loop was blocked by a snap7 call; best of {len(lags)} "
+            f"samples was {min(lags):.2f}s")
     finally:
+        # Before stop(), which otherwise waits on a disconnect running at the
+        # same artificial speed.
+        plc.call_delay = 0
         await driver.stop()
 
 

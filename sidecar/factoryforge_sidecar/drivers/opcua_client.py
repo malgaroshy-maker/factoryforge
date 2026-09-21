@@ -201,14 +201,48 @@ class OpcUaClientDriver(Driver):
             await self._bind(table)
 
     async def _bind(self, table: TagTable) -> None:
-        """Resolve nodes and (re)create the subscription for this tag set."""
+        """Resolve nodes and (re)create the subscription for this tag set.
+
+        Stop the old data flow, build the new map in full, then swap it in and
+        start the new flow. The order is the point of the method.
+        """
         assert self.client is not None
-        self._nodes.clear()
-        self._by_node.clear()
+
+        # Stop first. An old poller left running through node resolution would
+        # otherwise deliver a batch read under the old tag set into a driver
+        # that has already adopted the new one. Cancelling here also means an
+        # in-flight read_values is cancelled at its await rather than landing
+        # afterwards.
+        if self._poller is not None:
+            self._poller.cancel()
+            self._poller = None
+        # And the subscription this bind replaces, which nothing used to
+        # delete. Every scene edit republishes the description, so a scene
+        # edited ten times left ten live subscriptions on the server: nine of
+        # them still delivering into a handler whose node->tag map had moved
+        # on. Against a real S7 they are also a resource the CPU has very
+        # little of -- see gotcha 7, where one extra client session was enough
+        # to destabilise it.
+        await self._drop_subscription()
+        self._last_read.clear()
 
         mapping = dict(self.mapping)
         if self.auto_map:
             mapping.update(await self._browse_for_tags(table, skip=set(mapping)))
+
+        # Built locally, swapped in below. This used to clear self._nodes and
+        # then refill it one network round trip at a time, which left the map
+        # visibly half-built for the whole of a rebuild -- and a half-built map
+        # is indistinguishable from a finished one. "Not in _nodes" has two
+        # meanings, "this tag is genuinely unmapped" and "binding has not got
+        # to it yet", and only the first is actionable. The reconciler read the
+        # second as the first and discarded a write it was holding precisely so
+        # it would not be lost, every time somebody edited the scene -- and the
+        # editor republishes the tag set on every placement, deletion and
+        # rename. Keeping the old map intact until the new one is complete
+        # means the question is never asked during the window.
+        nodes: dict[str, object] = {}
+        by_node: dict[str, str] = {}
 
         missing = []
         for tag in table:
@@ -223,8 +257,13 @@ class OpcUaClientDriver(Driver):
                 await self._report("warn", "bad_node",
                                    f"{tag.id} -> {node_id} could not be read: {exc}")
                 continue
-            self._nodes[tag.id] = node
-            self._by_node[node.nodeid.to_string()] = tag.id
+            nodes[tag.id] = node
+            by_node[node.nodeid.to_string()] = tag.id
+
+        # No await between these two: the swap is atomic to everything else on
+        # the loop, so no reader ever sees one map with the other's contents.
+        self._nodes = nodes
+        self._by_node = by_node
 
         if missing:
             await self._report("warn", "unmapped_tags",
@@ -233,18 +272,6 @@ class OpcUaClientDriver(Driver):
         # Watch the tags the PLC writes; we read those.
         plc_written = [(t.id, self._nodes[t.id]) for t in table.by_kind("output")
                        if t.id in self._nodes]
-        if self._poller is not None:
-            self._poller.cancel()
-            self._poller = None
-        # And the subscription this bind replaces, which nothing used to
-        # delete. Every scene edit republishes the description, so a scene
-        # edited ten times left ten live subscriptions on the server: nine of
-        # them still delivering into a handler whose node->tag map had moved
-        # on. Against a real S7 they are also a resource the CPU has very
-        # little of -- see gotcha 7, where one extra client session was enough
-        # to destabilise it.
-        await self._drop_subscription()
-        self._last_read.clear()
 
         if plc_written:
             if self.mode == "subscribe":
@@ -407,6 +434,12 @@ class OpcUaClientDriver(Driver):
             try:
                 for tag_id, value in list(self._unacked.items()):
                     if tag_id not in self._nodes:
+                        # Genuinely unmapped: the scene no longer has this tag,
+                        # or nothing maps it to a node. Safe only because
+                        # _bind() swaps a finished map in rather than filling
+                        # one in place -- while it did the latter, this line
+                        # discarded pending writes for tags that were merely
+                        # waiting their turn to be re-resolved.
                         self._unacked.pop(tag_id, None)
                         continue
                     await self._write_node(tag_id, value)

@@ -84,7 +84,15 @@ async def opcua_client(bus, fake_plc):
                             mapping=mapping, publish_interval=20)
     await driver.start()
     assert await _settle(lambda: driver.connected.is_set()), "driver never connected"
-    assert await _settle(lambda: driver._nodes), "driver never bound its tags"
+    # Every mapped tag, not merely the first one to land. `connected` is set
+    # before _bind is even called (opcua_client.py:171 vs :174), so waiting on
+    # the event alone hands the test a bind that has not started; this used to
+    # wait on "_nodes is non-empty", which handed it one still in progress and
+    # failed roughly one run in seven on whichever tag had not arrived yet.
+    # _bind now swaps a finished map in, so the count is exact rather than a
+    # sampling of a map being filled -- and it still says how far it got.
+    assert await _settle(lambda: len(driver._nodes) == len(mapping)), \
+        f"only {len(driver._nodes)}/{len(mapping)} tags bound"
     try:
         yield driver
     finally:
@@ -143,6 +151,83 @@ async def test_unmapped_tags_are_reported_not_fatal(bus, fake_plc):
         await driver.stop()
 
 
+async def test_a_scene_edit_does_not_drop_a_pending_retry(monkeypatch, bus, fake_plc):
+    """A rebuild must not discard a write that is still waiting to land.
+
+    This is HP-50's own failure arriving through a different door. Every
+    placement, deletion and rename in the editor raises TagsChanged, which
+    republishes the tag set and calls rebuild() -- with the connection still
+    up, so `_unacked` is not cleared the way a disconnect clears it. _bind used
+    to empty `self._nodes` and refill it one network round trip at a time, and
+    the reconciler read a tag's absence from that half-built map as "this tag
+    is unmapped, stop retrying it".
+
+    The sampling loop is the test: the drop is only visible *during* the bind,
+    because seeding at the end of the same bind would put an entry back and
+    hide it.
+    """
+    from asyncua import Node
+
+    _, idx, _ = fake_plc
+    mapping = {t: f"ns={idx};s={t}" for t in OUTPUTS + INPUTS}
+
+    allowed = asyncio.Event()
+    written: list[str] = []
+    real_write = Node.write_value
+
+    async def gated(self, *args, **kwargs):
+        written.append(self.nodeid.Identifier)
+        if self.nodeid.Identifier == "sensor_high.detect" and not allowed.is_set():
+            raise RuntimeError("BadCommunicationError")
+        return await real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Node, "write_value", gated)
+
+    driver = drivers.create("opcua-client", bus, url=PLC_ENDPOINT, mapping=mapping,
+                            input_retry_interval=0.05)
+    await driver.start()
+    try:
+        assert await _settle(lambda: driver.connected.is_set())
+        assert await _settle(lambda: set(INPUTS) <= set(written))
+
+        await driver.push({"sensor_high.detect": True})
+        assert await _settle(lambda: "sensor_high.detect" in driver._unacked), \
+            "the refused write was not held in the first place"
+
+        # Give each node resolution a visible round trip, so the rebuild has a
+        # window the reconciler can wake up inside. A real network supplies
+        # this; a loopback server does not.
+        real_browse = Node.read_browse_name
+
+        async def slow_browse(self):
+            await asyncio.sleep(0.05)
+            return await real_browse(self)
+
+        monkeypatch.setattr(Node, "read_browse_name", slow_browse)
+
+        attempts = written.count("sensor_high.detect")
+        rebuild = asyncio.create_task(driver.rebuild("sorting", 2, bus.table))
+        held = True
+        while not rebuild.done():
+            if "sensor_high.detect" not in driver._unacked:
+                held = False
+                break
+            await asyncio.sleep(0.02)
+        await rebuild
+
+        assert written.count("sensor_high.detect") > attempts, \
+            "the reconciler never ran during the rebuild, so nothing was proven"
+        assert held, "a scene edit discarded a write that was still pending"
+
+        # And it is still a live entry afterwards, not a corpse: opening the
+        # gate drains it.
+        allowed.set()
+        assert await _settle(lambda: "sensor_high.detect" not in driver._unacked), \
+            "the retained write was never retried to completion"
+    finally:
+        await driver.stop()
+
+
 async def test_a_transient_read_error_does_not_strand_the_poller(
         monkeypatch, engine, fake_plc, opcua_client):
     """A failed read used to end `_poll_loop` for the rest of the run.
@@ -175,40 +260,67 @@ async def test_a_transient_read_error_does_not_strand_the_poller(
         "polling never resumed, and nothing said so"
 
 
-async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_client):
+async def test_a_dropped_input_write_is_retried(monkeypatch, bus, fake_plc):
     """A failed write used to be logged and discarded, which is not something
     the system recovers from on its own: the engine publishes *deltas*, so a
     sensor whose write fails and which then holds steady is never sent again.
     The PLC keeps the wrong value indefinitely, on a connection that reports
     healthy.
 
-    So this pushes the value exactly once, fails the first two attempts, and
-    then leaves the driver alone. Nothing else will ever send it.
+    So this pushes the value exactly once and then leaves the driver alone.
+    Nothing else will ever send it; only the reconciler can put it right.
+
+    Two things are deliberately not left to the clock. The refusal is a gate,
+    not a count of attempts -- `_bind` seeds every input node at the end of a
+    connect, this node included, so counting refusals lets whichever write
+    happens to land first decide the arithmetic. And the test waits until that
+    seeding has touched every input before it pushes anything, because
+    `connected` is set *before* `_bind` runs (opcua_client.py:171 vs :174), so
+    a bind can still be in flight when the connection looks established. Left
+    unguarded, the seeded `False` overwrites the pushed `True` in `_unacked`
+    and the reconciler faithfully converges on the wrong value.
     """
     from asyncua import Node
 
-    _, _, nodes = fake_plc
-    real_write = Node.write_value
-    refused = []
+    _, idx, nodes = fake_plc
+    mapping = {t: f"ns={idx};s={t}" for t in OUTPUTS + INPUTS}
 
-    async def flaky(self, *args, **kwargs):
-        if self.nodeid.Identifier == "sensor_high.detect" and len(refused) < 2:
-            refused.append(1)
+    allowed = asyncio.Event()
+    written: list[str] = []
+    real_write = Node.write_value
+
+    async def gated(self, *args, **kwargs):
+        written.append(self.nodeid.Identifier)
+        if self.nodeid.Identifier == "sensor_high.detect" and not allowed.is_set():
             raise RuntimeError("BadCommunicationError")
         return await real_write(self, *args, **kwargs)
 
-    monkeypatch.setattr(Node, "write_value", flaky)
-    opcua_client.input_retry_interval = 0.2
+    # Installed before the driver exists, so its own seeding is refused too and
+    # cannot race the push below.
+    monkeypatch.setattr(Node, "write_value", gated)
 
-    await opcua_client.push({"sensor_high.detect": True})
-    assert len(refused) == 1, "the write was not attempted once"
-    assert await nodes["sensor_high.detect"].read_value() is False
-    assert "sensor_high.detect" in opcua_client._unacked, "the value was dropped"
+    driver = drivers.create("opcua-client", bus, url=PLC_ENDPOINT, mapping=mapping,
+                            input_retry_interval=0.1)
+    await driver.start()
+    try:
+        assert await _settle(lambda: driver.connected.is_set()), "never connected"
+        assert await _settle(lambda: set(INPUTS) <= set(written)), \
+            "bind-time seeding never finished, so the push below would race it"
 
-    assert await _settle(lambda: nodes["sensor_high.detect"].read_value(), timeout=10), \
-        "a dropped input write was never retried; the PLC kept the wrong value"
-    assert "sensor_high.detect" not in opcua_client._unacked, \
-        "an acknowledged write is still queued for retry"
+        await driver.push({"sensor_high.detect": True})
+        assert await _settle(lambda: driver._unacked.get("sensor_high.detect") is True), \
+            "the refused write was dropped instead of kept"
+        assert await nodes["sensor_high.detect"].read_value() is False
+
+        # Nothing else will ever send this value. Open the gate and the only
+        # thing that can put the PLC right is the reconciler.
+        allowed.set()
+        assert await _settle(lambda: nodes["sensor_high.detect"].read_value()), \
+            "a dropped input write was never retried; the PLC kept the wrong value"
+        assert await _settle(lambda: "sensor_high.detect" not in driver._unacked), \
+            "an acknowledged write is still queued for retry"
+    finally:
+        await driver.stop()
 
 
 async def test_rebuilding_does_not_accumulate_subscriptions(bus, fake_plc):
