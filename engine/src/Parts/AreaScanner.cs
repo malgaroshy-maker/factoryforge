@@ -231,25 +231,28 @@ public partial class AreaScanner : Node3D, IPart
         Apply();
     }
 
-    /// <summary>Everything the scanner could see. Cartons only: a scanner that
-    /// tripped on the machines it is guarding would never clear.</summary>
+    /// <summary>
+    /// Everything the scanner could see. Cartons only: a scanner that tripped on
+    /// the machines it is guarding would never clear.
+    ///
+    /// The scanner's own siblings, not a walk of the whole tree. Cartons are
+    /// added to the scene root by whoever spawns them, which is the same node
+    /// the editor's parts are added to and the same place
+    /// <c>SceneEditor.SweepBoxes</c> already looks — so one level is the whole
+    /// answer. A recursive walk would be a per-node allocation on every scanner
+    /// on every tick, which is the cost FF-15 and FF-16 were both about, and
+    /// this is the one part here that has to look every tick rather than once a
+    /// second: a guard that noticed an intrusion a quarter of a second late
+    /// would be a guard in name only.
+    /// </summary>
     private IEnumerable<Node3D> Intruders()
     {
-        Node? root = GetTree()?.Root ?? GetParent();
+        Node? root = GetParent();
         if (root is null) yield break;
 
-        foreach (var node in Walk(root))
+        foreach (var node in root.GetChildren())
         {
             if (node is BoxPhysics box) yield return box;
-        }
-    }
-
-    private static IEnumerable<Node> Walk(Node from)
-    {
-        foreach (var child in from.GetChildren())
-        {
-            yield return child;
-            foreach (var grand in Walk(child)) yield return grand;
         }
     }
 

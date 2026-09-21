@@ -427,8 +427,12 @@ public partial class ControlPartsSelfTest : Node
 
         // A carton 1.6 m away: inside the 2.0 m warning field, outside the
         // 1.0 m protective one.
+        // Parented where a spawned carton really goes -- the scene root, which
+        // is the scanner's own parent. Hanging it off this test node instead
+        // would put it somewhere no carton ever is, and the check would pass
+        // against geometry the scanner would never meet.
         var carton = new BoxPhysics { Name = "SelfTestCarton" };
-        AddChild(carton);
+        (Editor.GetParent() ?? (Node)this).AddChild(carton);
         carton.Position = scanner.GlobalPosition + new Vector3(1.6f, 0.0f, 0.0f);
         Run(2);
 
