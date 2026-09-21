@@ -24,7 +24,7 @@ and not with a download link.
 ### 1. Clone & Install Sidecar
 
 ```bash
-git clone https://github.com/malgaroshy-maker/factory.git factoryforge
+git clone https://github.com/malgaroshy-maker/factoryforge.git
 cd factoryforge
 pip install -e "sidecar[dev,opcua]"
 ```

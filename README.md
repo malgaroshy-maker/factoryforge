@@ -10,7 +10,7 @@
 *A free, open 3D factory simulator for learning PLC programming — a modern, customizable open replacement for Factory I/O.*
 
 **Author & Creator:** Mahamed Algaroshy (محمد الجروشي)  
-**Repository:** [github.com/malgaroshy-maker/factory](https://github.com/malgaroshy-maker/factory)
+**Repository:** [github.com/malgaroshy-maker/factoryforge](https://github.com/malgaroshy-maker/factoryforge)
 
 ---
 
@@ -107,7 +107,7 @@ need Godot 4.7 mono, the .NET 8 SDK and Python 3.11+.
 ### Downloading a release — not yet
 
 There are **no published releases**. The
-[Releases page](https://github.com/malgaroshy-maker/factory/releases) is empty,
+[Releases page](https://github.com/malgaroshy-maker/factoryforge/releases) is empty,
 and saying so here is cheaper than letting you click through to find out.
 
 The machinery is built and tested — `python tools/build_release.py` exports the
@@ -136,8 +136,8 @@ heading comes off:
 ### 1. Installation
 
 ```bash
-git clone https://github.com/malgaroshy-maker/factory.git
-cd factory
+git clone https://github.com/malgaroshy-maker/factoryforge.git
+cd factoryforge
 pip install -e "sidecar[dev,opcua]"
 ```
 
