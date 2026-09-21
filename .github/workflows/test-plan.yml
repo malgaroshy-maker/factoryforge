@@ -70,8 +70,14 @@ jobs:
           chmod +x "$GODOT_BIN"
           echo "GODOT=$GODOT_BIN" >> "$GITHUB_ENV"
 
+      # `siemens` as well as `dev`: without snap7 installed,
+      # test_the_fake_agrees_with_real_snap7 hits its importorskip and the
+      # whole Siemens offset suite silently measures FakeUtil against
+      # itself. That check exists to catch the fake drifting from the real
+      # library, and it only earns its keep where the real one is present.
+      # snap7 is a pure pip install; it needs no Siemens software.
       - name: Install the sidecar (with test extras)
-        run: pip install -e "sidecar[dev]"
+        run: pip install -e "sidecar[dev,siemens]"
 
       - name: Run the test plan (A, B, C, E, H)
         run: python tools/test_plan.py --only A,B,C,E,H
