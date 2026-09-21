@@ -36,6 +36,10 @@ log = logging.getLogger(__name__)
 
 RECONNECT_DELAY = 5.0
 
+#: How often to re-attempt input writes the PLC did not accept. See
+#: `_reconcile_loop` for why dropping one is not survivable.
+INPUT_RETRY_INTERVAL = 1.0
+
 
 class _SubHandler:
     """Receives data changes for PLC-written (sim output) nodes."""
@@ -60,6 +64,7 @@ class OpcUaClientDriver(Driver):
                  mode: str = "poll",
                  poll_interval: float = 0.05,
                  publish_interval: int = 50,
+                 input_retry_interval: float = INPUT_RETRY_INTERVAL,
                  **config) -> None:
         super().__init__(bus, url=url, **config)
         self.url = url
@@ -79,6 +84,7 @@ class OpcUaClientDriver(Driver):
         self.mode = mode
         self.poll_interval = poll_interval
         self.publish_interval = publish_interval
+        self.input_retry_interval = float(input_retry_interval)
 
         self.mapping: dict[str, str] = dict(mapping or {})
         if mapping_file:
@@ -99,6 +105,9 @@ class OpcUaClientDriver(Driver):
         self._last_read: dict[str, TagValue] = {}
         self._stopping = False
         self._table: TagTable | None = None
+        #: Input writes the PLC has not accepted, kept until it does.
+        self._unacked: dict[str, TagValue] = {}
+        self._reconciler: asyncio.Task | None = None
 
     # --- lifecycle ---
 
@@ -111,12 +120,14 @@ class OpcUaClientDriver(Driver):
         """
         self._stopping = False
         self._runner = asyncio.create_task(self._connect_loop())
+        self._reconciler = asyncio.create_task(self._reconcile_loop())
 
     async def stop(self) -> None:
         self._stopping = True
-        if self._runner:
-            self._runner.cancel()
-            self._runner = None
+        for task in (self._runner, self._reconciler):
+            if task is not None:
+                task.cancel()
+        self._runner = self._reconciler = None
         await self._disconnect()
 
     async def _connect_loop(self) -> None:
@@ -155,6 +166,10 @@ class OpcUaClientDriver(Driver):
         self._nodes.clear()
         self._by_node.clear()
         self._last_read.clear()
+        # Not carried across: the next _bind() rewrites every input from the
+        # table, which is a better source of truth than a value that failed
+        # against nodes this session no longer has.
+        self._unacked.clear()
         client, self.client = self.client, None
         if client is not None:
             try:
@@ -297,13 +312,13 @@ class OpcUaClientDriver(Driver):
             if tag_id in self._nodes:
                 await self._write_node(tag_id, value)
 
-    async def _write_node(self, tag_id: str, value: TagValue) -> None:
+    async def _write_node(self, tag_id: str, value: TagValue) -> bool:
         node = self._nodes.get(tag_id)
         if node is None or self._table is None:
-            return
+            return False
         tag = self._table.get(tag_id)
         if tag is None:
-            return
+            return False
         variant_type = {
             "bit": ua.VariantType.Boolean,
             "int": ua.VariantType.Int32,
@@ -312,7 +327,37 @@ class OpcUaClientDriver(Driver):
         try:
             await node.write_value(ua.DataValue(ua.Variant(value, variant_type)))
         except Exception as exc:
-            log.warning("write %s failed: %s", tag_id, exc)
+            # Held, not dropped. See _reconcile_loop.
+            self._unacked[tag_id] = value
+            log.warning("write %s failed: %s — will retry", tag_id, exc)
+            return False
+        self._unacked.pop(tag_id, None)
+        return True
+
+    async def _reconcile_loop(self) -> None:
+        """Re-attempt input writes the PLC did not accept.
+
+        A failed write used to be logged and discarded, and that is not
+        recoverable on its own: the engine publishes *deltas*, so a sensor
+        whose write fails and which then holds steady is never sent again. The
+        PLC keeps the wrong value indefinitely -- on a connection that reports
+        healthy, against a scene that looks right on screen, with one line in
+        a log to say why.
+        """
+        while not self._stopping:
+            await asyncio.sleep(self.input_retry_interval)
+            if not self._unacked or not self.connected.is_set():
+                continue
+            try:
+                for tag_id, value in list(self._unacked.items()):
+                    if tag_id not in self._nodes:
+                        self._unacked.pop(tag_id, None)
+                        continue
+                    await self._write_node(tag_id, value)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.debug("input reconcile failed", exc_info=True)
 
     def _queue_write(self, tag_id: str, value) -> None:
         """Called from the subscription handler; schedules a bus write."""

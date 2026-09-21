@@ -143,6 +143,42 @@ async def test_unmapped_tags_are_reported_not_fatal(bus, fake_plc):
         await driver.stop()
 
 
+async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_client):
+    """A failed write used to be logged and discarded, which is not something
+    the system recovers from on its own: the engine publishes *deltas*, so a
+    sensor whose write fails and which then holds steady is never sent again.
+    The PLC keeps the wrong value indefinitely, on a connection that reports
+    healthy.
+
+    So this pushes the value exactly once, fails the first two attempts, and
+    then leaves the driver alone. Nothing else will ever send it.
+    """
+    from asyncua import Node
+
+    _, _, nodes = fake_plc
+    real_write = Node.write_value
+    refused = []
+
+    async def flaky(self, *args, **kwargs):
+        if self.nodeid.Identifier == "sensor_high.detect" and len(refused) < 2:
+            refused.append(1)
+            raise RuntimeError("BadCommunicationError")
+        return await real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Node, "write_value", flaky)
+    opcua_client.input_retry_interval = 0.2
+
+    await opcua_client.push({"sensor_high.detect": True})
+    assert len(refused) == 1, "the write was not attempted once"
+    assert await nodes["sensor_high.detect"].read_value() is False
+    assert "sensor_high.detect" in opcua_client._unacked, "the value was dropped"
+
+    assert await _settle(lambda: nodes["sensor_high.detect"].read_value(), timeout=10), \
+        "a dropped input write was never retried; the PLC kept the wrong value"
+    assert "sensor_high.detect" not in opcua_client._unacked, \
+        "an acknowledged write is still queued for retry"
+
+
 async def test_missing_plc_does_not_block_startup(bus):
     """If the PLC is off, start() must still return promptly."""
     driver = drivers.create("opcua-client", bus,
