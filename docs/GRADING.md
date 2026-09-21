@@ -217,12 +217,37 @@ sensor position, pusher travel and catch width — rather than written into the
 grader. A change to the line changes the advice instead of quietly making it
 wrong, and there is a test that fails if anyone hard-codes them back.
 
-The three ways this exercise goes wrong are distinguishable from outside the
-controller, and each gets its own sentence: the line never moved, the pusher
-never moved, or the pusher moved at the wrong moment.
+Every scene does the same, in its own units, because a diagnosis is only worth
+printing when it distinguishes the ways the exercise actually goes wrong:
 
-`--json` writes all of it, including the per-carton ledger — id, height, lane,
-the second it landed. That file is the appeal record.
+```
+  - At 210C it parked 16.5C off and stayed there. An error that stops closing
+    is a controller with no way to produce output from a small error [...]
+
+  - The belt ran at 0.49 m/s for the first half of this run and 1.00 m/s for
+    the second -- 2.0 times faster -- and your releases went from 5.7 cartons
+    to 11.0. That is a release timed in seconds. `panel.setpoint` is a window
+    in ENCODER PULSES, which is a distance [...]
+
+  - The motor started at 28.18s with nobody having pressed Start since it last
+    stopped. That is automatic restart, and it is the failure this whole cell
+    exists to prevent: the relay closing hands `starter.coil` back to your
+    program, it does not command it. [...]
+
+  - Every carton you got wrong is one where the scale and the inductive sensor
+    disagree -- 2 of them in this run. A tall cardboard carton weighs 2160 g
+    and a short steel one 4320 g [...]
+```
+
+Several of those pick between explanations rather than reciting one. A run
+where every misrouted carton was measured under a single threshold is told it
+latched the setpoint; a run where they are spread across both is told how the
+curtain's beam ladder works instead. A batch that delivered nothing on its
+second run is told about the totaliser, not about the pump's rating.
+
+`--json` writes all of it: the per-carton ledger with heights, lanes and the
+second each one landed; the measurement trace for a regulator; every release,
+batch, drop and force. That file is the appeal record.
 
 ---
 
