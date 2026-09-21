@@ -312,12 +312,25 @@ class ModbusTcpDriver(Driver):
             self._loop.create_task(self.bus.write_many(touched))
 
     def address_table(self) -> str:
-        """A printable map, for pasting next to a student's PLC symbol table."""
-        rows = ["  ADDRESS          TYPE   TAG",
-                "  ---------------- ------ ----------------------------------"]
+        """A printable map, for pasting next to a student's PLC symbol table.
+
+        REGS is not decoration. An int and a float each occupy *two* registers
+        -- 32-bit big-endian, high word first -- and without the column the
+        only hint was a gap in the numbering, which reads like a reserved
+        address. Found by the first third-party master ever to read this map:
+        an OpenPLC program told "one register per counter" reads registers 0
+        and 1, which are both halves of the FIRST counter, and never touches
+        the second. The display then shows one counter stuck at zero and the
+        other carrying the first one's value -- two wrong numbers, one of them
+        climbing convincingly, and no error raised at either end.
+        """
+        rows = ["  ADDRESS          TYPE   REGS     TAG",
+                "  ---------------- ------ -------- ------------------------"]
         for mapping in sorted(self._by_tag.values(), key=lambda m: (m.block, m.address)):
+            span = (str(mapping.width) if mapping.width == 1 else
+                    f"{mapping.width} ({mapping.address}-{mapping.address + mapping.width - 1})")
             rows.append(
                 f"  {_LABELS[mapping.block]}{mapping.address:<14} "
-                f"{mapping.type:<6} {mapping.tag_id}"
+                f"{mapping.type:<6} {span:<8} {mapping.tag_id}"
             )
         return "\n".join(rows)
