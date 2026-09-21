@@ -15,11 +15,14 @@ Welcome to **FactoryForge**, a free, open 3D factory simulator for learning PLC 
 
 ## ⚡ Quick Start (5 Minutes)
 
-**Building from source is currently the only way in.** There is no published
-release to download yet — the build and freeze machinery exists and is tested,
-but no version has ever been tagged and uploaded, so the Releases page is empty.
-See [PACKAGING.md](PACKAGING.md). That is why this guide starts with `git clone`
-and not with a download link.
+**The fastest way in is a download.** Grab the archive for your platform from
+[Releases](https://github.com/malgaroshy-maker/factoryforge/releases), extract
+it, and run `FactoryForge` — no Godot, no .NET SDK and no Python, because the
+sidecar that speaks every PLC protocol ships frozen beside the engine.
+
+This guide builds from source instead, which is what you want if you intend to
+change the engine, add a part or add a driver. If you only want to write PLC
+programs against it, take the download.
 
 ### 1. Clone & Install Sidecar
 
@@ -77,6 +80,8 @@ The templates each teach one thing:
 | **Pick & place cell** | A gantry with three motions to sequence, on feedback rather than timers, and a grip that reports honestly when it caught nothing |
 | **Accumulation buffer** | Product piles up behind a blade stop on a belt that never stops, and is released a batch at a time — timed by encoder pulses, so the batch stays the same size when somebody turns the drive up. A timer would not. |
 | **Heat treat station** | A thermal plant with real inertia — proportional control alone visibly parks short of setpoint, and you can measure by how much |
+| **Guarded cell** | The guarding chain, and the first scene where the controller does not command the motor: your program energises a contactor coil and the contactor runs the belt. A dual-channel safety relay and an area scanner whose muting expires decide whether the coil may be energised at all — a permissive is not a command, and closing the relay must start nothing |
+| **Batch dosing** | A cascade: an outer loop watching a totaliser sets the setpoint of an inner loop trimming a pump. The batch ends on a quantity rather than a timer, which is why the same recipe takes twice as long at half the flow and still delivers the same litres |
 
 To skip the start screen — scripting a run, or grabbing a screenshot:
 

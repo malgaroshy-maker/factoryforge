@@ -290,6 +290,22 @@ def section_a() -> None:
            code == 0 and "RESULT OK" in out,
            out.strip().splitlines()[-1] if out.strip() else "no output")
 
+    # Again, against a scene that has the tags the first run could not reach.
+    # check_protocol names its cases by role -- @int_output, @float_output --
+    # and SKIPs a case whose role the loaded scene lacks. The default sorting
+    # scene declares neither, so nine of eighteen cases skipped there, and they
+    # were exactly the int-range and non-finite ones: HP-18's and HP-23's own
+    # subject matter, the newest checks in the file, gated by nothing. The
+    # skips were printed and nobody was counting them, which is HP-56 again in
+    # a different file. tank-level-control has both roles and skips none.
+    with EngineProcess("--duration=30", "--scene=res://templates/tank_level_control.json"):
+        code, out = run([sys.executable, str(ROOT / "tools" / "check_protocol.py")], timeout=30)
+    skipped = sum(1 for line in out.splitlines() if line.startswith("SKIP"))
+    record("A5b", "every wire-parity case actually runs against a scene that has the tags",
+           code == 0 and "RESULT OK" in out and skipped == 0,
+           f"{skipped} case(s) skipped" if skipped else
+           (out.strip().splitlines()[-1] if out.strip() else "no output"))
+
     record("A6", "no type in engine/src is referenced nowhere outside its own file",
            *dead_types())
 

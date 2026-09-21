@@ -100,38 +100,32 @@ rule, and it is what makes a scene you build addressable from a PLC.
 
 ## ⚡ Quick Start
 
-**You build it from source today.** That is what the steps below do, and it is
-the same path [GETTING_STARTED.md](docs/GETTING_STARTED.md) walks in detail. You
-need Godot 4.7 mono, the .NET 8 SDK and Python 3.11+.
+### Just want to run it? Download a release
 
-### Downloading a release — not yet
+Grab the archive for your platform from
+[Releases](https://github.com/malgaroshy-maker/factoryforge/releases), extract
+it, and run `FactoryForge`. **No Godot, no .NET SDK and no Python needed** — the
+sidecar that speaks every PLC protocol ships frozen alongside the engine, and
+F5's *Apply & Connect* finds it automatically.
 
-There are **no published releases**. The
-[Releases page](https://github.com/malgaroshy-maker/factoryforge/releases) is empty,
-and saying so here is cheaper than letting you click through to find out.
+Every release is gated on the headless self-tests in
+`tools/packaging/check_release.py` run against the **exported binary**, not
+against a source checkout — a checkout can pass everything while the release
+fails, because two of those tests read fixtures that `System.IO` cannot reach
+once packed into a `.pck`.
 
-The machinery is built and tested — `python tools/build_release.py` exports the
-engine and freezes the sidecar, and on Windows **`build_windows.bat`** does the
-same double-clickably and then runs the release gate: every headless self-test
-in `tools/packaging/check_release.py` against the *exported binary*, not against
-the checkout. It has been run end to end on Windows and Linux, last on
-2026-09-02. What has never happened is a tag and a publish. See
-[PACKAGING.md](docs/PACKAGING.md).
+**Windows will warn you on first run.** These builds are not code-signed, so
+SmartScreen shows "Windows protected your PC" — click *More info → Run anyway*.
+That warning means the binary has no purchased certificate attached, not that
+anything is wrong with it. See
+[PACKAGING.md](docs/PACKAGING.md#code-signing--not-signed-and-the-download-page-says-so)
+for why this project does not buy one.
 
-When the first tagged release lands, the block below becomes true and this
-heading comes off:
+### Or build it from source
 
-> Grab the archive for your platform from Releases, extract it, and run
-> `FactoryForge`. **No Godot, no .NET SDK and no Python needed** — the sidecar
-> that speaks every PLC protocol ships frozen alongside the engine, and F5's
-> *Apply & Connect* finds it automatically.
->
-> **Windows will warn you on first run.** These builds are not code-signed, so
-> SmartScreen shows "Windows protected your PC" — click *More info → Run
-> anyway*. That warning means the binary has no purchased certificate attached,
-> not that anything is wrong with it. See
-> [PACKAGING.md](docs/PACKAGING.md#code-signing--not-signed-and-the-download-page-says-so)
-> for why this project does not buy one.
+Everything below builds it yourself, the same path
+[GETTING_STARTED.md](docs/GETTING_STARTED.md) walks in detail. You need Godot
+4.7 mono, the .NET 8 SDK and Python 3.11+.
 
 ### 1. Installation
 
