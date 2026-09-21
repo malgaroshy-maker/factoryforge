@@ -57,7 +57,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 
 ---
 
-## 📦 35-Part Industrial Component Library
+## 📦 38-Part Industrial Component Library
 
 The tag ids below are the built-in scene's names. **A part's Name is its tag
 prefix** — rename a pusher to `reject` in the property panel and its tags become
@@ -101,6 +101,9 @@ rule, and it is what makes a scene you build addressable from a PLC.
 | **Double-Acting Cylinder** | Two coils on a 5/2 valve with no spring return, and two reeds with a genuine gap between them — so mid-stroke **neither** is made. Dropping both coils leaves the rod coasting where it was going, because a spool without a spring stays where it was put | `cyl.extend`, `cyl.retract` (Bit, Output) · `cyl.extended`, `cyl.retracted`, `cyl.fault` (Bit, Input) |
 | **Dosing Pump** | Gives the tank an *inflow* it does not own, which is what makes cascade control possible: a fast flow loop inside a slow level loop. The speed reference ramps, so commanded and delivered flow genuinely disagree while it gets there | `pump.run`, `pump.speed` (Float, Output) · `pump.flow` (Float), `pump.fault` (Bit, Input) |
 | **Flow Meter** | A rate and a resettable totaliser — a process variable and a batch counter in one part. The reset is a **level**, not an edge, so a program that pulses it clears nothing. Ending a batch on the total rather than on a timer is the lesson: halve the flow and the litres stay the same | `meter.reset` (Bit, Output) · `meter.rate` (Float), `meter.total` (Int, Input) |
+| **Articulated Arm** | Joint angles, not a tip target — the gantry already takes one of those, and an arm that did too would teach pick-and-place twice and hide the nonlinearity. A command past a stop is *refused* rather than clamped silently; the tool travels arcs, not chords (176 mm off the chord on a two-joint move); and radial authority collapses at full stretch — 7.0 mm of reach per degree of elbow at 90°, 0.061 mm at full extension, a factor of 115 | `arm.waist`, `arm.shoulder`, `arm.elbow` (Float, Output) · `arm.grip` (Bit, Output) · `arm.atwaist`, `arm.atshoulder`, `arm.atelbow`, `arm.reach`, `arm.height`, `arm.stretch` (Float) · `arm.inposition`, `arm.limit`, `arm.holding`, `arm.fault` (Bit, Input) |
+| **Pallet Station** | A pattern generator rather than a robot, so it composes with the gantry, the arm or a plain pusher: it publishes where the *next* carton goes and counts what has landed. Indexing through a layer, a quarter-turn interlock between layers, and a pallet that fills and then refuses while still holding its published position | `pallet.index`, `pallet.change` (Bit, Output) · `pallet.nextx`, `pallet.nexty`, `pallet.nextz` (Float) · `pallet.slot`, `pallet.layer`, `pallet.count` (Int) · `pallet.layerdone`, `pallet.full` (Bit, Input) |
+| **Vertical Lift** | Height as a routing dimension — everything else in the library lives on one plane. Mutual exclusion is enforced by the machine, not by the program: a blade across the infeed mouth is down only while the carriage is at that level, empty and healthy, so a second carton is physically held on a belt that keeps running | `lift.target` (Int, Output) · `lift.transfer` (Bit, Output) · `lift.level` (Int) · `lift.height` (Float) · `lift.atlevel`, `lift.occupied`, `lift.ready`, `lift.fault` (Bit, Input) |
 
 ---
 

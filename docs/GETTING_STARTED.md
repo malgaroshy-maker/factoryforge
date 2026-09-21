@@ -82,6 +82,7 @@ The templates each teach one thing:
 | **Heat treat station** | A thermal plant with real inertia — proportional control alone visibly parks short of setpoint, and you can measure by how much |
 | **Guarded cell** | The guarding chain, and the first scene where the controller does not command the motor: your program energises a contactor coil and the contactor runs the belt. A dual-channel safety relay and an area scanner whose muting expires decide whether the coil may be energised at all — a permissive is not a command, and closing the relay must start nothing |
 | **Batch dosing** | A cascade: an outer loop watching a totaliser sets the setpoint of an inner loop trimming a pump. The batch ends on a quantity rather than a timer, which is why the same recipe takes twice as long at half the flow and still delivers the same litres |
+| **Palletising cell** | An arm placing cartons onto a pattern the pallet station generates, layer by layer. The program does the inverse kinematics; the station says where the next one goes and counts what landed. Teaches multi-axis coordination against a pattern rather than against a fixed position |
 
 To skip the start screen — scripting a run, or grabbing a screenshot:
 

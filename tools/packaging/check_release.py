@@ -39,7 +39,7 @@ SELF_TESTS = [
     # Behaviour of the six control parts, and the editor key contract.
     # `partcontract` is deliberately absent: it scans .cs sources, which a
     # .pck does not contain, so here it would skip forever and look green.
-    "controlparts", "editorkeys",
+    "controlparts", "editorkeys", "handlingparts",
 ]
 
 

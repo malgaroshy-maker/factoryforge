@@ -511,6 +511,14 @@ def section_c() -> None:
     # keeps finding. It belongs here, where the source exists.
     _self_test("C31", "the editor still names no part type (HP-34 has not decayed)", "partcontract")
 
+    # The three handling parts, asserted by geometry rather than by tags: an
+    # arm that refuses a command past its stop, a tool that travels an arc
+    # instead of a chord, reach authority collapsing at full stretch, a pallet
+    # that fills and then refuses, and a lift whose entry blade is down only
+    # while the carriage is there to catch a carton.
+    _self_test("C32", "the arm, the pallet station and the lift do what their geometry claims",
+               "handlingparts")
+
 
 def section_d(enabled: bool) -> None:
     print("\nD. Engine self-tests (need a display)")
