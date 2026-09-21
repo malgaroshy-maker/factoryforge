@@ -154,6 +154,27 @@ def parse_observe(msg: dict) -> tuple[dict[str, Any], list[str]]:
     return forced, cleared
 
 
+def parse_epoch(msg: dict) -> int:
+    """The `epoch` a `write` or `force` is stamped with. Must be an integer.
+
+    The epoch stamp is the engine's only defence against a frame in flight
+    across a scene change, so a frame that does not carry a usable one is not a
+    frame the engine can act on -- it cannot tell current from stale. It draws
+    `bad_message` rather than being dropped in silence, and this is where the
+    two engines used to part company three ways: C# threw out of
+    `GetValue<int>()` into its catch-all, Python dropped a string epoch
+    silently, and Python *applied* a fractional one because `3.0 == 3`. An
+    epoch that is an integer but not the current one is a different thing
+    entirely and is still dropped without comment. See HP-19.
+    """
+    epoch = msg.get("epoch")
+    # bool is an int subclass in Python, and `"epoch": true` is not an epoch.
+    if isinstance(epoch, bool) or not isinstance(epoch, int):
+        raise ProtocolError(
+            f"{msg.get('t')}: epoch must be an integer, got {epoch!r}")
+    return epoch
+
+
 def parse_values(msg: dict) -> dict[str, Any]:
     values = msg.get("values", {})
     if not isinstance(values, dict):

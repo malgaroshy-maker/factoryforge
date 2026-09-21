@@ -141,6 +141,12 @@ class Driver(abc.ABC):
           than the epoch they would be stamped with. That is why re-reading
           before returning is part of the contract rather than an optimisation
           -- it is what puts the current value back on the bus.
+
+        The bus client closes that gate the moment a `describe` arrives, not
+        when your `rebuild` starts, and the two are no longer the same instant:
+        hook dispatch runs on its own task, so a driver still inside `push()`
+        is holding the previous epoch's map just as surely as one that has not
+        rebuilt yet. Writes queued from anywhere in that window are discarded.
         """
 
     async def push(self, values: dict[str, TagValue]) -> None:

@@ -253,7 +253,253 @@ async def test_a_write_during_a_rebuild_does_not_get_the_new_epoch(engine, bus, 
                  what="writes resuming after the rebuild")
 
 
+async def test_a_rebuild_behind_a_stalled_push_still_discards_the_writes(
+        engine, bus, mock):
+    """HP-33's ownership, under the dispatch task that was predicted to make
+    its window the ordinary case rather than a two-hook curiosity.
+
+    a01665a reproduced the race with a bare describe hook and settled who owns
+    what in `Driver.rebuild`: the driver owns cancellation of its own data flow,
+    the bus client owns the epoch and holds writes back until every hook has
+    returned from `rebuild`. d3b6145 then moved hook dispatch off the receive
+    loop, which is the change that was expected to make the window routine.
+
+    So this drives it through a real `Driver` -- the class that carries the
+    contract -- and through the harder ordering: the scene changes while the
+    driver is wedged *inside push()*, so the describe lands with the dispatcher
+    unable to reach it. The gate has to close when the frame arrives, not when
+    the dispatcher gets round to the rebuild, or every write in between is
+    stamped with an epoch the driver's address map does not belong to.
+    """
+    from factoryforge_sidecar.drivers import Driver
+
+    order: list[tuple[str, str]] = []
+    pushing = asyncio.Event()
+    release_push = asyncio.Event()
+    rebuilding = asyncio.Event()
+    release_rebuild = asyncio.Event()
+
+    class Slow(Driver):
+        """A driver whose PLC is slow in the two places that matter."""
+
+        def __init__(self, bus_client) -> None:
+            self.rebuilds = 0
+            super().__init__(bus_client)
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def rebuild(self, scene, epoch, table) -> None:
+            self.rebuilds += 1
+            order.append(("rebuild", "in"))
+            if self.rebuilds > 1:      # the first is the registration replay
+                rebuilding.set()
+                await release_rebuild.wait()
+            order.append(("rebuild", "out"))
+
+        async def push(self, values) -> None:
+            order.append(("push", "in"))
+            if not pushing.is_set():
+                pushing.set()
+                await release_push.wait()
+            order.append(("push", "out"))
+
+    driver = Slow(bus)
+    await _until(lambda: driver.rebuilds == 1, what="the registration replay")
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild finishing")
+
+    await bus.write("conveyor.rotate", False)
+    await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is False,
+                 what="a known starting value")
+
+    # Wedge the driver inside push(), where a real one is waiting on a PLC.
+    engine.scene.tags.force("sensor_high.detect", True)
+    await asyncio.wait_for(pushing.wait(), 2)
+
+    before = bus.epoch
+    await engine.send_describe()
+    await _until(lambda: bus.epoch > before, what="the describe reaching the client")
+    assert not bus.rebuilt.is_set(), (
+        "the epoch advanced while a driver was still holding the previous "
+        "epoch's address map, and writes were not held back")
+
+    # What a poller still working from the old map publishes in the window.
+    await bus.write("conveyor.rotate", True)
+    release_push.set()
+    await asyncio.wait_for(rebuilding.wait(), 2)
+    assert engine.scene.tags.visible("conveyor.rotate") is False, (
+        "a write derived from a map older than the current epoch reached the "
+        "engine")
+
+    release_rebuild.set()
+    await _until(lambda: bus.rebuilt.is_set(), what="the rebuild finishing")
+
+    # Discarded, not delivered late: the value comes back because rebuild
+    # re-read it, not because the queue drained.
+    assert engine.scene.tags.visible("conveyor.rotate") is False
+    await bus.write("conveyor.rotate", True)
+    await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is True,
+                 what="writes resuming after the rebuild")
+
+    # And the hooks never overlapped. The whole ownership split assumes a
+    # driver's own work is serialised -- a push running inside a rebuild would
+    # be a read through a map that is being replaced underneath it.
+    assert len(order) % 2 == 0, order
+    for i in range(0, len(order), 2):
+        assert order[i][1] == "in" and order[i + 1] == (order[i][0], "out"), order
+
+
 # --- HP-31: driver I/O must not run on the bus receive loop ---
+
+async def test_updates_coalesce_behind_a_slow_push(engine, bus, mock):
+    """HP-31's second claim: a driver that fell behind gets the current state.
+
+    Updates are deltas, so the merge of two of them is the message the engine
+    would have sent had it batched them -- and a driver half a second behind a
+    PLC wants that, not a queue of history it has to replay. This is the claim
+    d3b6145 made and did not check: its test proved a stalled driver does not
+    stall anything else, which is the *first* claim.
+
+    The wedge is an event rather than a long sleep. A `push` that takes hundreds
+    of milliseconds is exactly a `push` that has not returned yet, and an event
+    says so without anybody guessing how long to wait (gotcha 2).
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    seen: list[dict] = []
+
+    async def slow_push(values):
+        seen.append(dict(values))
+        if len(seen) == 1:
+            entered.set()
+            await release.wait()
+
+    bus.on_update(slow_push)
+    engine.scene.tags.force("sensor_high.detect", True)
+    await asyncio.wait_for(entered.wait(), 2)
+
+    # Two more input changes, on two separate engine ticks, while the hook is
+    # wedged. Waiting on the *cache* is what puts a tick between them: it is
+    # filled on the receive loop, so it moving proves the frame landed.
+    engine.scene.tags.force("sensor_low.detect", True)
+    await _until(lambda: bus.read("sensor_low.detect") is True,
+                 what="the first frame landing past the stalled driver")
+    engine.scene.tags.force("counter.tall", 7)
+    await _until(lambda: bus.read("counter.tall") == 7,
+                 what="the second frame landing past the stalled driver")
+
+    release.set()
+    await _until(lambda: len(seen) >= 2, what="the queued updates reaching the hook")
+    assert seen[1] == {"sensor_low.detect": True, "counter.tall": 7}, (
+        "two frames behind a busy hook must arrive as one merged delta")
+
+    # And nothing is trailing them: the queue holds current state, not history.
+    engine.scene.tags.force("counter.short", 3)
+    await _until(lambda: len(seen) >= 3, what="a later update reaching the hook")
+    assert seen[2] == {"counter.short": 3}
+    assert len(seen) == 3
+
+
+async def test_a_describe_behind_a_slow_push_stops_the_stale_updates(engine, bus, mock):
+    """A describe means the tag set those deltas were against is gone.
+
+    `_queue_describe` already empties the queue for that reason. What it could
+    not reach was an update *already being handed out* when the describe
+    arrived: the hooks after the slow one went on receiving deltas against a
+    scene nobody had any more. Every driver re-derives its map and re-reads the
+    PLC inside `rebuild`, so there is nothing in those values worth delivering
+    late -- and one of them naming a tag the new scene reuses is the whole
+    reason the epoch gate exists.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    later: list[dict] = []
+    calls = 0
+
+    async def slow_push(values):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+
+    async def behind_it(values):
+        later.append(dict(values))
+
+    bus.on_update(slow_push)
+    bus.on_update(behind_it)
+
+    engine.scene.tags.force("sensor_high.detect", True)
+    await asyncio.wait_for(entered.wait(), 2)
+
+    engine.scene.tags.force("sensor_low.detect", True)
+    await _until(lambda: bus.read("sensor_low.detect") is True,
+                 what="a second update queueing behind the stalled driver")
+    before = bus.epoch
+    await engine.send_describe()
+    await _until(lambda: bus.epoch > before, what="the describe reaching the client")
+
+    release.set()
+    await _until(lambda: bus.rebuilt.is_set(), what="the rebuild finishing")
+    assert later == [], (
+        f"a hook was handed {later} -- deltas against a tag set the describe "
+        f"has already replaced")
+
+    # The hook is not broken, only skipped: the next real change reaches it.
+    engine.scene.tags.force("counter.tall", 4)
+    await _until(lambda: later == [{"counter.tall": 4}],
+                 what="the next update after the rebuild")
+
+
+async def test_a_release_and_a_re_force_coalesce_in_the_order_they_arrived(
+        engine, bus, mock):
+    """Coalescing the observe channel has to respect arrival order.
+
+    `forced` and `cleared` were merged independently, so a tag forced, released
+    and forced again while a hook was busy arrived in *both* collections -- and
+    a hook applying the forced values and then the releases, which is the order
+    the engine sends them in and the order the client itself applies them, ends
+    up having released a pin that is still in effect. The client's own cache
+    never had the bug, because the receive loop applies each frame as it lands;
+    only the hooks saw it. Nothing subscribes to `observe` by default, which is
+    why it survived HP-31 unnoticed.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    seen: list[tuple[dict, list]] = []
+
+    async def slow_observe(forced, cleared):
+        seen.append((dict(forced), list(cleared)))
+        if len(seen) == 1:
+            entered.set()
+            await release.wait()
+
+    bus.on_observe(slow_observe)
+
+    engine.scene.tags.force("sensor_high.detect", True)
+    await asyncio.wait_for(entered.wait(), 2)
+
+    # Released and re-applied while the hook is wedged, each waited for on the
+    # cache so the two land on separate ticks -- a force and a release inside
+    # one tick correctly net out to nothing at all, both channels being deltas.
+    engine.scene.tags.clear_force("sensor_high.detect")
+    await _until(lambda: not bus.table.is_forced("sensor_high.detect"),
+                 what="the release reaching the client")
+    engine.scene.tags.force("sensor_high.detect", True)
+    await _until(lambda: bus.table.is_forced("sensor_high.detect"),
+                 what="the second force reaching the client")
+
+    release.set()
+    await _until(lambda: len(seen) >= 2, what="the coalesced observe reaching the hook")
+    forced, cleared = seen[1]
+    assert forced.get("sensor_high.detect") is True
+    assert "sensor_high.detect" not in cleared, (
+        "the tag is currently forced; reporting it as released in the same "
+        "breath leaves whoever applies both with the pin gone")
+
 
 async def test_a_stalled_driver_does_not_stall_the_bus(engine, bus, mock):
     """HP-31. The receive loop awaited every driver hook inline, so one slow

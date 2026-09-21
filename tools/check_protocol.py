@@ -21,6 +21,11 @@ module is the runner for it: `tests/test_tag_parity.py` imports
 `run_server_cases` and points it at `harness/engine_stub.py`, and this CLI
 points the identical cases at the C# engine. Two servers, one file, one runner.
 
+The fixture's lifecycle half — the greeting, what a second sidecar is told, a
+reconnect, and what a stale or malformed `epoch` gets — is choreography between
+two connections rather than a burst of frames down one, so those cases name a
+`scenario` and are run by `_SCENARIOS` below rather than by `_run_case`.
+
 Cases name tags by *role* (`@bit_output`, `@float_input`, ...) resolved from the
 engine's own describe, so the file runs against any scene -- and a case whose
 roles the scene does not declare is reported as skipped rather than silently
@@ -300,7 +305,12 @@ async def run_server_cases(url: str, timeout: float = 10.0,
         if missing:
             skipped.append(f"{case['name']} (no {', '.join(missing)} in this scene)")
             continue
-        problems += await _run_case(url, case, roles, initial, timeout, settle)
+        # Most cases are one connection and a few frames, and say so entirely in
+        # the fixture. The lifecycle ones are choreography between two
+        # connections -- who gets refused, what a reconnect is told, which epoch
+        # a frame is stamped with -- so they name a `scenario` here instead.
+        run = _SCENARIOS.get(case.get("scenario"), _run_case)
+        problems += await run(url, case, roles, initial, timeout, settle)
     return problems, skipped
 
 
@@ -442,6 +452,314 @@ def _same(got, want) -> bool:
         except (TypeError, ValueError):
             return False
     return got == want
+
+
+# --- lifecycle scenarios (HP-19, the half the last round deferred) ----------
+#
+# The first round of this fixture drew its boundary deliberately: the three
+# HP-18 divergences, force state, the non-finite values, and the two answers an
+# engine can give about a value it will not take -- and it left out lifecycle,
+# reconnect, epoch semantics and second-client rejection, because HP-31 and
+# HP-33 were about to reshape exactly those orderings and pinning them first
+# would have pinned the bug. Both have landed. These are the cases that were
+# waiting for them.
+#
+# They are choreography between two connections rather than a burst of frames
+# down one, so each names a `scenario` in the fixture instead of describing
+# itself in `write`/`force`/`expect_*` keys.
+
+
+async def _frames_until_closed(ws, seconds: float) -> tuple[list[dict], bool]:
+    """Everything *ws* says until the far end closes it, or *seconds* pass."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + seconds
+    frames: list[dict] = []
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return frames, False
+        try:
+            frames.append(json.loads(await asyncio.wait_for(ws.recv(), remaining)))
+        except asyncio.TimeoutError:
+            return frames, False
+        except websockets.exceptions.ConnectionClosed:
+            return frames, True
+        except (ValueError, websockets.exceptions.WebSocketException):
+            return frames, False
+
+
+def _drop_without_closing(ws) -> None:
+    """Yank the socket out from under the engine: no close frame, no goodbye.
+
+    This is what a crashed sidecar looks like from the engine's seat, and it is
+    a different event from the orderly close every other case performs.
+    """
+    ws.transport.abort()
+
+
+async def _greeting(url: str, case: dict, roles, initial, timeout: float,
+                    settle: float) -> list[str]:
+    """`hello` first, `describe` second, and each carrying exactly its fields.
+
+    `check()` above has always asserted this, but only from the CLI and only
+    against whichever engine the CLI was pointed at. Here it is a fixture case,
+    so the Python engine answers it in pytest too -- which is the whole point of
+    the file.
+    """
+    name = case["name"]
+    problems: list[str] = []
+    async with websockets.connect(url, max_queue=64) as ws:
+        hello = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if hello.get("t") != "hello":
+            return [f"{name}: the first frame was {hello.get('t')!r}, not 'hello'"]
+        if set(hello) != HELLO_FIELDS:
+            problems.append(f"{name}: hello fields {sorted(hello)} != {sorted(HELLO_FIELDS)}")
+        if hello.get("protocol") != 0:
+            problems.append(f"{name}: hello says protocol {hello.get('protocol')!r}, not 0")
+        tick = hello.get("tick_ms")
+        if not isinstance(tick, int) or isinstance(tick, bool) or tick <= 0:
+            problems.append(f"{name}: hello says tick_ms {tick!r}, which is not a tick")
+
+        describe = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if describe.get("t") != "describe":
+            return problems + [f"{name}: the second frame was {describe.get('t')!r}, "
+                               "not 'describe'"]
+        if set(describe) != DESCRIBE_FIELDS:
+            problems.append(f"{name}: describe fields {sorted(describe)} != "
+                            f"{sorted(DESCRIBE_FIELDS)}")
+        epoch = describe.get("epoch")
+        if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 1:
+            problems.append(f"{name}: the first describe carries epoch {epoch!r}; "
+                            "an epoch is a counter and starts at 1")
+        for tag in describe.get("tags", []):
+            extra = set(tag) - TAG_REQUIRED_FIELDS - TAG_OPTIONAL_FIELDS
+            missing = TAG_REQUIRED_FIELDS - set(tag)
+            if extra or missing:
+                problems.append(f"{name}: tag {tag.get('id')} fields off: "
+                                f"extra={extra} missing={missing}")
+                break
+    return problems
+
+
+async def _second_client(url: str, case: dict, roles, initial, timeout: float,
+                         settle: float) -> list[str]:
+    """What the *second* sidecar is told, and that the first one keeps its seat.
+
+    Only one sidecar may be connected: two drivers writing the same output tag
+    is a bug, not a feature. But "refused" has to mean the same thing on both
+    engines. The C# server used to tear the TCP connection down before the
+    websocket handshake finished, so the second sidecar got "did not receive a
+    valid HTTP response" and no reason at all, while engine_stub answered with
+    a status naming it.
+    """
+    name = case["name"]
+    problems: list[str] = []
+    async with websockets.connect(url, max_queue=64) as first:
+        hello, describe = await _greet(first, timeout)
+        epoch = describe["epoch"]
+
+        try:
+            second = await websockets.connect(url, max_queue=64, open_timeout=timeout)
+        except (OSError, asyncio.TimeoutError,
+                websockets.exceptions.WebSocketException) as exc:
+            problems.append(
+                f"{name}: the second connection was refused at the socket "
+                f"({type(exc).__name__}: {exc}) -- it must be accepted and "
+                f"answered with a status saying why, or the sidecar cannot tell "
+                f"'another driver has it' from 'the engine is not there'")
+            second = None
+
+        if second is not None:
+            try:
+                frames, closed = await _frames_until_closed(second, settle)
+            finally:
+                await second.close()
+            if not frames:
+                problems.append(f"{name}: the second sidecar was told nothing at all")
+            else:
+                answer = frames[0]
+                if answer.get("t") != "status":
+                    problems.append(f"{name}: the second sidecar was answered with "
+                                    f"{answer.get('t')!r}, not a status")
+                else:
+                    if answer.get("code") != "already_connected":
+                        problems.append(f"{name}: the refusal carries code "
+                                        f"{answer.get('code')!r}, not 'already_connected'")
+                    if answer.get("level") != "error":
+                        problems.append(f"{name}: the refusal is level "
+                                        f"{answer.get('level')!r}, not 'error'")
+            seen = [f.get("t") for f in frames]
+            if "describe" in seen or "hello" in seen:
+                problems.append(f"{name}: a refused sidecar was sent {seen} -- it must "
+                                f"not be given the tag set or an epoch to write against")
+            if not closed:
+                problems.append(f"{name}: the engine left the refused connection open")
+
+        # And the sidecar that was there first is untouched by any of it.
+        _, _, _, alive = await _burst(first, [], epoch, timeout, settle,
+                                      lambda *_: True)
+        if not alive:
+            problems.append(f"{name}: refusing a second sidecar cost the first one "
+                            f"its session")
+    return problems
+
+
+async def _abrupt_reconnect(url: str, case: dict, roles, initial, timeout: float,
+                            settle: float) -> list[str]:
+    """A sidecar that vanished must not lock the next one out.
+
+    The orderly close every other case performs is the easy half: the engine is
+    told. A crash is not, and the engine's idea of who is connected is only ever
+    as fresh as its last poll -- so a reconnect arriving in the same breath as
+    the drop was refused as a second sidecar, at the socket, with no status and
+    no explanation. Measured before the fix: 15 of 15.
+    """
+    name = case["name"]
+    problems: list[str] = []
+    ws = await websockets.connect(url, max_queue=64)
+    try:
+        await _greet(ws, timeout)
+    finally:
+        _drop_without_closing(ws)
+
+    try:
+        async with websockets.connect(url, max_queue=64, open_timeout=timeout) as ws2:
+            first = json.loads(await asyncio.wait_for(ws2.recv(), timeout))
+            if first.get("t") != "hello":
+                problems.append(
+                    f"{name}: the reconnect was answered with {first.get('t')!r}"
+                    f"/{first.get('code')!r} rather than a fresh hello")
+            else:
+                describe = json.loads(await asyncio.wait_for(ws2.recv(), timeout))
+                if describe.get("t") != "describe":
+                    problems.append(f"{name}: the reconnect was not re-described "
+                                    f"({describe.get('t')!r} followed hello)")
+    except (OSError, asyncio.TimeoutError,
+            websockets.exceptions.WebSocketException) as exc:
+        problems.append(
+            f"{name}: the engine refused the reconnect ({type(exc).__name__}: {exc}) "
+            f"-- a sidecar that died without closing still holds the seat")
+    return problems
+
+
+async def _reconnect(url: str, case: dict, roles, initial, timeout: float,
+                     settle: float) -> list[str]:
+    """Reconnecting re-describes: same tags, a fresh epoch, the values kept.
+
+    The engine is the authority and a sidecar coming back has to be handed the
+    truth, not a blank table: whatever the last controller wrote is still what
+    the machine is doing.
+    """
+    name = case["name"]
+    problems: list[str] = []
+    target = roles["bit_output"]
+    want = not bool(initial[target]["value"])
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        _, first = await _greet(ws, timeout)
+        epoch = first["epoch"]
+        ids = [t["id"] for t in first["tags"]]
+        await _burst(ws, [json.dumps({"t": "write", "epoch": epoch,
+                                      "values": {target: want}})],
+                     epoch, timeout, settle, lambda *_: True)
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        hello, again = await _greet(ws, timeout)
+        if hello.get("t") != "hello":
+            problems.append(f"{name}: the reconnect opened with {hello.get('t')!r}, "
+                            f"not a fresh hello")
+        if again["epoch"] <= epoch:
+            problems.append(f"{name}: the reconnect was described with epoch "
+                            f"{again['epoch']}, which does not follow {epoch} -- "
+                            f"every describe bumps it")
+        if [t["id"] for t in again["tags"]] != ids:
+            problems.append(f"{name}: the tag set changed across a reconnect")
+        table = {t["id"]: t for t in again["tags"]}
+        got = table.get(target, {}).get("value", _MISSING)
+        if not _same(got, want):
+            problems.append(f"{name}: {target} reads {got!r} after reconnecting, "
+                            f"not the {want!r} the previous session wrote")
+
+    await _restore(url, timeout, {target: initial[target]["value"]}, [])
+    return problems
+
+
+async def _stale_epoch(url: str, case: dict, roles, initial, timeout: float,
+                       settle: float) -> list[str]:
+    """A frame stamped with the epoch from before the last describe.
+
+    A reconnect is a re-describe, and a re-describe is a rebuild as far as the
+    epoch is concerned -- so this drives the real thing over the wire rather
+    than simulating it. The same frame is then sent again with the epoch this
+    connection was actually given: without that half, a case would pass just as
+    happily against an engine that had stopped accepting anything at all.
+    """
+    name = case["name"]
+    kind = case.get("frame", "write")
+    problems: list[str] = []
+    target = roles["bit_output"]
+    base = bool(initial[target]["value"])
+    other = not base
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        _, first = await _greet(ws, timeout)
+        old = first["epoch"]
+        await _burst(ws, [json.dumps({"t": "write", "epoch": old,
+                                      "values": {target: base}})],
+                     old, timeout, settle, lambda *_: True)
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        _, again = await _greet(ws, timeout)
+        new = again["epoch"]
+        if new <= old:
+            problems.append(f"{name}: the epoch went {old} -> {new} across a "
+                            f"describe; it has to advance")
+        _, forced, _, alive = await _burst(
+            ws, [json.dumps({"t": kind, "epoch": old, "values": {target: other}})],
+            new, timeout, settle, lambda *_: True)
+        if not alive:
+            problems.append(f"{name}: the engine stopped answering after a {kind} "
+                            f"carrying a stale epoch")
+        if target in forced:
+            problems.append(f"{name}: a {kind} carrying a stale epoch was reported on "
+                            f"the observe channel as {target}={forced[target]!r}")
+
+    _, _, table = await _read_table(url, timeout)
+    got = table.get(target, {}).get("value", _MISSING)
+    if not _same(got, base):
+        problems.append(f"{name}: {target} reads {got!r} -- a {kind} stamped with the "
+                        f"epoch from before the last describe landed anyway")
+    if table.get(target, {}).get("forced"):
+        problems.append(f"{name}: {target} is pinned -- a {kind} stamped with the "
+                        f"epoch from before the last describe landed anyway")
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        _, now = await _greet(ws, timeout)
+        current = now["epoch"]
+        await _burst(ws, [json.dumps({"t": kind, "epoch": current,
+                                      "values": {target: other}})],
+                     current, timeout, settle, lambda *_: True)
+    _, _, table = await _read_table(url, timeout)
+    got = table.get(target, {}).get("value", _MISSING)
+    if not _same(got, other):
+        problems.append(f"{name}: the same {kind} stamped with the current epoch did "
+                        f"not land either ({target} reads {got!r}), so the engine is "
+                        f"refusing everything and the case above proves nothing")
+
+    await _restore(url, timeout, {target: initial[target]["value"]},
+                   [target] if kind == "force" else [])
+    return problems
+
+
+#: `scenario` in the fixture -> the runner for it. A case without one is the
+#: ordinary declarative kind and goes to `_run_case`.
+_SCENARIOS = {
+    "greeting": _greeting,
+    "second_client": _second_client,
+    "abrupt_reconnect": _abrupt_reconnect,
+    "reconnect": _reconnect,
+    "stale_epoch": _stale_epoch,
+}
 
 
 def main() -> int:
