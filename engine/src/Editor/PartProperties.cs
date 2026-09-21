@@ -45,6 +45,15 @@ public static class PartProperties
             p["size_x"] = N(belt.Size.X);
             p["size_y"] = N(belt.Size.Y);
             p["size_z"] = N(belt.Size.Z);
+
+            // Which way the surface drives. It is read by the belt and never
+            // recomputed, so it is configuration by the rule above — and it was
+            // the one belt setting a save did not carry, which meant a belt
+            // built to run backwards came back running forwards, in a line whose
+            // geometry gave no hint that anything had changed (HP-06).
+            p["dir_x"] = N(belt.Direction.X);
+            p["dir_y"] = N(belt.Direction.Y);
+            p["dir_z"] = N(belt.Direction.Z);
         }
 
         switch (node)
@@ -63,10 +72,28 @@ public static class PartProperties
                 p["visual_only"] = N(pusher.VisualOnly);
                 break;
 
+            // Before the ConveyorBelt-derived cases below would matter: a roller
+            // conveyor is a ConveyorBelt subclass, so the belt block above has
+            // already carried its speed, friction and size. This is the setting
+            // that makes it a *roller* bed -- and the roller geometry is rebuilt
+            // from it in _Ready, so losing it changed what the part looked like
+            // as well as how it behaved.
+            case RollerConveyor roller:
+                p["roller_spacing"] = N(roller.RollerSpacing);
+                break;
+
             case Chute chute:
                 p["incline"] = N(chute.InclineAngleDegrees);
                 p["friction"] = N(chute.SurfaceFriction);
                 p["ramp_length"] = N(chute.RampLength);
+                // The rest of the chute's shape. Width and thickness are the
+                // deck itself; the lip is where a carton leaves the belt, and
+                // it is the setting people reach for when cartons catch on the
+                // transfer -- exactly the tuning a reload should not undo.
+                p["ramp_width"] = N(chute.RampWidth);
+                p["ramp_thickness"] = N(chute.RampThickness);
+                p["lip_setback"] = N(chute.LipSetback);
+                p["lip_drop"] = N(chute.LipDrop);
                 break;
 
             case LevelTank tank:
@@ -83,6 +110,11 @@ public static class PartProperties
 
             case Emitter emitter:
                 p["metal_every"] = N(emitter.MetalEvery);
+                // How far above the belt a carton is released. Two millimetres
+                // by default, and the number somebody changes when cartons bounce
+                // or clip on spawn -- a fix that silently reverted on every
+                // reload.
+                p["drop_clearance"] = N(emitter.DropClearance);
                 break;
 
             case Remover remover:
@@ -219,6 +251,9 @@ public static class PartProperties
             if (Num(props, "size_x") is { } sx && Num(props, "size_y") is { } sy
                                                && Num(props, "size_z") is { } sz)
                 belt.Size = new Vector3(sx, sy, sz);
+            if (Num(props, "dir_x") is { } dx && Num(props, "dir_y") is { } dy
+                                              && Num(props, "dir_z") is { } dz)
+                belt.Direction = new Vector3(dx, dy, dz);
         }
 
         switch (node)
@@ -239,10 +274,21 @@ public static class PartProperties
                 if (Bool(props, "visual_only") is { } pv) pusher.VisualOnly = pv;
                 break;
 
+            // Before anything matching its ConveyorBelt base, for the same
+            // reason as in Capture.
+            case RollerConveyor roller:
+                if (Num(props, "roller_spacing") is { } spacing) roller.RollerSpacing = spacing;
+                break;
+
             case Chute chute:
                 if (Num(props, "incline") is { } incline) chute.InclineAngleDegrees = incline;
                 if (Num(props, "friction") is { } cfriction) chute.SurfaceFriction = cfriction;
                 if (Num(props, "ramp_length") is { } ramp) chute.RampLength = ramp;
+                if (Num(props, "ramp_width") is { } rampWidth) chute.RampWidth = rampWidth;
+                if (Num(props, "ramp_thickness") is { } rampThickness)
+                    chute.RampThickness = rampThickness;
+                if (Num(props, "lip_setback") is { } lipSetback) chute.LipSetback = lipSetback;
+                if (Num(props, "lip_drop") is { } lipDrop) chute.LipDrop = lipDrop;
                 break;
 
             case LevelTank tank:
@@ -259,6 +305,8 @@ public static class PartProperties
 
             case Emitter emitter:
                 if (Num(props, "metal_every") is { } metal) emitter.MetalEvery = (int)metal;
+                if (Num(props, "drop_clearance") is { } clearance)
+                    emitter.DropClearance = clearance;
                 break;
 
             case Remover remover:

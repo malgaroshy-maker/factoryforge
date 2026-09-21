@@ -107,6 +107,13 @@ public partial class SceneSelfTest : Node
                 case "WeighingConveyor":
                     props["speed"] = "0.77";
                     props["friction"] = "0.66";
+                    // A belt driving the other way. Nothing about the geometry
+                    // shows it, which is why losing it on a reload was invisible
+                    // (HP-06).
+                    props["dir_x"] = "-1";
+                    props["dir_y"] = "0";
+                    props["dir_z"] = "0";
+                    if (AllTypes[i] == "RollerConveyor") props["roller_spacing"] = "0.19";
                     break;
                 case "PhotoelectricSensor":
                 case "RetroreflectiveSensor":
@@ -124,6 +131,10 @@ public partial class SceneSelfTest : Node
                 case "Chute":
                     props["incline"] = "37";
                     props["friction"] = "0.11";
+                    props["ramp_width"] = "0.71";
+                    props["ramp_thickness"] = "0.043";
+                    props["lip_setback"] = "0.31";
+                    props["lip_drop"] = "0.027";
                     break;
                 case "LevelTank":
                     props["fill_rate"] = "22";
@@ -135,6 +146,7 @@ public partial class SceneSelfTest : Node
                     break;
                 case "Emitter":
                     props["metal_every"] = "4";
+                    props["drop_clearance"] = "0.031";
                     break;
                 case "Remover":
                     props["count_tag"] = "counter.tall";
@@ -272,6 +284,10 @@ public partial class SceneSelfTest : Node
                 case "WeighingConveyor":
                     ExpectNear(props, "speed", 0.77f, part.Type);
                     ExpectNear(props, "friction", 0.66f, part.Type);
+                    ExpectNear(props, "dir_x", -1.0f, part.Type);
+                    ExpectNear(props, "dir_z", 0.0f, part.Type);
+                    if (part.Type == "RollerConveyor")
+                        ExpectNear(props, "roller_spacing", 0.19f, part.Type);
                     break;
                 case "PhotoelectricSensor":
                 case "RetroreflectiveSensor":
@@ -291,6 +307,10 @@ public partial class SceneSelfTest : Node
                 case "Chute":
                     ExpectNear(props, "incline", 37.0f, part.Type);
                     ExpectNear(props, "friction", 0.11f, part.Type);
+                    ExpectNear(props, "ramp_width", 0.71f, part.Type);
+                    ExpectNear(props, "ramp_thickness", 0.043f, part.Type);
+                    ExpectNear(props, "lip_setback", 0.31f, part.Type);
+                    ExpectNear(props, "lip_drop", 0.027f, part.Type);
                     break;
                 case "LevelTank":
                     ExpectNear(props, "fill_rate", 22.0f, part.Type);
@@ -302,6 +322,7 @@ public partial class SceneSelfTest : Node
                     break;
                 case "Emitter":
                     ExpectNear(props, "metal_every", 4.0f, part.Type);
+                    ExpectNear(props, "drop_clearance", 0.031f, part.Type);
                     break;
                 case "Remover":
                     Expect(props.GetValueOrDefault("count_tag") == "counter.tall",
