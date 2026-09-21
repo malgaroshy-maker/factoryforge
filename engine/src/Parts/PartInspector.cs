@@ -1,4 +1,5 @@
 using System;
+using FactoryForge.TagBus;
 
 namespace FactoryForge.Parts;
 
@@ -29,14 +30,25 @@ public interface IPartInspector
     void Text(string label, string value, int maxLength, Action<string> onChanged);
 
     /// <summary>
-    /// A dropdown of the int input tags the scene actually has, for a setting
-    /// that wires this part to a tag somewhere else.
+    /// A dropdown of the tags in the scene that a setting could legitimately
+    /// point at, for a setting that wires this part to another machine.
     ///
-    /// Never a free-text field: the value is published through
-    /// <c>TagTable.TrySet</c>, which ignores an id nothing owns, so a typo would
-    /// be a silent no-op — a new one, in the panel built to remove them.
+    /// Never a free-text field: a tag id that matches nothing is a wire to
+    /// nowhere, and every one of the things that read one of these — a count
+    /// published through <c>TagTable.TrySet</c>, a channel a safety relay
+    /// watches, a motor a starter powers — ignores an id nothing owns. A typo
+    /// would be a silent no-op, which is the failure the picker exists to
+    /// remove rather than to introduce.
     /// </summary>
     /// <param name="ownTagId">The part's own tag, offered first and meaning
-    /// "count into myself".</param>
-    void TagPicker(string label, string current, string ownTagId, Action<string> onChanged);
+    /// "myself". Empty when the setting has no such option, in which case the
+    /// list opens with "(none)" — a wire that is not connected is a real and
+    /// often correct answer.</param>
+    /// <param name="type">Which tag type this setting can point at.</param>
+    /// <param name="kind">Which direction. A starter powers an <em>output</em>
+    /// (the machine's own command); a safety relay watches an <em>input</em>
+    /// (a contact something else publishes). Offering the wrong half of the
+    /// table is how a picker becomes a list to hunt through.</param>
+    void TagPicker(string label, string current, string ownTagId, TagType type, TagKind kind,
+                   Action<string> onChanged);
 }

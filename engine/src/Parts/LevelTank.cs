@@ -251,12 +251,42 @@ public partial class LevelTank : Node3D, IPart
         _heldFill = fill;
         _heldDrain = drain;
 
-        float inflow = FillRate * (fill / 100.0f);
+        // Whatever a pump has offered this tick, converted from litres per
+        // second using this tank's own capacity -- the pump knows what it is
+        // delivering and not what it is delivering into. Consumed and zeroed,
+        // so a pump that stops offering stops filling on the next tick and not
+        // whenever somebody remembers to clear a flag.
+        //
+        // The capacity is floored rather than trusted: a scene file can carry a
+        // zero, and an infinite level would be rejected by the tag table with a
+        // throw inside the tick, which is the hardest place to read one.
+        float pumped = _offeredInflow / Mathf.Max(CapacityLitres, 0.01f) * 100.0f;
+        _offeredInflow = 0.0f;
+
+        float inflow = FillRate * (fill / 100.0f) + pumped;
         float outflow = DrainRate * (drain / 100.0f) * Mathf.Sqrt(Mathf.Max(Level, 0.0f) / 100.0f);
 
         Level = Mathf.Clamp(Level + (inflow - outflow) * delta, 0.0f, 100.0f);
         ApplyLevel();
     }
+
+    /// <summary>Litres per second offered by pumps this tick, before the tank
+    /// turns them into a percentage of its own capacity.</summary>
+    private float _offeredInflow;
+
+    /// <summary>
+    /// Offer flow into this tank for this tick, in litres per second.
+    ///
+    /// Accumulated rather than applied, and consumed by <see cref="Step"/>, for
+    /// the reason <see cref="HeatingStation.AddCooling"/> gives: parts are
+    /// dispatched in placement order, so a pump placed before its tank would
+    /// land on one side of the integration and a pump placed after it on the
+    /// other, and the plant would behave differently depending on the order
+    /// somebody clicked. Adding rather than assigning also means two pumps fill
+    /// twice, which is what two pumps do.
+    /// </summary>
+    public void AddInflow(float litresPerSecond) =>
+        _offeredInflow += Mathf.Max(litresPerSecond, 0.0f);
 
     public void ResetLevel()
     {

@@ -117,7 +117,7 @@ public partial class Remover : Area3D, IPart
     public void DescribeControls(IPartInspector ui)
     {
         string own = $"{ui.InstanceId}.count";
-        ui.TagPicker("Counts into", CountTagOr(ui.InstanceId), own,
+        ui.TagPicker("Counts into", CountTagOr(ui.InstanceId), own, TagType.Int, TagKind.Input,
                      chosen => CountTag = chosen == own ? "" : chosen);
     }
 

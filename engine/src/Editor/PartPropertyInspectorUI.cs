@@ -517,7 +517,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
     /// them (LE-04).
     /// </summary>
     void IPartInspector.TagPicker(string label, string current, string ownTagId,
-                                  Action<string> onChanged)
+                                  TagType type, TagKind kind, Action<string> onChanged)
     {
         var tags = Editor?.Tags;
         if (tags is null) return;
@@ -525,8 +525,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
         var options = new List<string> { ownTagId };
         foreach (var tag in tags)
         {
-            if (tag.Type == TagType.Int && tag.Kind == TagKind.Input && tag.Id != ownTagId)
-                options.Add(tag.Id);
+            if (tag.Type == type && tag.Kind == kind && tag.Id != ownTagId) options.Add(tag.Id);
         }
 
         // A scene file can point a part at a tag that no longer exists. Show it
@@ -553,7 +552,9 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
         };
         for (int i = 0; i < options.Count; i++)
         {
-            picker.AddItem(options[i] == ownTagId ? $"{ownTagId} (own)" : options[i], i);
+            string shown = options[i] != ownTagId ? options[i]
+                : ownTagId.Length == 0 ? "(none)" : $"{ownTagId} (own)";
+            picker.AddItem(shown, i);
             if (options[i] == current) picker.Selected = i;
         }
         picker.ItemSelected += index =>
