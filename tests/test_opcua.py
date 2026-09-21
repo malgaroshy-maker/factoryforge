@@ -143,6 +143,38 @@ async def test_unmapped_tags_are_reported_not_fatal(bus, fake_plc):
         await driver.stop()
 
 
+async def test_a_transient_read_error_does_not_strand_the_poller(
+        monkeypatch, engine, fake_plc, opcua_client):
+    """A failed read used to end `_poll_loop` for the rest of the run.
+
+    The reasoning was that the connect loop owns reconnection -- and it does,
+    but all it checks is whether the session is alive, and a session that
+    survived one failed read looks perfectly healthy to it. So one timeout
+    against a busy CPU took the driver silent, on a connection still reporting
+    good, with a scene that went on running and a PLC that went on being
+    ignored.
+    """
+    from asyncua import Client as AsyncuaClient
+
+    real_read = AsyncuaClient.read_values
+    refused = []
+
+    async def flaky(self, nodes):
+        if len(refused) < 3:
+            refused.append(1)
+            raise RuntimeError("BadTimeout")
+        return await real_read(self, nodes)
+
+    monkeypatch.setattr(AsyncuaClient, "read_values", flaky)
+    assert await _settle(lambda: len(refused) >= 3), "the poller stopped on the first error"
+
+    _, _, nodes = fake_plc
+    await nodes["conveyor.rotate"].write_value(
+        ua.DataValue(ua.Variant(True, ua.VariantType.Boolean)))
+    assert await _settle(lambda: engine.scene.tags.visible("conveyor.rotate")), \
+        "polling never resumed, and nothing said so"
+
+
 async def test_a_dropped_input_write_is_retried(monkeypatch, fake_plc, opcua_client):
     """A failed write used to be logged and discarded, which is not something
     the system recovers from on its own: the engine publishes *deltas*, so a

@@ -46,6 +46,10 @@ INPUT_RETRY_INTERVAL = 1.0
 #: than a dependency's default quietly applying.
 CONNECT_TIMEOUT = 10.0
 
+#: Consecutive failed polls before saying so on the bus. One is a blip; a run
+#: of them is something whoever is watching the scene should be told about.
+POLL_FAILURES_BEFORE_REPORTING = 20
+
 
 class _SubHandler:
     """Receives data changes for PLC-written (sim output) nodes."""
@@ -280,6 +284,7 @@ class OpcUaClientDriver(Driver):
         """
         ids = [tag_id for tag_id, _ in self._poll_nodes]
         nodes = [node for _, node in self._poll_nodes]
+        failures = 0
         while not self._stopping:
             await asyncio.sleep(self.poll_interval)
             client = self.client
@@ -290,9 +295,29 @@ class OpcUaClientDriver(Driver):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # Let the connect loop own reconnection; just stand down.
-                log.debug("poll read failed: %s", exc)
-                return
+                # Do not stand down. This used to `return`, which ended polling
+                # for the rest of the run. The reasoning was that the connect
+                # loop owns reconnection -- and it does, but all it ever checks
+                # is whether the *session* is alive, and a session that has
+                # survived one failed read looks perfectly healthy to it. So
+                # one timeout against a busy CPU took the driver silent, on a
+                # connection still reporting good, with a scene that went on
+                # running and a PLC that went on being ignored.
+                failures += 1
+                if failures == 1:
+                    log.debug("poll read failed: %s", exc)
+                elif failures % POLL_FAILURES_BEFORE_REPORTING == 0:
+                    # A poller retrying forever in silence is its own kind of
+                    # lie. Say so, periodically, without flooding.
+                    await self._report(
+                        "warn", "plc_read_failed",
+                        f"{failures} consecutive failed reads from {self.url}: {exc}")
+                continue
+
+            if failures:
+                log.info("polling %s recovered after %d failed read(s)",
+                         self.url, failures)
+                failures = 0
 
             changed: dict[str, TagValue] = {}
             for tag_id, raw in zip(ids, values):
