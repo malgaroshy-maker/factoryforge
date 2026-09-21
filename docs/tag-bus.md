@@ -224,6 +224,25 @@ scenario, and matches what Factory I/O's own drivers achieve over TCP.
 Drivers run on their own asyncio tasks and must never block the bus. A driver that stalls gets
 its writes dropped, not the whole simulation.
 
+The sidecar enforces that rather than trusting it. Incoming frames are applied to the
+sidecar's cache on the receive loop and the driver hooks are run on a separate task, so a
+driver that takes half a second to write a PLC does not hold up the next `update`, the next
+`observe`, or the next `describe` — for itself or for anybody else. Updates that arrive while
+a hook is busy are coalesced: they are deltas, so the merge of two is the message the engine
+would have sent had it batched them, and a driver that has fallen behind wants the current
+state rather than a queue of history.
+
+### Epoch ownership
+
+The **driver** owns cancellation of its own data flow. Anything still reading through the
+previous epoch's address map must be stopped inside `rebuild`, before the new map goes in.
+
+The **sidecar** owns the epoch, and holds writes back until every driver has returned from
+`rebuild`. Writes queued in that window are **discarded**, not delivered late: they came out
+of a map older than the epoch they would be stamped with, and the epoch stamp is the engine's
+only defence against a write in flight across a scene change. `rebuild` re-reads the PLC
+before returning, which is what puts the current value back on the bus.
+
 ## Reference
 
 - Engine-side server: `harness/engine_stub.py` (Python reference implementation)

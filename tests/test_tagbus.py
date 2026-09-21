@@ -208,8 +208,8 @@ async def test_a_write_during_a_rebuild_does_not_get_the_new_epoch(engine, bus, 
 
     The blocking hook here is not a contrivance: it is what a second driver
     looks like while the first one's `rebuild` is awaiting the PLC, and what
-    any single driver looks like the moment hook dispatch moves off the receive
-    loop (HP-31).
+    any single driver looks like once HP-31 moves hook dispatch off the receive
+    loop.
     """
     await mock.set("conveyor.rotate", False)
     await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is False,
@@ -251,3 +251,37 @@ async def test_a_write_during_a_rebuild_does_not_get_the_new_epoch(engine, bus, 
     await bus.write("conveyor.rotate", True)
     await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is True,
                  what="writes resuming after the rebuild")
+
+
+# --- HP-31: driver I/O must not run on the bus receive loop ---
+
+async def test_a_stalled_driver_does_not_stall_the_bus(engine, bus, mock):
+    """HP-31. The receive loop awaited every driver hook inline, so one slow
+    PLC write held up the next sensor update *and* the next scene description
+    -- for everything, not just for the driver that was slow.
+    """
+    stuck = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_push(values):
+        stuck.set()
+        await release.wait()
+
+    bus.on_update(slow_push)
+    try:
+        engine.scene.tags.force("sensor_high.detect", True)
+        await asyncio.wait_for(stuck.wait(), 2)
+
+        # The driver is now wedged. Everything else must carry on: a second
+        # sensor change has to reach the table...
+        engine.scene.tags.force("sensor_low.detect", True)
+        await _until(lambda: bus.read("sensor_low.detect") is True,
+                     what="a sensor update arriving past a stalled driver")
+
+        # ...and so does a scene description.
+        before = bus.epoch
+        await engine.send_describe()
+        await _until(lambda: bus.epoch > before,
+                     what="a describe arriving past a stalled driver")
+    finally:
+        release.set()
