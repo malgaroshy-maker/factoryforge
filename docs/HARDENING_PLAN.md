@@ -1,6 +1,6 @@
 # FactoryForge — The Things That Break Before Anyone Sees Them
 
-**Status:** open — HP-01 … HP-52, none started.
+**Status:** HP-01 … HP-56. 25 done (the release gate bar HP-09), 31 open.
 **Revised:** 2026-09-20, after a second Codex pass over the first draft (Appendix C).
 **Started:** 2026-09-20, against `f597e27`.
 
@@ -585,6 +585,80 @@ or HP-31 will bake the race in.
 
 ---
 
+## Added by implementing it — HP-53 … HP-56
+
+Four findings that only appeared once the plan was being worked on in parallel.
+Three are the same defect wearing different clothes, and the plan had already
+named the family without noticing it had members here: **a fixed port is a
+shared resource, and a test that needs one cannot run twice at once.**
+
+**HP-53 — No fixed ports in anything a second run might also start** ✅ **done**
+*Files:* `tools/test_plan.py`, `tools/try_scene.py`, `tools/check_protocol.py`,
+`tools/check_force_types.py`, `tools/check_force_while_paused.py`,
+`tools/drive_engine.py`, `tools/live_driver.py`, `tests/test_opcua.py`.
+*Done when:* two runs of the Python suite, and two runs of the test plan, can
+execute simultaneously on one machine and both pass.
+*Verify:* run each twice at once and read both results.
+*Size:* M.
+
+The engine's bus port was 7411 in six places in `test_plan.py`, three more in
+the tools it invokes, and one in `try_scene.py`, which starts its own engine.
+`tests/test_opcua.py` pinned 48400 and 48410. All of it now comes from
+`FF_BUS_PORT` / `FF_BUS_URL`, defaulting to a free port the OS picks, with the
+old values as the fallback so nothing outside had to change.
+
+**The fix was proved by running two plans at once, and that experiment is the
+item's real content.** The first attempt still failed — but only at F2 and F3,
+on `[winerror 10048] only one usage of each socket address`, while every other
+check passed in both runs. The bus port was fixed; the *drivers'* listening
+ports, Modbus 502 and OPC UA 4841, were not. Reasoning about the change would
+have stopped at the bus and declared it done. Both now take a free port too.
+
+**HP-54 — A wait must be able to observe the thing it waits for** 
+*Files:* wherever an `until`/poll loop waits on another process's output.
+*Done when:* every such wait has a timeout and a liveness check on its target,
+and says which of the two ended it.
+*Verify:* kill the watched process and confirm the waiter exits and says so.
+*Size:* S.
+
+A poll loop waiting for a verification run to print a sentinel string ran for
+**52 minutes** during this work. The run it watched had been killed at step 4
+of 8, so the sentinel was never written and the condition could never become
+true. Nothing was broken and nothing was learned; the loop simply could not
+tell "not finished yet" from "never going to finish".
+
+That is gotcha 16 with a different subject — a check that cannot observe its own
+failure mode — and it is the same shape as HP-30's leaked `EngineProcess`, where
+a startup that never bound the port left a process nobody was waiting on.
+
+**HP-55 — CI must install `snap7`, or the Siemens suite measures its own fake** ✅ **done**
+*Files:* `.github/workflows/test-plan.yml`.
+*Done when:* CI installs `sidecar[dev,siemens]` and
+`test_the_fake_agrees_with_real_snap7` actually runs there.
+*Verify:* the B1 line reports one more passing test than it did.
+*Size:* S.
+
+HP-32's new Siemens tests assert byte offsets against a `FakeUtil` stand-in, and
+`tests/test_siemens.py:300` exists to check that fake against the real library —
+otherwise every offset assertion is measuring the fake against itself. It opens
+with `pytest.importorskip("snap7.util")`, and CI installed `sidecar[dev]`, so it
+has never run there. Found by chasing a one-test discrepancy: CI reported 137
+passing where Windows reported 138. `snap7` is a pure pip install and needs no
+Siemens software.
+
+**HP-56 — B1 should report skips, not just passes**
+*Files:* `tools/test_plan.py`.
+*Done when:* the B1 line names skipped tests as well as passed and failed ones.
+*Verify:* skip one deliberately and read the line.
+*Size:* S.
+
+`section_b` greps `(\d+) passed` and `(\d+) failed`. A skip is neither, so a
+test that silently stops running anywhere is invisible in the plan's own output
+— which is exactly how HP-55 hid. The count was accurate and incomplete, and
+"accurate and incomplete" is how a suite quietly shrinks.
+
+---
+
 ## Added by the second review — HP-47 … HP-52
 
 Six findings neither the first Codex pass nor this review caught. They are
@@ -1008,6 +1082,10 @@ Sizes below are the revised ones. **Gate** marks an item on the release gate.
 | HP-50 | A dropped simulator-input write must be retried | 3 | M | ● | open |
 | HP-51 | Honour the connect timeout AGENTS.md prescribes | 3 | S |  | open |
 | HP-52 | snap7 must stop repeating gotcha 19c's misdiagnosis | 3 | S |  | open |
+| HP-53 | No fixed ports in anything a second run might start | 3 | M |  | **done** |
+| HP-54 | A wait must be able to observe what it waits for | 3 | S |  | open |
+| HP-55 | CI must install snap7, or the Siemens suite tests its own fake | 6 | S |  | **done** |
+| HP-56 | B1 should report skips, not just passes | 6 | S |  | open |
 
 ## Appendix B — where the findings came from
 
