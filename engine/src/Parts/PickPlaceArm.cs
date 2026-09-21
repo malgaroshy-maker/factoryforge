@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -21,7 +22,7 @@ namespace FactoryForge.Parts;
 /// Local space: the origin is the centre of the gantry on the work plane. The
 /// carriage travels along X, 0 % at -<see cref="RailLength"/>/2.
 /// </summary>
-public partial class PickPlaceArm : Node3D
+public partial class PickPlaceArm : Node3D, IPart
 {
     [Export] public float RailLength { get; set; } = 1.60f;
 
@@ -387,4 +388,61 @@ public partial class PickPlaceArm : Node3D
         Target = 0.0f;
         ApplyMotion();
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Float("target", $"Gantry {tags.Index} Target (%)", TagKind.Output)
+        .Bit("lower", $"Gantry {tags.Index} Lower", TagKind.Output)
+        .Bit("grip", $"Gantry {tags.Index} Vacuum", TagKind.Output)
+        .Float("position", $"Gantry {tags.Index} Position (%)", TagKind.Input)
+        .Bit("inposition", $"Gantry {tags.Index} In Position", TagKind.Input, initial: true)
+        .Bit("lowered", $"Gantry {tags.Index} Lowered", TagKind.Input)
+        .Bit("raised", $"Gantry {tags.Index} Raised", TagKind.Input, initial: true)
+        .Bit("holding", $"Gantry {tags.Index} Holding", TagKind.Input)
+        .Bit("fault", $"Gantry {tags.Index} Drive Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("rail_length", RailLength);
+        settings.Put("travel_speed", TravelSpeed);
+        settings.Put("stroke", StrokeLength);
+        settings.Put("lower_speed", LowerSpeed);
+        settings.Put("tolerance", PositionTolerance);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("rail_length") is { } rail) RailLength = rail;
+        if (settings.Number("travel_speed") is { } travel) TravelSpeed = travel;
+        if (settings.Number("stroke") is { } stroke) StrokeLength = stroke;
+        if (settings.Number("lower_speed") is { } lower) LowerSpeed = lower;
+        if (settings.Number("tolerance") is { } tolerance) PositionTolerance = tolerance;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+
+        Step(tick.Number("target"), tick.Bit("lower"), tick.Bit("grip"), tick.Dt);
+
+        tick.Write("position", (double)AxisPosition);
+        tick.Write("inposition", InPosition);
+        tick.Write("lowered", IsLowered);
+        tick.Write("raised", IsRaised);
+        tick.Write("holding", IsHolding);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Travel Speed (%/s)", TravelSpeed, 5.0f, 200.0f, 5.0f,
+                  value => TravelSpeed = value);
+        ui.Slider("Lower Speed (m/s)", LowerSpeed, 0.1f, 3.0f, 0.05f, value => LowerSpeed = value);
+        ui.Slider("In-Position Window (%)", PositionTolerance, 0.2f, 10.0f, 0.1f,
+                  value => PositionTolerance = value);
+    }
+
+    public PartOperation? Operation => new("gantry", "lower");
+
+    public void Operate(PartOperate op) => op.ToggleBit("lower");
 }

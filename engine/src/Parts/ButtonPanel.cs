@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -34,7 +35,7 @@ public enum PanelButton
 /// struck. That is not a detail worth hiding — a program that runs while the
 /// wire to the E-stop is cut is exactly the bug NC wiring exists to prevent.
 /// </summary>
-public partial class ButtonPanel : Node3D
+public partial class ButtonPanel : Node3D, IPart, IDialPart
 {
     [Signal] public delegate void ButtonPressedEventHandler(string name);
 
@@ -562,4 +563,185 @@ public partial class ButtonPanel : Node3D
         _redMat.Emission = on ? new Color(1.0f, 0.2f, 0.2f) : Colors.Black;
         _redMat.EmissionEnergyMultiplier = on ? 2.0f : 0.0f;
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>Tag suffix for each cap. One table rather than two literal
+    /// lists, so registration and dispatch cannot drift apart and leave a
+    /// button that presses nothing.</summary>
+    public static string TagSuffix(PanelButton which) => which switch
+    {
+        PanelButton.Start => "start",
+        PanelButton.Stop => "stop",
+        PanelButton.Reset => "reset",
+        PanelButton.EmergencyStop => "estop",
+        _ => which.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>The same table backwards, so a click that arrives as a region
+    /// name finds the cap it belongs to.</summary>
+    public static PanelButton? ButtonFor(string suffix)
+    {
+        foreach (PanelButton which in System.Enum.GetValues<PanelButton>())
+        {
+            if (TagSuffix(which) == suffix) return which;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Suffixes this panel drove high on the previous tick, so they can be
+    /// dropped on this one.
+    ///
+    /// State of the machine, so it lives on the machine. It used to be a
+    /// dictionary of full tag ids in the editor, keyed by instance id, which
+    /// had to be cleaned up by hand whenever a panel was deleted, renamed or
+    /// reset — and a pulse outliving its panel would clear a tag belonging to
+    /// whatever took the name next. Suffixes rather than ids, so a rename
+    /// carries the pending clear with it instead of stranding a pulse latched
+    /// high under the new name.
+    /// </summary>
+    private readonly List<string> _pulsedLastTick = new();
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        // The buttons are Inputs: the operator drives them and the controller
+        // reads them, exactly like a sensor. `estop` is normally closed, so a
+        // healthy circuit reads true and the scene starts in the state a real
+        // panel powers up in.
+        .Bit("start", $"Panel {tags.Index} Start (momentary)", TagKind.Input)
+        .Bit("stop", $"Panel {tags.Index} Stop (momentary)", TagKind.Input)
+        .Bit("reset", $"Panel {tags.Index} Reset (momentary)", TagKind.Input)
+        .Bit("estop", $"Panel {tags.Index} E-Stop OK (NC)", TagKind.Input, initial: true)
+        // The setpoint pot, in the scene's own engineering units -- the
+        // template owns the range, not the controller (OP-01).
+        .Float("setpoint", $"Panel {tags.Index} Setpoint", TagKind.Input)
+        .Bit("green", $"Panel {tags.Index} Green Lamp", TagKind.Output)
+        .Bit("red", $"Panel {tags.Index} Red Lamp", TagKind.Output);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        // The scale plate the pot is graduated against, plus where the pointer
+        // was left. Saving the live value rather than a separate "default" is
+        // deliberate: a real pot does not spring back, and a scene reloaded
+        // mid-tuning should reopen where you left it.
+        settings.Put("setpoint_min", SetpointMin);
+        settings.Put("setpoint_max", SetpointMax);
+        settings.Put("setpoint_unit", SetpointUnit);
+        settings.Put("setpoint", Setpoint);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("setpoint_min") is { } min) SetpointMin = min;
+        if (settings.Number("setpoint_max") is { } max) SetpointMax = max;
+        if (settings.Text("setpoint_unit") is { } unit) SetpointUnit = unit;
+        // Last, so the clamp sees the range this template asked for rather than
+        // the default 0-100 one.
+        if (settings.Number("setpoint") is { } value) SetSetpoint(value);
+    }
+
+    /// <summary>
+    /// One tick of the panel.
+    ///
+    /// Momentary buttons are the delicate part. The click arrives on the frame
+    /// clock, the tags are written on the physics clock, and the two do not line
+    /// up — so the panel queues presses and this drains the queue. Dropping the
+    /// previous tick's pulse *before* raising this tick's is what bounds a press
+    /// to exactly one scan: a program polling the tag sees a clean edge whether
+    /// the mouse was tapped or held down for a second.
+    ///
+    /// The E-stop is level, not edge, and inverted: the contact is normally
+    /// closed, so the tag is true while the circuit is healthy.
+    /// </summary>
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("green", out bool green)) SetGreenLamp(green);
+        if (tick.TryBit("red", out bool red)) SetRedLamp(red);
+
+        foreach (string suffix in _pulsedLastTick) tick.Write(suffix, false);
+        _pulsedLastTick.Clear();
+
+        // Existence and "written" must stay two separate checks here — TrySet's
+        // return also folds in "already true" and "forced", and skipping the
+        // Add for either of those would leave a pulse never cleared next tick.
+        foreach (var which in ConsumePresses())
+        {
+            string suffix = TagSuffix(which);
+            if (tick.IdFor(suffix) is not { } id || !tick.Tags.Contains(id)) continue;
+            tick.Tags.Set(id, true);
+            _pulsedLastTick.Add(suffix);
+        }
+
+        tick.Write("estop", !EmergencyStopEngaged);
+
+        // The pot goes both ways (OP-02). Normally the knob is the authority and
+        // the tag reports it. While the tag is *forced* -- by the Tag Inspector,
+        // or by tools/try_scene.py driving the scene headless -- the force is
+        // the authority and the knob turns to match, so a setpoint changed over
+        // the wire is visible on the panel instead of leaving the pointer lying
+        // about where the line is aimed.
+        if (tick.IdFor("setpoint") is not { } setpointId) return;
+        if (!tick.Tags.Contains(setpointId)) return;
+
+        if (tick.Tags.IsForced(setpointId))
+            SetSetpoint((float)System.Convert.ToDouble(tick.Tags.Visible(setpointId)));
+        else
+            tick.Tags.Set(setpointId, (double)Setpoint);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        // The pot's scale plate. A panel dragged in from the palette used to get
+        // the hardcoded 0-100 "%" default with no way to change it, so only the
+        // shipped templates -- which set these in their JSON -- had a setpoint
+        // that meant anything (OP-01). Every value here is read live by
+        // ApplySetpoint, so none of them needs a rebuild.
+        ui.Slider("Scale Min", SetpointMin, -10000.0f, 10000.0f, 1.0f,
+                  value => ConfigureSetpoint(value, SetpointMax, SetpointUnit, Setpoint));
+        ui.Slider("Scale Max", SetpointMax, -10000.0f, 10000.0f, 1.0f,
+                  value => ConfigureSetpoint(SetpointMin, value, SetpointUnit, Setpoint));
+        ui.Text("Scale Unit", SetpointUnit, 6,
+                text => ConfigureSetpoint(SetpointMin, SetpointMax, text, Setpoint));
+        // Last, and clamped by the range above it: a setpoint typed outside the
+        // plate is not a setpoint, it is a mislabelled instrument.
+        ui.Slider("Setpoint", Setpoint, -10000.0f, 10000.0f, 0.01f, value => SetSetpoint(value));
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        // A reset must not start the next run holding a struck E-stop, and must
+        // not deliver a press queued before the reset.
+        ResetButtons();
+        _pulsedLastTick.Clear();
+        reset.Write("estop", true);
+    }
+
+    /// <summary>Precise: the caps and the knob are separately clickable, and the
+    /// bounding box covers the housing, the pedestal and both lamps — it would
+    /// turn the whole station into one big Start button.</summary>
+    public PartOperation? Operation => new("panel", Precise: true);
+
+    public string? HitTestRegion(Vector3 from, Vector3 direction)
+    {
+        // The knob is tested first and reported as its own region, because the
+        // two gestures are different: a cap is pressed, a pot is turned, and a
+        // click that begins a drag must not also fire a button.
+        if (HitTestDial(from, direction)) return PartOperate.DialRegion;
+        return HitTest(from, direction) is { } which ? TagSuffix(which) : null;
+    }
+
+    public void Operate(PartOperate op)
+    {
+        if (ButtonFor(op.Region) is { } which) Press(which);
+    }
+
+    // ---------- IDialPart
+
+    /// <summary>A pot with min == max cannot be turned and is not worth naming
+    /// in the hint bar.</summary>
+    public bool DialTurnable => SetpointMax > SetpointMin;
+
+    public string DialTagSuffix => "setpoint";
+
+    public void TurnDial(float pixelsUp) => DragSetpoint(pixelsUp);
 }

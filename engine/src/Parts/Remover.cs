@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -5,7 +6,7 @@ namespace FactoryForge.Parts;
 /// <summary>
 /// Area3D zone that removes boxes when they reach the end of the conveyor or chute.
 /// </summary>
-public partial class Remover : Area3D
+public partial class Remover : Area3D, IPart
 {
     [Export] public Vector3 ZoneSize { get; set; } = new(0.40f, 0.40f, 0.60f);
 
@@ -83,5 +84,54 @@ public partial class Remover : Area3D
             RemovedCount++;
             box.QueueFree();
         }
+    }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>Which tag this remover publishes into: its own unless somebody
+    /// pointed it at a shared total.</summary>
+    private string CountTagOr(string instanceId) =>
+        CountTag.Length > 0 ? CountTag : $"{instanceId}.count";
+
+    public void DeclareTags(PartTagBuilder tags) =>
+        tags.Int("count", $"Remover {tags.Index} (Count)", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        // External: a wire to a tag elsewhere, not a property of this machine,
+        // so a copy must not carry it (HP-16). Duplicating a remover that
+        // counted into `counter.tall` gave two removers writing one counter.
+        settings.PutExternal("count_tag", CountTag);
+        settings.Put("zone", ZoneSize);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Text("count_tag") is { } tag) CountTag = tag;
+        if (settings.Vector("zone") is { } zone) ZoneSize = zone;
+    }
+
+    public void StepPart(PartTick tick) =>
+        tick.WriteTo(CountTagOr(tick.InstanceId), RemovedCount);
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        string own = $"{ui.InstanceId}.count";
+        ui.TagPicker("Counts into", CountTagOr(ui.InstanceId), own,
+                     chosen => CountTag = chosen == own ? "" : chosen);
+    }
+
+    /// <summary>A remover pointed at its own count tag holds that tag's full
+    /// id, so a rename has to carry it. One pointed at a shared total is
+    /// pointing somewhere else and is left alone.</summary>
+    public void PrefixRenamed(string oldId, string newId)
+    {
+        if (CountTag.StartsWith(oldId + ".")) CountTag = newId + CountTag[oldId.Length..];
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetCount();
+        reset.WriteTo(CountTagOr(reset.InstanceId), 0);
     }
 }

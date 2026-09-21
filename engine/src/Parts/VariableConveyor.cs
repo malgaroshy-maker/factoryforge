@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -184,4 +185,60 @@ public partial class VariableConveyor : ConveyorBelt
         _fanSpin += ActualPercent * 0.35f * (float)delta;
         _fan.Basis = new Basis(Vector3.Back, Mathf.Pi / 2) * new Basis(Vector3.Up, _fanSpin);
     }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>The drive recomputes Speed from the reference on every tick, so
+    /// it is a sample and not a setting. <c>--self-test=scene</c> asserts its
+    /// absence from a saved VFD belt.</summary>
+    protected override bool SpeedIsSetting => false;
+
+    /// <summary>`speed` is what the controller asks for and `actual` is what
+    /// the drive has managed so far; they are two tags because they are two
+    /// different numbers for as long as the ramp is running.</summary>
+    public override void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("run", $"VFD Conveyor {tags.Index} Run", TagKind.Output)
+        .Float("speed", $"VFD Conveyor {tags.Index} Speed Ref (%)", TagKind.Output)
+        .Float("actual", $"VFD Conveyor {tags.Index} Actual Speed (%)", TagKind.Input)
+        .Bit("fault", $"VFD Conveyor {tags.Index} Drive Fault", TagKind.Input);
+
+    public override void CaptureSettings(PartSettings settings)
+    {
+        base.CaptureSettings(settings);
+        settings.Put("max_speed", MaxSpeed);
+        settings.Put("accel_rate", AccelRate);
+    }
+
+    public override void ApplySettings(PartSettings settings)
+    {
+        base.ApplySettings(settings);
+        if (settings.Number("max_speed") is { } maxSpeed) MaxSpeed = maxSpeed;
+        if (settings.Number("accel_rate") is { } accel) AccelRate = accel;
+    }
+
+    public override void StepPart(PartTick tick)
+    {
+        // Fault first, for the same reason the plain belt does it first: a
+        // faulted drive has to refuse the command rather than obey it and be
+        // stopped again next tick.
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+
+        StepDrive(tick.Bit("run"), tick.Number("speed"), tick.Dt);
+        tick.Write("actual", (double)ActualPercent);
+        tick.Host.NoteTransportSpeed(tick.InstanceId, Speed);
+    }
+
+    public override void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Max Speed (m/s @100%)", MaxSpeed, 0.1f, 3.0f, 0.05f,
+                  value => MaxSpeed = value);
+        ui.Slider("Ramp Rate (%/s)", AccelRate, 2.0f, 400.0f, 2.0f, value => AccelRate = value);
+        // The base adds the friction row; its speed row is suppressed by
+        // SpeedIsSetting above, for the reason given there.
+        base.DescribeControls(ui);
+    }
+
+    public override PartOperation? Operation => new("VFD conveyor", "run");
+
+    public override void Operate(PartOperate op) => op.ToggleBit("run");
 }

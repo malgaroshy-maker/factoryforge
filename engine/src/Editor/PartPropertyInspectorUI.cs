@@ -9,7 +9,7 @@ namespace FactoryForge.Editor;
 /// <summary>
 /// UI Inspector panel for viewing and editing live properties of a selected 3D component.
 /// </summary>
-public partial class PartPropertyInspectorUI : Control
+public partial class PartPropertyInspectorUI : Control, IPartInspector
 {
     private VBoxContainer _contentContainer = null!;
     private ScrollContainer _scroll = null!;
@@ -141,223 +141,17 @@ public partial class PartPropertyInspectorUI : Control
 
         AddNameRow(instanceId);
 
-        // Every property here must actually reach the simulation. Anything whose
-        // value is only read when the part is built needs a Rebuild() alongside
-        // it, or the slider moves and nothing happens.
-        // WeighingConveyor and RollerConveyor are both ConveyorBelt subclasses,
-        // so one branch serves all three. The weighing deck used to be split out
-        // above this and got Speed only, quietly losing the friction control
-        // every other belt has (LE-05).
-        if (node is ConveyorBelt belt)
-        {
-            // A VFD belt's speed is not its own setting — the drive computes it
-            // from the reference every tick — so offering the same slider here
-            // would be a control that moves and is overwritten before the next
-            // frame. It gets the two settings that are actually its own.
-            if (belt is VariableConveyor vfd)
-            {
-                AddSliderProperty("Max Speed (m/s @100%)", vfd.MaxSpeed, 0.1f, 3.0f, 0.05f,
-                                  val => vfd.MaxSpeed = val);
-                AddSliderProperty("Ramp Rate (%/s)", vfd.AccelRate, 2.0f, 400.0f, 2.0f,
-                                  val => vfd.AccelRate = val);
-            }
-            else
-            {
-                AddSliderProperty("Belt Speed (m/s)", belt.Speed, 0.05f, 2.0f, 0.05f,
-                                  val => belt.Speed = val);
-            }
-            AddSliderProperty("Surface Friction", belt.SurfaceFriction, 0.05f, 1.5f, 0.05f,
-                              val => belt.SurfaceFriction = val);
-        }
-        else if (node is PhotoelectricSensor sensor)
-        {
-            AddSliderProperty("Beam Range (m)", sensor.Range, 0.1f, 2.0f, 0.05f,
-                              val => { sensor.Range = val; sensor.Rebuild(); });
-            AddSliderProperty("Beam Height (m)", sensor.HeightAboveBelt, 0.01f, 0.6f, 0.01f,
-                              val => { sensor.HeightAboveBelt = val; sensor.Rebuild(); });
-        }
-        else if (node is PusherMechanism pusher)
-        {
-            AddSliderProperty("Stroke Speed (m/s)", pusher.ExtendSpeed, 0.2f, 5.0f, 0.1f,
-                              val => pusher.ExtendSpeed = val);
-            AddSliderProperty("Stroke Length (m)", pusher.StrokeLength, 0.1f, 1.0f, 0.05f,
-                              val => pusher.StrokeLength = val);
-        }
-        else if (node is ButtonPanel panel)
-        {
-            // The pot's scale plate. A panel dragged in from the palette used
-            // to get the hardcoded 0-100 "%" default with no way to change it,
-            // so only the shipped templates -- which set these in their JSON --
-            // had a setpoint that meant anything (OP-01). Every value here is
-            // read live by ButtonPanel.ApplySetpoint, so none of them needs a
-            // Rebuild(); the plate re-renders on the next assignment.
-            AddSliderProperty("Scale Min", panel.SetpointMin, -10000.0f, 10000.0f, 1.0f,
-                              val => panel.ConfigureSetpoint(val, panel.SetpointMax,
-                                                             panel.SetpointUnit, panel.Setpoint));
-            AddSliderProperty("Scale Max", panel.SetpointMax, -10000.0f, 10000.0f, 1.0f,
-                              val => panel.ConfigureSetpoint(panel.SetpointMin, val,
-                                                             panel.SetpointUnit, panel.Setpoint));
-            AddTextProperty("Scale Unit", panel.SetpointUnit, 6,
-                            text => panel.ConfigureSetpoint(panel.SetpointMin, panel.SetpointMax,
-                                                            text, panel.Setpoint));
-            // Last, and clamped by the range above it: a setpoint typed outside
-            // the plate is not a setpoint, it is a mislabelled instrument.
-            AddSliderProperty("Setpoint", panel.Setpoint, -10000.0f, 10000.0f, 0.01f,
-                              val => panel.SetSetpoint(val));
-        }
-        else if (node is LightArray curtain)
-        {
-            // Both settings are read only while the curtain is built, so both
-            // need the Rebuild() alongside them the comment above demands. Until
-            // LE-01 they did not have it, and Curtain Height was the one control
-            // in this panel that moved and did nothing.
-            AddSliderProperty("Curtain Height (m)", curtain.CurtainHeight, 0.1f, 1.0f, 0.02f,
-                              val => { curtain.CurtainHeight = val; curtain.Rebuild(); });
-            AddSliderProperty("Beams", curtain.BeamCount, 2, 24, 1,
-                              val => { curtain.BeamCount = (int)val; curtain.Rebuild(); });
-        }
-        else if (node is LevelTank tank)
-        {
-            AddSliderProperty("Fill Rate (%/s)", tank.FillRate, 1.0f, 60.0f, 1.0f,
-                              val => tank.FillRate = val);
-            AddSliderProperty("Drain Rate (%/s)", tank.DrainRate, 1.0f, 60.0f, 1.0f,
-                              val => tank.DrainRate = val);
-        }
-        else if (node is Chute chute)
-        {
-            AddSliderProperty("Incline (deg)", chute.InclineAngleDegrees, 5.0f, 55.0f, 1.0f,
-                              val => { chute.InclineAngleDegrees = val; chute.Rebuild(); });
-            AddSliderProperty("Surface Friction", chute.SurfaceFriction, 0.02f, 1.0f, 0.02f,
-                              val => { chute.SurfaceFriction = val; chute.Rebuild(); });
-        }
-        else if (node is Emitter emitter)
-        {
-            // The setting that makes an inductive sensor a different part from a
-            // photoelectric one. It was reachable only by editing a template's
-            // JSON, so the one thing roller_line_weighing exists to teach could
-            // not be tried on a line you built yourself (LE-03). Read fresh on
-            // every emission, so no rebuild.
-            AddSliderProperty("Metal every Nth", emitter.MetalEvery, 0, 10, 1,
-                              val => emitter.MetalEvery = (int)val);
-        }
-        else if (node is Remover remover)
-        {
-            AddCountTagRow(remover, instanceId);
-        }
-        else if (node is PivotDiverter diverter)
-        {
-            // Both are read live by UpdateSwing, so neither needs a rebuild;
-            // the blade length is geometry and does, so it is deliberately not
-            // offered here rather than offered and silently ignored.
-            AddSliderProperty("Divert Angle (deg)", diverter.DivertAngle, 10.0f, 80.0f, 1.0f,
-                              val => diverter.DivertAngle = val);
-            AddSliderProperty("Swing Speed (deg/s)", diverter.SwingSpeed, 30.0f, 600.0f, 10.0f,
-                              val => diverter.SwingSpeed = val);
-        }
-        else if (node is PickPlaceArm arm)
-        {
-            AddSliderProperty("Travel Speed (%/s)", arm.TravelSpeed, 5.0f, 200.0f, 5.0f,
-                              val => arm.TravelSpeed = val);
-            AddSliderProperty("Lower Speed (m/s)", arm.LowerSpeed, 0.1f, 3.0f, 0.05f,
-                              val => arm.LowerSpeed = val);
-            AddSliderProperty("In-Position Window (%)", arm.PositionTolerance, 0.2f, 10.0f, 0.1f,
-                              val => arm.PositionTolerance = val);
-        }
-        else if (node is AnalogGauge gauge)
-        {
-            // Every one of these goes through ConfigureScale, which rebuilds
-            // the red band: a band left where the old scale put it would be a
-            // mislabelled instrument, which is worse than no band at all.
-            AddSliderProperty("Scale Min", gauge.ScaleMin, -10000.0f, 10000.0f, 1.0f,
-                              val => gauge.ConfigureScale(val, gauge.ScaleMax, gauge.AlarmAt, gauge.Unit));
-            AddSliderProperty("Scale Max", gauge.ScaleMax, -10000.0f, 10000.0f, 1.0f,
-                              val => gauge.ConfigureScale(gauge.ScaleMin, val, gauge.AlarmAt, gauge.Unit));
-            AddSliderProperty("Alarm At", gauge.AlarmAt, -10000.0f, 10000.0f, 1.0f,
-                              val => gauge.ConfigureScale(gauge.ScaleMin, gauge.ScaleMax, val, gauge.Unit));
-            AddTextProperty("Unit", gauge.Unit, 8,
-                            text => gauge.ConfigureScale(gauge.ScaleMin, gauge.ScaleMax, gauge.AlarmAt, text));
-        }
-        else if (node is HeatingStation heater)
-        {
-            AddSliderProperty("Heater Power", heater.HeaterPower, 5.0f, 200.0f, 1.0f,
-                              val => heater.HeaterPower = val);
-            AddSliderProperty("Thermal Mass", heater.ThermalMass, 1.0f, 60.0f, 1.0f,
-                              val => heater.ThermalMass = val);
-            AddSliderProperty("Loss Rate (/s/degC)", heater.LossRate, 0.02f, 2.0f, 0.02f,
-                              val => heater.LossRate = val);
-            AddSliderProperty("Target (degC)", heater.TargetTemp, 20.0f, 400.0f, 1.0f,
-                              val => heater.TargetTemp = val);
-            AddSliderProperty("Tolerance (degC)", heater.Tolerance, 0.5f, 30.0f, 0.5f,
-                              val => heater.Tolerance = val);
-        }
-        else if (node is AlarmBeacon beacon)
-        {
-            AddSliderProperty("Rotation (rev/s)", beacon.RotationSpeed, 0.2f, 5.0f, 0.1f,
-                              val => beacon.RotationSpeed = val);
-        }
-        else if (node is SelectorSwitch selector)
-        {
-            // Both are read only while the plate and its detent marks are
-            // built, so both need the Rebuild() the comment above demands.
-            AddSliderProperty("Positions", selector.PositionCount, 2, 6, 1,
-                              val => { selector.PositionCount = (int)val; selector.Rebuild(); });
-            AddTextProperty("Labels (comma)", selector.Labels, 24,
-                            text => { selector.Labels = text; selector.Rebuild(); });
-        }
-        else if (node is SafetyGate gate)
-        {
-            AddSliderProperty("Travel (m)", gate.TravelDistance, 0.2f, 1.5f, 0.05f,
-                              val => gate.TravelDistance = val);
-            AddSliderProperty("Slide Speed (m/s)", gate.SlideSpeed, 0.2f, 3.0f, 0.1f,
-                              val => gate.SlideSpeed = val);
-        }
-        else if (node is BarcodeScanner scanner)
-        {
-            AddSliderProperty("Read Window (m)", scanner.WindowLength, 0.08f, 0.8f, 0.02f,
-                              val => { scanner.WindowLength = val; scanner.Rebuild(); });
-            AddSliderProperty("Head Height (m)", scanner.HeightAboveBelt, 0.15f, 0.9f, 0.02f,
-                              val => { scanner.HeightAboveBelt = val; scanner.Rebuild(); });
-        }
-        // Everything below offers only settings the part re-reads every tick.
-        // Blade width, deck radius and wheel radius are all build-time
-        // geometry, so a slider for them would move and change nothing -- the
-        // exact failure LE-01 shipped. They stay in the scene file and out of
-        // this panel until the parts grow a Rebuild().
-        else if (node is StopGate stop)
-        {
-            AddSliderProperty("Stroke (m)", stop.Stroke, 0.08f, 0.45f, 0.01f,
-                              val => stop.Stroke = val);
-            AddSliderProperty("Lift Speed (m/s)", stop.LiftSpeed, 0.2f, 3.0f, 0.1f,
-                              val => stop.LiftSpeed = val);
-        }
-        else if (node is TurnTable table)
-        {
-            AddSliderProperty("Index Angle (deg)", table.IndexAngle, 15.0f, 180.0f, 5.0f,
-                              val => table.IndexAngle = val);
-            AddSliderProperty("Index Speed (deg/s)", table.IndexSpeed, 10.0f, 300.0f, 5.0f,
-                              val => table.IndexSpeed = val);
-        }
-        else if (node is RotaryEncoder encoder)
-        {
-            AddSliderProperty("Pulses / metre", encoder.PulsesPerMetre, 10.0f, 1000.0f, 10.0f,
-                              val => encoder.PulsesPerMetre = val);
-        }
-        else if (node is CoolingFan fan)
-        {
-            AddSliderProperty("Reach (m)", fan.Reach, 0.3f, 4.0f, 0.1f,
-                              val => fan.Reach = val);
-            AddSliderProperty("Cooling (/s/degC)", fan.CoolingRate, 0.05f, 3.0f, 0.05f,
-                              val => fan.CoolingRate = val);
-            AddSliderProperty("Spin-up (%/s)", fan.SpinUpRate, 5.0f, 200.0f, 5.0f,
-                              val => fan.SpinUpRate = val);
-        }
-        else if (node is TwoHandControl hands)
-        {
-            AddSliderProperty("Sync Window (s)", hands.SyncWindow, 0.05f, 2.0f, 0.05f,
-                              val => hands.SyncWindow = val);
-            AddSliderProperty("Hold Time (s)", hands.HoldTime, 0.5f, 6.0f, 0.1f,
-                              val => hands.HoldTime = val);
-        }
+        // The part describes its own rows (HP-34). This used to be a
+        // twenty-three branch `else if` chain on the node's concrete type, in a
+        // file that could not see the fields it was building sliders for, and
+        // whose rule -- "anything read only while the part is built needs a
+        // Rebuild() alongside it" -- had to be remembered by whoever edited it
+        // rather than by whoever wrote the part.
+        //
+        // The rule has not changed; it has only moved next to the setter it
+        // applies to.
+        _inspectedInstanceId = instanceId;
+        if (node is IPart part) part.DescribeControls(this);
 
         AddTagControlsSection(instanceId);
         ResetScroll();
@@ -430,7 +224,7 @@ public partial class PartPropertyInspectorUI : Control
         if (tag.Type == TagType.Bit && suffix == "emit")
         {
             // A rising edge, not a level: holding this true streams nothing
-            // new (SceneEditor's Emitter dispatch only spawns on the edge), so
+            // new (the feed's own dispatch only spawns on the edge), so
             // a plain toggle left on would look broken. One press, one box.
             var btn = new Button { Text = "Emit one", CustomMinimumSize = new Vector2(90, 0) };
             btn.Pressed += () =>
@@ -699,34 +493,49 @@ public partial class PartPropertyInspectorUI : Control
         ResetScroll();
     }
 
+    // ---------- IPartInspector (HP-34)
+
+    /// <summary>The part currently being described, so a row that has to name
+    /// one of its own tags can build the id.</summary>
+    private string _inspectedInstanceId = "";
+
+    string IPartInspector.InstanceId => _inspectedInstanceId;
+
+    void IPartInspector.Slider(string label, float value, float min, float max, float step,
+                               Action<float> onChanged) =>
+        AddSliderProperty(label, value, min, max, step, onChanged);
+
+    void IPartInspector.Text(string label, string value, int maxLength,
+                             Action<string> onChanged) =>
+        AddTextProperty(label, value, maxLength, onChanged);
+
     /// <summary>
-    /// Which tag a remover counts into (LE-04). A dropdown of the <c>int</c>
-    /// input tags the scene actually has, never a free-text field: the count is
-    /// published through <see cref="TagTable.TrySet"/>, which ignores an id
-    /// nothing owns, so a typo would be a silent no-op — a new one, in the panel
-    /// built to remove them.
+    /// A dropdown of the <c>int</c> input tags the scene actually has, never a
+    /// free-text field: the value is published through
+    /// <see cref="TagTable.TrySet"/>, which ignores an id nothing owns, so a
+    /// typo would be a silent no-op — a new one, in the panel built to remove
+    /// them (LE-04).
     /// </summary>
-    private void AddCountTagRow(Remover remover, string instanceId)
+    void IPartInspector.TagPicker(string label, string current, string ownTagId,
+                                  Action<string> onChanged)
     {
         var tags = Editor?.Tags;
         if (tags is null) return;
 
-        string ownTag = $"{instanceId}.count";
-        var options = new List<string> { ownTag };
+        var options = new List<string> { ownTagId };
         foreach (var tag in tags)
         {
-            if (tag.Type == TagType.Int && tag.Kind == TagKind.Input && tag.Id != ownTag)
+            if (tag.Type == TagType.Int && tag.Kind == TagKind.Input && tag.Id != ownTagId)
                 options.Add(tag.Id);
         }
 
-        string current = remover.CountTag.Length > 0 ? remover.CountTag : ownTag;
-        // A scene file can point a remover at a tag that no longer exists. Show
-        // it rather than silently snapping the selection to something else.
+        // A scene file can point a part at a tag that no longer exists. Show it
+        // rather than silently snapping the selection to something else.
         if (!options.Contains(current)) options.Insert(1, current);
 
         var row = new HBoxContainer();
         _contentContainer.AddChild(row);
-        row.AddChild(new Label { Text = "Counts into", CustomMinimumSize = new Vector2(100, 0) });
+        row.AddChild(new Label { Text = label, CustomMinimumSize = new Vector2(100, 0) });
 
         // FitToLongestItem off, ClipText on, and a fixed minimum. An
         // OptionButton otherwise takes the width of its longest *menu item*,
@@ -740,17 +549,16 @@ public partial class PartPropertyInspectorUI : Control
             CustomMinimumSize = new Vector2(150, 0),
             FitToLongestItem = false,
             ClipText = true,
-            TooltipText = "Which tag this remover counts into.",
+            TooltipText = $"Which tag this part writes its {label.ToLowerInvariant()} value into.",
         };
         for (int i = 0; i < options.Count; i++)
         {
-            picker.AddItem(options[i] == ownTag ? $"{ownTag} (own)" : options[i], i);
+            picker.AddItem(options[i] == ownTagId ? $"{ownTagId} (own)" : options[i], i);
             if (options[i] == current) picker.Selected = i;
         }
         picker.ItemSelected += index =>
         {
-            string chosen = options[(int)index];
-            remover.CountTag = chosen == ownTag ? "" : chosen;
+            onChanged(options[(int)index]);
             Editor?.MarkDirty();
         };
         row.AddChild(picker);
@@ -774,7 +582,7 @@ public partial class PartPropertyInspectorUI : Control
             CustomMinimumSize = new Vector2(90, 0),
             // Without this the field takes its width from its content and a
             // long entry grows the row past the panel's scroll bound, the same
-            // way the Remover's tag dropdown did (LE-04).
+            // way the tag dropdown did (LE-04).
             ExpandToTextLength = false,
         };
         field.TextChanged += (text) => { onChanged(text); Editor?.MarkDirty(); };

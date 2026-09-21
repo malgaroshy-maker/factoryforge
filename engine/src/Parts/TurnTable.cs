@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -21,7 +22,7 @@ namespace FactoryForge.Parts;
 /// Local space: the origin is the deck centre, on the work plane, so the
 /// turntable drops onto the grid at the same height as the belts either side.
 /// </summary>
-public partial class TurnTable : Node3D
+public partial class TurnTable : Node3D, IPart
 {
     /// <summary>Deck radius. The default is sized to take a carton off a
     /// standard 0.5 m belt with room to turn it.</summary>
@@ -263,4 +264,57 @@ public partial class TurnTable : Node3D
         if (_deck is null) return;
         _deck.Rotation = new Vector3(0, Mathf.DegToRad(_angle), 0);
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("index", $"Turntable {tags.Index} (Index)", TagKind.Output)
+        .Bit("athome", $"Turntable {tags.Index} (At Home)", TagKind.Input, initial: true)
+        .Bit("atindex", $"Turntable {tags.Index} (At Index)", TagKind.Input)
+        .Bit("fault", $"Turntable {tags.Index} Drive Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("deck_radius", DeckRadius);
+        settings.Put("index_angle", IndexAngle);
+        settings.Put("index_speed", IndexSpeed);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("deck_radius") is { } radius) DeckRadius = radius;
+        if (settings.Number("index_angle") is { } angle) IndexAngle = angle;
+        if (settings.Number("index_speed") is { } speed) IndexSpeed = speed;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.TryBit("index", out bool index)) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        UpdateIndex(index, tick.Dt);
+        tick.Write("athome", IsHome);
+        tick.Write("atindex", IsAtIndex);
+    }
+
+    /// <summary>Deck radius is build-time geometry, so it is deliberately not
+    /// offered here rather than offered and silently ignored.</summary>
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Index Angle (deg)", IndexAngle, 15.0f, 180.0f, 5.0f,
+                  value => IndexAngle = value);
+        ui.Slider("Index Speed (deg/s)", IndexSpeed, 10.0f, 300.0f, 5.0f,
+                  value => IndexSpeed = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        ResetDeck();
+        reset.Write("athome", true);
+        reset.Write("atindex", false);
+    }
+
+    public PartOperation? Operation => new("turntable", "index");
+
+    public void Operate(PartOperate op) => op.ToggleBit("index");
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -122,4 +123,27 @@ public partial class RollerConveyor : ConveyorBelt
             roller.Basis = lay * spin;
         }
     }
+
+    // ---------- IPart (HP-34)
+
+    public override void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("rotate", $"Roller Conveyor {tags.Index} (Rotate)", TagKind.Output)
+        .Bit("fault", $"Roller Conveyor {tags.Index} Drive Fault", TagKind.Input);
+
+    public override void CaptureSettings(PartSettings settings)
+    {
+        base.CaptureSettings(settings);
+        // The setting that makes it a *roller* bed rather than a belt. The
+        // roller geometry is rebuilt from it in _Ready, so losing it changed
+        // what the part looked like as well as how it behaved.
+        settings.Put("roller_spacing", RollerSpacing);
+    }
+
+    public override void ApplySettings(PartSettings settings)
+    {
+        base.ApplySettings(settings);
+        if (settings.Number("roller_spacing") is { } spacing) RollerSpacing = spacing;
+    }
+
+    public override PartOperation? Operation => new("roller conveyor", "rotate");
 }

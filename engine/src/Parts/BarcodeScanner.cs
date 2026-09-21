@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -20,7 +21,7 @@ namespace FactoryForge.Parts;
 /// <item><description>201 — metal item</description></item>
 /// </list>
 /// </summary>
-public partial class BarcodeScanner : Node3D
+public partial class BarcodeScanner : Node3D, IPart
 {
     /// <summary>Height of the read window above the carrying surface.</summary>
     [Export] public float HeightAboveBelt { get; set; } = 0.42f;
@@ -241,4 +242,55 @@ public partial class BarcodeScanner : Node3D
         if (_readout is not null)
             _readout.Text = !Enabled ? "off" : (LastCode == 0 ? "---" : LastCode.ToString());
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        // Armed on arrival: a scanner that has to be enabled before it shows
+        // anything is a part that looks broken when it is placed.
+        .Bit("enable", $"Scanner {tags.Index} Enable", TagKind.Output, initial: true)
+        .Int("code", $"Scanner {tags.Index} Code", TagKind.Input)
+        // One scan wide, exactly like a panel button's pulse -- which is why a
+        // program has to latch it rather than poll it.
+        .Bit("read", $"Scanner {tags.Index} Read Pulse", TagKind.Input)
+        .Bit("present", $"Scanner {tags.Index} Item Present", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("height", HeightAboveBelt);
+        settings.Put("window", WindowLength);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("height") is { } height) HeightAboveBelt = height;
+        if (settings.Number("window") is { } window) WindowLength = window;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("enable", out bool enabled)) Enabled = enabled;
+
+        Scan(tick.Dt);
+
+        tick.Write("code", LastCode);
+        // Written every tick, so the pulse falls again on the very next one
+        // without anybody having to remember to clear it — the panel's
+        // queue-and-drain problem does not arise here because the read happens
+        // on the same clock the tag is written on.
+        tick.Write("read", ReadPulse);
+        tick.Write("present", IsPresent);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Read Window (m)", WindowLength, 0.08f, 0.8f, 0.02f,
+                  value => { WindowLength = value; Rebuild(); });
+        ui.Slider("Head Height (m)", HeightAboveBelt, 0.15f, 0.9f, 0.02f,
+                  value => { HeightAboveBelt = value; Rebuild(); });
+    }
+
+    public PartOperation? Operation => new("scanner", "enable");
+
+    public void Operate(PartOperate op) => op.ToggleBit("enable");
 }

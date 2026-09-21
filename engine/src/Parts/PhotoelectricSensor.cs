@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -22,7 +23,7 @@ public enum SensingMode
 /// Photoelectric / proximity sensor. A RayCast3D across the lane decides
 /// presence; <see cref="Mode"/> decides what the sensor is willing to see.
 /// </summary>
-public partial class PhotoelectricSensor : Node3D
+public partial class PhotoelectricSensor : Node3D, IPart
 {
     /// <summary>Beam height above the carrying surface. This is the property that
     /// decides what the sensor can see, so it is measured from the belt top, not
@@ -181,5 +182,54 @@ public partial class PhotoelectricSensor : Node3D
         if (_ledMaterial is null) return;
         _ledMaterial.AlbedoColor = detected ? new Color(0.35f, 1.0f, 0.45f) : new Color(0.18f, 0.28f, 0.18f);
         _ledMaterial.EmissionEnergyMultiplier = detected ? 3.5f : 0.0f;
+    }
+
+    // ---------- IPart (HP-34)
+
+    /// <summary>One declaration for all three catalogue types. A
+    /// retroreflective and an inductive sensor are this part with a different
+    /// <see cref="Mode"/>, and they expose the same one contact.</summary>
+    public void DeclareTags(PartTagBuilder tags) =>
+        tags.Bit("detect", $"Sensor {tags.Index} (Detect)", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("range", Range);
+        settings.Put("height", HeightAboveBelt);
+        settings.PutEnum("mode", Mode);
+        settings.Put("visual_only", VisualOnly);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("range") is { } range) Range = range;
+        if (settings.Number("height") is { } height) HeightAboveBelt = height;
+        if (settings.Enumeration<SensingMode>("mode") is { } mode) Mode = mode;
+        if (settings.Flag("visual_only") is { } visualOnly) VisualOnly = visualOnly;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.Has("detect")) return;
+
+        // A VisualOnly sensor is a *view* of a tag the simulation owns: it
+        // follows the tag rather than publishing it, so the two can never be
+        // two authorities for one bit.
+        if (VisualOnly)
+        {
+            if (tick.TryBit("detect", out bool detected)) SetBeamActive(detected);
+        }
+        else
+        {
+            tick.Write("detect", IsDetected);
+        }
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Beam Range (m)", Range, 0.1f, 2.0f, 0.05f,
+                  value => { Range = value; Rebuild(); });
+        ui.Slider("Beam Height (m)", HeightAboveBelt, 0.01f, 0.6f, 0.01f,
+                  value => { HeightAboveBelt = value; Rebuild(); });
     }
 }

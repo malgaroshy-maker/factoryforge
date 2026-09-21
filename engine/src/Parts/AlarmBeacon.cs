@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -15,7 +16,7 @@ namespace FactoryForge.Parts;
 /// The horn is shown, not sounded. Audio is a dependency that fights
 /// `--headless` runs and CI, and this project does not otherwise carry one.
 /// </summary>
-public partial class AlarmBeacon : Node3D
+public partial class AlarmBeacon : Node3D, IPart
 {
     /// <summary>Beacon revolutions per second.</summary>
     [Export] public float RotationSpeed { get; set; } = 1.6f;
@@ -221,4 +222,40 @@ public partial class AlarmBeacon : Node3D
             _diaphragm.Scale = Vector3.One;
         }
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("beacon", $"Beacon {tags.Index} Light", TagKind.Output)
+        .Bit("horn", $"Beacon {tags.Index} Horn", TagKind.Output);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("rotation_speed", RotationSpeed);
+        settings.Put("colour_r", BeaconColour.R);
+        settings.Put("colour_g", BeaconColour.G);
+        settings.Put("colour_b", BeaconColour.B);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("rotation_speed") is { } spin) RotationSpeed = spin;
+        if (settings.Number("colour_r") is { } r && settings.Number("colour_g") is { } g
+                                                 && settings.Number("colour_b") is { } b)
+            BeaconColour = new Color(r, g, b);
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("beacon", out bool beacon)) SetBeacon(beacon);
+        if (tick.TryBit("horn", out bool horn)) SetHorn(horn);
+    }
+
+    public void DescribeControls(IPartInspector ui) =>
+        ui.Slider("Rotation (rev/s)", RotationSpeed, 0.2f, 5.0f, 0.1f,
+                  value => RotationSpeed = value);
+
+    public PartOperation? Operation => new("beacon", "beacon");
+
+    public void Operate(PartOperate op) => op.ToggleBit("beacon");
 }

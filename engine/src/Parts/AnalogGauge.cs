@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -15,7 +16,7 @@ namespace FactoryForge.Parts;
 /// the analog parts legible without alt-tabbing, and give a scene somewhere to
 /// put the one measurement it is about.
 /// </summary>
-public partial class AnalogGauge : Node3D
+public partial class AnalogGauge : Node3D, IPart
 {
     [Export] public float ScaleMin { get; set; }
     [Export] public float ScaleMax { get; set; } = 100.0f;
@@ -275,5 +276,45 @@ public partial class AnalogGauge : Node3D
 
         if (_readout is not null)
             _readout.Text = Mathf.Abs(_value) >= 100.0f ? _value.ToString("0") : _value.ToString("0.0");
+    }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) =>
+        tags.Float("value", $"Gauge {tags.Index} Value", TagKind.Output);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("scale_min", ScaleMin);
+        settings.Put("scale_max", ScaleMax);
+        settings.Put("alarm_at", AlarmAt);
+        settings.Put("unit", Unit);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("scale_min") is { } min) ScaleMin = min;
+        if (settings.Number("scale_max") is { } max) ScaleMax = max;
+        if (settings.Number("alarm_at") is { } alarm) AlarmAt = alarm;
+        if (settings.Text("unit") is { } unit) Unit = unit;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.Has("value")) Value = tick.Number("value");
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        // Every one of these goes through ConfigureScale, which rebuilds the red
+        // band: a band left where the old scale put it would be a mislabelled
+        // instrument, which is worse than no band at all.
+        ui.Slider("Scale Min", ScaleMin, -10000.0f, 10000.0f, 1.0f,
+                  value => ConfigureScale(value, ScaleMax, AlarmAt, Unit));
+        ui.Slider("Scale Max", ScaleMax, -10000.0f, 10000.0f, 1.0f,
+                  value => ConfigureScale(ScaleMin, value, AlarmAt, Unit));
+        ui.Slider("Alarm At", AlarmAt, -10000.0f, 10000.0f, 1.0f,
+                  value => ConfigureScale(ScaleMin, ScaleMax, value, Unit));
+        ui.Text("Unit", Unit, 8, text => ConfigureScale(ScaleMin, ScaleMax, AlarmAt, text));
     }
 }

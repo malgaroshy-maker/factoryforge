@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -20,7 +21,7 @@ namespace FactoryForge.Parts;
 /// reads whatever the controller commanded, and the temperature falls anyway.
 /// The output cannot tell you; only the measurement can.
 /// </summary>
-public partial class HeatingStation : Node3D
+public partial class HeatingStation : Node3D, IPart
 {
     /// <summary>Heat input at 100 % power, in °C·mass per second.
     ///
@@ -279,4 +280,74 @@ public partial class HeatingStation : Node3D
         if (_heatGlow is not null) _heatGlow.LightEnergy = glow * 1.8f;
         if (_readout is not null) _readout.Text = $"{Temperature:0} °C";
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Float("heater", $"Heater {tags.Index} Power (%)", TagKind.Output)
+        .Float("temperature", $"Heater {tags.Index} Temperature (C)", TagKind.Input)
+        .Bit("attemp", $"Heater {tags.Index} At Temperature", TagKind.Input)
+        // A failed element still accepts and reports its command; only the
+        // measurement gives it away (CP-07).
+        .Bit("fault", $"Heater {tags.Index} Element Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("heater_power", HeaterPower);
+        settings.Put("loss_rate", LossRate);
+        settings.Put("thermal_mass", ThermalMass);
+        settings.Put("ambient", Ambient);
+        settings.Put("target_temp", TargetTemp);
+        settings.Put("tolerance", Tolerance);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("heater_power") is { } power) HeaterPower = power;
+        if (settings.Number("loss_rate") is { } loss) LossRate = loss;
+        if (settings.Number("thermal_mass") is { } mass) ThermalMass = mass;
+        if (settings.Number("ambient") is { } ambient) Ambient = ambient;
+        if (settings.Number("target_temp") is { } target) TargetTemp = target;
+        if (settings.Number("tolerance") is { } band) Tolerance = band;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.Has("heater")) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+
+        // dt is scaled simulation time, so the plant obeys pause and the time
+        // scale — the same rule the tank follows, and it matters more here
+        // because the time constant is a minute rather than seconds.
+        Step(tick.Number("heater"), tick.Dt);
+        tick.Write("temperature", (double)Temperature);
+        tick.Write("attemp", AtTemperature);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Heater Power", HeaterPower, 5.0f, 200.0f, 1.0f, value => HeaterPower = value);
+        ui.Slider("Thermal Mass", ThermalMass, 1.0f, 60.0f, 1.0f, value => ThermalMass = value);
+        ui.Slider("Loss Rate (/s/degC)", LossRate, 0.02f, 2.0f, 0.02f, value => LossRate = value);
+        ui.Slider("Target (degC)", TargetTemp, 20.0f, 400.0f, 1.0f, value => TargetTemp = value);
+        ui.Slider("Tolerance (degC)", Tolerance, 0.5f, 30.0f, 0.5f, value => Tolerance = value);
+    }
+
+    /// <summary>A run's accumulated heat, not a machine somebody built (LP-12).
+    /// Until this existed, a reset on the heat-treat scene left the plate at
+    /// whatever temperature the last run reached, and the next run started from
+    /// a place no experiment could reproduce.</summary>
+    public void ResetPart(PartReset reset)
+    {
+        ResetTemperature();
+        reset.Write("temperature", (double)Temperature);
+        reset.Write("attemp", AtTemperature);
+    }
+
+    /// <summary>The one output is a percentage, so a click drives it fully on or
+    /// fully off, exactly as a click on a tank valve does.</summary>
+    public PartOperation? Operation => new("heater", "heater");
+
+    public void Operate(PartOperate op) => op.ToggleAnalog("heater");
 }

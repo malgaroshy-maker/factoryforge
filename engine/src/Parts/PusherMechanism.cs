@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -10,7 +11,7 @@ namespace FactoryForge.Parts;
 /// (+Z), so placing the node at the belt edge is all a scene needs to do. Never
 /// place it at the belt centre — the barrel would straddle the lane.
 /// </summary>
-public partial class PusherMechanism : Node3D
+public partial class PusherMechanism : Node3D, IPart
 {
     [Export] public float StrokeLength { get; set; } = 0.55f;
     [Export] public float ExtendSpeed { get; set; } = 1.6f;
@@ -194,4 +195,54 @@ public partial class PusherMechanism : Node3D
         _rod.Position = new Vector3(0, AxisY, rodLength / 2.0f);
         _pusherHead.Position = new Vector3(0, AxisY, rodLength + PlateThickness / 2.0f);
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("extend", $"Pusher {tags.Index} (Extend)", TagKind.Output)
+        .Bit("extended", $"Pusher {tags.Index} (Extended)", TagKind.Input)
+        .Bit("retracted", $"Pusher {tags.Index} (Retracted)", TagKind.Input, initial: true)
+        .Bit("fault", $"Pusher {tags.Index} Drive Fault", TagKind.Input);
+
+    public void CaptureSettings(PartSettings settings)
+    {
+        settings.Put("stroke", StrokeLength);
+        settings.Put("speed", ExtendSpeed);
+        settings.Put("max_carton", MaxCartonHeight);
+        settings.Put("visual_only", VisualOnly);
+    }
+
+    public void ApplySettings(PartSettings settings)
+    {
+        if (settings.Number("stroke") is { } stroke) StrokeLength = stroke;
+        if (settings.Number("speed") is { } speed) ExtendSpeed = speed;
+        if (settings.Number("max_carton") is { } carton) MaxCartonHeight = carton;
+        if (settings.Flag("visual_only") is { } visualOnly) VisualOnly = visualOnly;
+    }
+
+    public void StepPart(PartTick tick)
+    {
+        if (!tick.TryBit("extend", out bool extend)) return;
+
+        if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
+        UpdateExtension(extend, tick.Dt);
+
+        // A VisualOnly pusher mirrors a pusher the scene already simulates, so
+        // the scene keeps the limit switches.
+        if (VisualOnly) return;
+        tick.Write("extended", IsExtended);
+        tick.Write("retracted", IsRetracted);
+    }
+
+    public void DescribeControls(IPartInspector ui)
+    {
+        ui.Slider("Stroke Speed (m/s)", ExtendSpeed, 0.2f, 5.0f, 0.1f,
+                  value => ExtendSpeed = value);
+        ui.Slider("Stroke Length (m)", StrokeLength, 0.1f, 1.0f, 0.05f,
+                  value => StrokeLength = value);
+    }
+
+    public PartOperation? Operation => new("pusher", "extend");
+
+    public void Operate(PartOperate op) => op.ToggleBit("extend");
 }

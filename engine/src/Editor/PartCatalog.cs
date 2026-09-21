@@ -1,9 +1,14 @@
+using System;
 using System.Collections.Generic;
+using FactoryForge.Parts;
+using Godot;
 
 namespace FactoryForge.Editor;
 
 /// <summary>
-/// One description of every part the palette offers (CP-20, CP-33).
+/// One description of every part the palette offers (CP-20, CP-33), and since
+/// HP-34 the only place in the editor that is allowed to name a part type at
+/// all.
 ///
 /// This exists because the same list was previously written out three times —
 /// in the palette's own <c>_Ready</c>, in the save/load self-test's
@@ -15,16 +20,36 @@ namespace FactoryForge.Editor;
 /// The description is not decoration either. Fifteen buttons labelled
 /// "Light Array" and "Roller Conveyor" tell a newcomer nothing about which one
 /// solves their problem, and the tag list is the answer to the question they
-/// are actually asking, which is "what will this give my PLC".
+/// are actually asking, which is "what will this give my PLC". That tag list is
+/// no longer written by hand: it is read off the part's own
+/// <see cref="IPart.DeclareTags"/>, so a tooltip cannot promise I/O the part
+/// does not have.
+///
+/// Adding a part is one new file under <c>engine/src/Parts/</c> and one entry
+/// below. <c>--self-test=partcontract</c> fails if anything else in the editor
+/// learns a part type's name.
 /// </summary>
 public static class PartCatalog
 {
+    /// <param name="Create">Builds the node, with whatever defaults make the
+    /// part sensible the moment it lands from the palette. This is why the
+    /// factory lives beside the description rather than in a second switch in
+    /// the editor — the two could disagree, and a palette button that places
+    /// nothing is the failure that produced.</param>
     public sealed record PartInfo(
         string Type,
         string Label,
         string Group,
         string Summary,
-        string Tags);
+        Func<Node3D> Create)
+    {
+        /// <summary>The part's I/O, as a palette tooltip reads it. Derived from
+        /// the part rather than restated here.</summary>
+        public string Tags => TagSummary(Type);
+    }
+
+    private const float DeckThickness = 0.12f;
+    private static readonly Vector3 StandardDeck = new(1.5f, DeckThickness, 0.5f);
 
     /// <summary>Palette order. Groups are rendered in the order they first
     /// appear here, and parts within a group in the order listed.</summary>
@@ -32,95 +57,101 @@ public static class PartCatalog
     {
         new("ConveyorBelt", "Conveyor Belt", "TRANSPORT",
             "Surface-velocity belt with side rails and a drive-fault beacon. The workhorse.",
-            "rotate · fault"),
+            () => new ConveyorBelt { Size = StandardDeck }),
         new("VariableConveyor", "VFD Conveyor", "TRANSPORT",
             "Belt behind a variable-frequency drive. The reference ramps, so commanded and actual speed genuinely disagree while it moves between them.",
-            "run · speed · actual · fault"),
+            () => new VariableConveyor { Size = StandardDeck }),
         new("RollerConveyor", "Roller Conveyor", "TRANSPORT",
             "Driven roller deck for pallets and totes that a belt would scuff.",
-            "rotate · fault"),
+            () => new RollerConveyor { Size = StandardDeck }),
         new("WeighingConveyor", "Weigh Conveyor", "TRANSPORT",
             "Belt section with a load cell under it, reading the carton's mass in grams.",
-            "rotate · weight · fault"),
+            () => new WeighingConveyor { Size = StandardDeck }),
         new("TurnTable", "Transfer Turntable", "TRANSPORT",
             "Rotary index that turns a carton to a new lane. The load is held on by friction, so a deck told to index too fast throws it.",
-            "index · athome · atindex · fault"),
+            () => new TurnTable()),
 
         new("PhotoelectricSensor", "Photoelectric Sensor", "SENSORS",
             "Diffuse beam that reflects off the item itself. Cheapest, shortest range.",
-            "detect"),
+            () => new PhotoelectricSensor { Range = 0.6f }),
         new("RetroreflectiveSensor", "Retroreflective Sensor", "SENSORS",
             "Beams to a reflector across the lane, so it sees matt and dark items a diffuse sensor misses.",
-            "detect"),
+            () => new PhotoelectricSensor
+            {
+                Range = 0.75f, HeightAboveBelt = 0.08f, Mode = SensingMode.Retroreflective,
+            }),
         new("InductiveSensor", "Inductive Sensor", "SENSORS",
             "Responds to metal only. Cardboard passes it as if the lane were empty.",
-            "detect"),
+            () => new PhotoelectricSensor
+            {
+                Range = 0.75f, HeightAboveBelt = 0.06f, Mode = SensingMode.Inductive,
+            }),
         new("LightArray", "Light Curtain", "SENSORS",
             "Twelve beams reporting the height of the tallest blocked one — one part instead of a low/high sensor pair.",
-            "height · blocked"),
+            () => new LightArray()),
         new("BarcodeScanner", "Barcode Scanner", "SENSORS",
             "Overhead reader. Reports what the item *is* as a code, with a one-scan read pulse a program has to latch.",
-            "enable · code · read · present"),
+            () => new BarcodeScanner()),
         new("RotaryEncoder", "Measuring Encoder", "SENSORS",
             "Wheel riding the belt it is placed over, counting pulses per metre travelled — so product can be tracked by distance instead of by a timer.",
-            "count · rate · reset"),
+            () => new RotaryEncoder()),
 
         new("PusherMechanism", "Pneumatic Pusher", "ACTUATORS",
             "Cylinder that strokes across the lane. A jam freezes it mid-stroke.",
-            "extend · extended · retracted · fault"),
+            () => new PusherMechanism { StrokeLength = 0.45f }),
         new("PivotDiverter", "Pivot Diverter", "ACTUATORS",
             "Blade on a pivot that deflects a *moving* carton without stopping the line.",
-            "divert · diverted · home · fault"),
+            () => new PivotDiverter()),
         new("PickPlaceArm", "Pick & Place Gantry", "ACTUATORS",
             "Analog travel axis, vertical stroke and a vacuum cup that really picks a carton up. Three motions to sequence.",
-            "target · lower · grip · position · inposition · lowered · raised · holding · fault"),
+            () => new PickPlaceArm()),
         new("StopGate", "Blade Stop", "ACTUATORS",
             "Blade that rises through the lane to hold cartons on a *running* belt. The only way to build an accumulation buffer here.",
-            "raise · up · down · fault"),
+            () => new StopGate()),
         new("Chute", "Ramp (Chute)", "ACTUATORS",
             "30° gravity chute with guide rails. Incline and friction are a matched pair.",
-            "— (static)"),
+            () => new Chute()),
 
         new("Emitter", "Box Emitter", "PROCESS",
             "Feed gantry spawning tall and short cartons, optionally every Nth in metal.",
-            "emit"),
+            () => new Emitter()),
         new("Remover", "Box Remover", "PROCESS",
             "Zone that despawns items and counts them. The count tag is pickable, so two removers can feed one total.",
-            "count"),
+            () => new Remover()),
         new("LevelTank", "Level Tank", "PROCESS",
             "Analog tank whose outflow follows Torricelli, so the process gain varies with level.",
-            "fill · drain · level · fault"),
+            () => new LevelTank()),
         new("HeatingStation", "Heating Station", "PROCESS",
             "First-order thermal plant with ambient loss. Asymmetric, so pure P control leaves a standing offset you can measure.",
-            "heater · temperature · attemp · fault"),
+            () => new HeatingStation()),
         new("CoolingFan", "Cooling Fan", "PROCESS",
             "Ducted fan that pulls heat out of any heating station in reach — the second actuator a split-range loop needs.",
-            "run · speed · airflow · fault"),
+            () => new CoolingFan()),
 
         new("ButtonPanel", "Control Panel", "OPERATOR",
             "Momentary Start/Stop/Reset, a maintained normally-closed E-stop, and a setpoint pot you drag.",
-            "start · stop · reset · estop · setpoint · green · red"),
+            () => new ButtonPanel()),
         new("StackLight", "Stack Light", "OPERATOR",
             "Three-stage tower light. Each lamp is separately clickable in Operate mode.",
-            "green · yellow · red"),
+            () => new StackLight()),
         new("AlarmBeacon", "Alarm Beacon", "OPERATOR",
             "Rotating beacon that throws real light around, plus a horn with a visible diaphragm.",
-            "beacon · horn"),
+            () => new AlarmBeacon()),
         new("DigitalDisplay", "Digital Display", "OPERATOR",
             "Seven-segment panel for an integer count, with a unit suffix.",
-            "value"),
+            () => new DigitalDisplay()),
         new("AnalogGauge", "Analog Gauge", "OPERATOR",
             "Needle instrument for a float — a level, a speed, a temperature — read in the scene instead of the tag list.",
-            "value"),
+            () => new AnalogGauge()),
         new("SelectorSwitch", "Selector Switch", "OPERATOR",
             "A maintained rotary selector — Manual / Off / Auto. Stays where it is put, so the controller reads a position rather than an edge.",
-            "position"),
+            () => new SelectorSwitch()),
         new("SafetyGate", "Guard Door", "SAFETY",
             "An interlocked guard. Its switch is closed while the door is shut, and a solenoid lock lets the controller decide whether it may be opened at all.",
-            "closed · lock · locked"),
+            () => new SafetyGate()),
         new("TwoHandControl", "Two-Hand Control", "SAFETY",
             "Two palm buttons that only give a permissive when both are held *and* arrived together — so taping one down defeats nothing.",
-            "left · right · valid"),
+            () => new TwoHandControl()),
     };
 
     /// <summary>Every part type, in palette order. The save/load self-test
@@ -151,4 +182,70 @@ public static class PartCatalog
     /// part missing from the catalog still shows something rather than an empty
     /// string.</summary>
     public static string LabelFor(string partType) => Find(partType)?.Label ?? partType;
+
+    /// <summary>Build a part. Null for a type this build does not have.</summary>
+    public static Node3D? Create(string partType) => Find(partType)?.Create();
+
+    // ---------- what a type's I/O is, asked of the part itself
+
+    private static readonly Dictionary<string, string[]> SuffixCache = new();
+
+    /// <summary>
+    /// The tag suffixes a part type owns, in declaration order.
+    ///
+    /// Answered by building one throwaway instance and asking it — which is why
+    /// <see cref="IPart.DeclareTags"/> must not depend on anything
+    /// <c>_Ready</c> builds. Cached, because the palette, the per-tick dispatch
+    /// cache and the fault tool all ask, and the answer cannot change at
+    /// runtime.
+    ///
+    /// This replaces <c>PlacedPart.TagSuffixesByType</c>, which was a hand-kept
+    /// second copy of the registration switch and exactly the place per-part
+    /// knowledge would pool next if HP-34 had only killed the switches.
+    /// </summary>
+    public static IReadOnlyList<string> TagSuffixes(string partType)
+    {
+        if (SuffixCache.TryGetValue(partType, out var cached)) return cached;
+
+        string[] suffixes = Array.Empty<string>();
+        if (Find(partType) is { } info)
+        {
+            var probe = info.Create();
+            if (probe is IPart part)
+            {
+                var builder = new PartTagBuilder(null, partType, 1);
+                part.DeclareTags(builder);
+                suffixes = new string[builder.Suffixes.Count];
+                for (int i = 0; i < suffixes.Length; i++) suffixes[i] = builder.Suffixes[i];
+            }
+            // Freed rather than queued: this node never entered the tree, and a
+            // queue would hold it until a frame that may never come in a
+            // headless probe.
+            probe.Free();
+        }
+
+        SuffixCache[partType] = suffixes;
+        return suffixes;
+    }
+
+    /// <summary>The palette tooltip's tag line. A part with no I/O says so
+    /// rather than showing an empty field.</summary>
+    public static string TagSummary(string partType)
+    {
+        var suffixes = TagSuffixes(partType);
+        return suffixes.Count == 0 ? "— (static)" : string.Join(" · ", suffixes);
+    }
+
+    /// <summary>Does this part type have a drive that can be failed? Derived
+    /// from the tag set rather than listed twice: anything that registered a
+    /// <c>.fault</c> tag can be faulted, and anything that did not, cannot.
+    /// </summary>
+    public static bool CanFault(string partType)
+    {
+        foreach (string suffix in TagSuffixes(partType))
+        {
+            if (suffix == "fault") return true;
+        }
+        return false;
+    }
 }

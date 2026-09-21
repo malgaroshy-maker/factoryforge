@@ -1,3 +1,4 @@
+using FactoryForge.TagBus;
 using Godot;
 
 namespace FactoryForge.Parts;
@@ -5,7 +6,7 @@ namespace FactoryForge.Parts;
 /// <summary>
 /// Industrial 3-stage stack light post with dynamic indicator lamp emission glow.
 /// </summary>
-public partial class StackLight : Node3D
+public partial class StackLight : Node3D, IPart
 {
     private MeshInstance3D _greenLampMesh = null!;
     private MeshInstance3D _yellowLampMesh = null!;
@@ -204,4 +205,27 @@ public partial class StackLight : Node3D
         _redMat.EmissionEnergyMultiplier = on ? 3.0f : 0.2f;
         if (_redLight is not null) _redLight.LightEnergy = on ? 1.6f : 0.0f;
     }
+
+    // ---------- IPart (HP-34)
+
+    public void DeclareTags(PartTagBuilder tags) => tags
+        .Bit("green", $"StackLight {tags.Index} Green", TagKind.Output)
+        .Bit("yellow", $"StackLight {tags.Index} Yellow", TagKind.Output)
+        .Bit("red", $"StackLight {tags.Index} Red", TagKind.Output);
+
+    public void StepPart(PartTick tick)
+    {
+        if (tick.TryBit("green", out bool green)) SetGreenLamp(green);
+        if (tick.TryBit("yellow", out bool yellow)) SetYellowLamp(yellow);
+        if (tick.TryBit("red", out bool red)) SetRedLamp(red);
+    }
+
+    /// <summary>Precise: each lamp is separately clickable, and a bounding box
+    /// would cover the whole tower and fire the nearest one wherever you
+    /// clicked.</summary>
+    public PartOperation? Operation => new("stack light", Precise: true);
+
+    public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
+
+    public void Operate(PartOperate op) => op.ToggleBit(op.Region);
 }
