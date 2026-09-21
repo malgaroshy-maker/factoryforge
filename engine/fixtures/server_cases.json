@@ -1,0 +1,128 @@
+{
+  "_comment": "Shared SERVER-behaviour cases for the tag bus. Read by tools/check_protocol.py, which drives one running engine over the wire; tests/test_tag_parity.py points it at harness/engine_stub.py and `python tools/check_protocol.py` points it at the C# engine. The point is HP-19: engine/fixtures/tag_cases.json already pins the two Tag *models* together, but nothing pinned the two *servers* together, and all three divergences HP-18 closed lived in the server rather than the model. Cases name tags by role -- '@bit_output' and friends, resolved from the engine's own describe -- so the same file runs against any scene. A case whose roles the scene does not declare is skipped and reported as skipped, never silently passed: the sorting scene has no float tag at all, so float coverage means running this against a scene that does (res://templates/tank_level_control.json declares all six roles).",
+
+  "_roles": "<type>_<kind>, e.g. bit_output, int_input, float_output. The first tag of each combination in the describe wins.",
+
+  "cases": [
+    {
+      "name": "a bad bit does not take the rest of its batch with it",
+      "why": "HP-18.1. The C# server caught bad values per value and carried on; the Python stub let the coercion error escape its connection handler and DROPPED THE CONNECTION. One batch, two engines, two completely different outcomes.",
+      "needs": ["bit_output", "int_output"],
+      "prepare": { "@bit_output": false, "@int_output": 1 },
+      "write": { "@bit_output": 2, "@int_output": 7 },
+      "expect_status": ["bad_value"],
+      "expect_values": { "@bit_output": false, "@int_output": 7 }
+    },
+    {
+      "name": "a bad bit at the head of a batch does not take the rest with it",
+      "why": "Same divergence, order reversed. JSON objects preserve order, so a bad value first is the case that aborted everything after it.",
+      "needs": ["bit_output", "int_output"],
+      "prepare": { "@bit_output": false, "@int_output": 2 },
+      "raw": "{\"t\":\"write\",\"epoch\":@epoch,\"values\":{\"@bit_output\":2,\"@int_output\":9}}",
+      "expect_status": ["bad_value"],
+      "expect_values": { "@bit_output": false, "@int_output": 9 }
+    },
+    {
+      "name": "the largest 32-bit integer is accepted",
+      "why": "HP-18.2. The boundary has to be on the same side of the line for both engines.",
+      "needs": ["int_output"],
+      "prepare": { "@int_output": 0 },
+      "write": { "@int_output": 2147483647 },
+      "forbid_status": ["bad_value"],
+      "expect_values": { "@int_output": 2147483647 }
+    },
+    {
+      "name": "one past the largest 32-bit integer is refused",
+      "why": "HP-18.2. Python accepted it into an unbounded int; C# threw OverflowException, which its per-value catch did not even name -- so the whole batch died and the sidecar was told nothing.",
+      "needs": ["int_output"],
+      "prepare": { "@int_output": 11 },
+      "write": { "@int_output": 2147483648 },
+      "expect_status": ["bad_value"],
+      "expect_values": { "@int_output": 11 }
+    },
+    {
+      "name": "the smallest 32-bit integer is accepted",
+      "needs": ["int_output"],
+      "prepare": { "@int_output": 0 },
+      "write": { "@int_output": -2147483648 },
+      "forbid_status": ["bad_value"],
+      "expect_values": { "@int_output": -2147483648 }
+    },
+    {
+      "name": "one below the smallest 32-bit integer is refused",
+      "needs": ["int_output"],
+      "prepare": { "@int_output": 12 },
+      "write": { "@int_output": -2147483649 },
+      "expect_status": ["bad_value"],
+      "expect_values": { "@int_output": 12 }
+    },
+    {
+      "name": "a float tag refuses a bit",
+      "needs": ["float_output"],
+      "prepare": { "@float_output": 1.5 },
+      "write": { "@float_output": true },
+      "expect_status": ["bad_value"],
+      "expect_values": { "@float_output": 1.5 }
+    },
+    {
+      "name": "writing a simulator-owned input is refused by kind",
+      "needs": ["bit_input"],
+      "write": { "@bit_input": true },
+      "expect_status": ["wrong_kind"]
+    },
+    {
+      "name": "a forced output reads as forced",
+      "why": "HP-13. The engine publishes `update` for inputs only, so without the observe channel a motor forced off while the PLC commands it on reads as on.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": true },
+      "force": { "@bit_output": false },
+      "expect_observe": { "@bit_output": false },
+      "expect_values": { "@bit_output": false },
+      "expect_forced": ["@bit_output"]
+    },
+    {
+      "name": "a write underneath a force is absorbed, not observed",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "force": { "@bit_output": false },
+      "write": { "@bit_output": true },
+      "expect_values": { "@bit_output": false },
+      "expect_forced": ["@bit_output"]
+    },
+    {
+      "name": "releasing a force reveals what the controller is commanding",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": true },
+      "force": { "@bit_output": false },
+      "write": { "@bit_output": true },
+      "clear": ["@bit_output"],
+      "expect_cleared": ["@bit_output"],
+      "expect_values": { "@bit_output": true },
+      "expect_forced": []
+    },
+    {
+      "name": "a bad forced value is refused without dropping the connection",
+      "why": "`force` runs the same coercion as `write` and had the same escape route out of the Python stub's connection handler.",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "raw": "{\"t\":\"force\",\"epoch\":@epoch,\"values\":{\"@bit_output\":2}}",
+      "expect_status": ["bad_value"],
+      "expect_values": { "@bit_output": false },
+      "expect_forced": []
+    },
+    {
+      "name": "an unknown tag in a batch is a warning, not an error",
+      "needs": ["bit_output"],
+      "prepare": { "@bit_output": false },
+      "write": { "no.such.tag": true, "@bit_output": true },
+      "expect_status": ["unknown_tags"],
+      "expect_values": { "@bit_output": true }
+    },
+    {
+      "name": "a frame that is not JSON at all is refused, not fatal",
+      "needs": [],
+      "raw": "this is not json",
+      "expect_status": ["bad_message"]
+    }
+  ]
+}
