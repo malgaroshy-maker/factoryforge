@@ -298,6 +298,42 @@ def section_a() -> None:
     # subject matter, the newest checks in the file, gated by nothing. The
     # skips were printed and nobody was counting them, which is HP-56 again in
     # a different file. tank-level-control has both roles and skips none.
+    # The docs list things the code also lists, and a hand-kept table beside a
+    # machine-read list drifts. It has drifted three times in this project's
+    # life, twice in one sitting: GETTING_STARTED's template table said seven
+    # when the manifest held eight, then eight when it held ten; the README's
+    # component table said 29 when the catalog held 35, and three of its rows
+    # named parts the palette had since renamed -- so a student searching for
+    # "Light Array" found nothing, because it is "Light Curtain" now. A wrong
+    # table does not break a build, which is exactly why nobody notices.
+    drift = []
+
+    catalog = (ROOT / "engine" / "src" / "Editor" / "PartCatalog.cs").read_text(encoding="utf-8")
+    catalog_names = {d for _, d in re.findall(r'new\("([A-Za-z]+)",\s*"([^"]+)"', catalog)}
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_rows = set(re.findall(r"^\| \*\*([^*]+)\*\*", readme, re.M))
+    for name in sorted(catalog_names - readme_rows):
+        drift.append(f"README is missing the part '{name}'")
+    for name in sorted(readme_rows - catalog_names):
+        drift.append(f"README names '{name}', which the catalog does not")
+    heading = re.search(r"##\s*\S*\s*(\d+)-Part Industrial Component Library", readme)
+    if heading and int(heading.group(1)) != len(catalog_names):
+        drift.append(f"README's heading says {heading.group(1)} parts; the catalog has {len(catalog_names)}")
+
+    manifest = json.loads((ROOT / "engine" / "templates" / "manifest.json").read_text(encoding="utf-8"))
+    entries = manifest["templates"] if isinstance(manifest, dict) and "templates" in manifest else manifest
+    titles = {e["title"] for e in entries}
+    guide = (ROOT / "docs" / "GETTING_STARTED.md").read_text(encoding="utf-8")
+    table = re.search(r"^\| Template \| What it is for \|$(.*?)^$", guide, re.M | re.S)
+    listed = set(re.findall(r"^\| \*\*([^*]+)\*\*", table.group(1), re.M)) if table else set()
+    for t in sorted(titles - listed):
+        drift.append(f"GETTING_STARTED is missing the template '{t}'")
+    for t in sorted(listed - titles):
+        drift.append(f"GETTING_STARTED names the template '{t}', which the manifest does not")
+
+    record("A6b", "the docs' part and template tables match the catalog and the manifest",
+           not drift, "; ".join(drift[:4]))
+
     with EngineProcess("--duration=30", "--scene=res://templates/tank_level_control.json"):
         code, out = run([sys.executable, str(ROOT / "tools" / "check_protocol.py")], timeout=30)
     skipped = sum(1 for line in out.splitlines() if line.startswith("SKIP"))

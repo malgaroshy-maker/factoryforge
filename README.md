@@ -57,7 +57,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 
 ---
 
-## 📦 29-Part Industrial Component Library
+## 📦 35-Part Industrial Component Library
 
 The tag ids below are the built-in scene's names. **A part's Name is its tag
 prefix** — rename a pusher to `reject` in the property panel and its tags become
@@ -70,13 +70,13 @@ rule, and it is what makes a scene you build addressable from a PLC.
 | **Photoelectric Sensor** | Diffuse beam sensor, reflects off the item itself | `sensor.detect` (Bit, Input) |
 | **Retroreflective Sensor** | Beams to a reflector post across the lane; sees matt and dark items a diffuse sensor misses | `sensor.detect` (Bit, Input) |
 | **Inductive Sensor** | Responds to metal only — cardboard passes it as if the lane were empty | `sensor.detect` (Bit, Input) |
-| **Light Array** | Light curtain of 12 beams; reports the height of the tallest blocked beam, so one part replaces a low/high sensor pair | `lightarray.height` (Float, Input), `.blocked` (Bit, Input) |
+| **Light Curtain** | Light curtain of 12 beams; reports the height of the tallest blocked beam, so one part replaces a low/high sensor pair | `lightarray.height` (Float, Input), `.blocked` (Bit, Input) |
 | **Pneumatic Pusher** | Cylinder housing, chrome shaft & orange face plate; a jam freezes it mid-stroke | `pusher.extend`, `pusher.extended`, `pusher.retracted`, `pusher.fault` |
-| **Inclined Ramp (Chute)** | 30° gravity chute with guide rails; incline and friction are a matched pair so cartons actually slide | Physical static body |
+| **Ramp (Chute)** | 30° gravity chute with guide rails; incline and friction are a matched pair so cartons actually slide | Physical static body |
 | **Stack Light** | 3-stage industrial tower light (Green, Yellow, Red) | `stacklight.green`, `yellow`, `red` |
 | **Digital Display** | 3D 7-segment LED panel displaying live integer counts | `display.value` (Int, Output) |
 | **Roller Conveyor** | Driven roller deck for pallets and totes that would scuff a belt; rollers spin at the true surface speed | `rollerconveyor.rotate` (Bit, Output) · `.fault` (Bit, Input) |
-| **Weight Scale Conveyor**| Integrated load cell scale reading the carton's mass **in grams** — 720 g for a short carton, 2160 g for a tall one, 12960 g for a metal one — and showing it on the scale | `weighconveyor.weight` (Int, Input) |
+| **Weigh Conveyor**| Integrated load cell scale reading the carton's mass **in grams** — 720 g for a short carton, 2160 g for a tall one, 12960 g for a metal one — and showing it on the scale | `weighconveyor.weight` (Int, Input) |
 | **Box Emitter** | Spawner emitting tall & short rigid cartons, optionally every Nth in metal | `emitter.emit` (Bit, Output) |
 | **Box Remover** | Area3D zone despawning items & incrementing a counter; the counted tag is pickable, so two removers can feed one total | `remover.count` (Int, Input) |
 | **Control Panel** | Operator station you can actually press. Start/Stop/Reset are momentary — one clean scan per click, however long you hold the mouse — and the mushroom is a maintained E-stop wired **normally closed**, so its tag is true while the circuit is healthy. The setpoint pot is **dragged**, reads out in the scene's own units on its scale plate, and turns itself to match a tag driven from a PLC | `panel.start`, `.stop`, `.reset`, `.estop` (Bit, Input) · `panel.setpoint` (Float, Input) · `panel.green`, `.red` (Bit, Output) |
@@ -95,6 +95,12 @@ rule, and it is what makes a scene you build addressable from a PLC.
 | **Measuring Encoder** | A wheel riding the belt it is placed over, counting pulses per metre of travel. Product tracked by *distance* instead of by a timer, so the logic survives anybody turning the drive up. Place it away from a conveyor and it counts nothing and does not turn — the honest failure, and a visible one | `enc.reset` (Bit, Output) · `enc.count` (Int), `enc.rate` (Float, Input) |
 | **Cooling Fan** | A ducted fan that adds to the loss term of any heating station within reach, giving the thermal plant a second actuator pulling the other way. One plant, two actuators — which is split-range control, and the first place a deadband exists for a reason | `fan.run`, `fan.speed` (Float, Output) · `fan.airflow` (Float), `fan.fault` (Bit, Input) |
 | **Two-Hand Control** | Two palm buttons whose permissive is **not** `left AND right`: the relay also requires that the two presses arrived within half a second of each other, so taping one button down defeats nothing. A program that ANDs the two bits itself passes its own test and fails the real device | `hands.left`, `hands.right`, `hands.valid` (Bit, Input) |
+| **Motor Starter** | The device between the PLC and the motor, which the library did not have. Your program energises a coil; the *contactor* runs the machine, and the auxiliary contact is what tells you it actually did — a scan later than you commanded it. A sustained overload trips and **stays** tripped while the coil is still called | `starter.coil` (Bit, Output) · `starter.aux`, `starter.overload` (Bit, NC) · `starter.current` (Float, Input) |
+| **Safety Relay** | Dual-channel cross-monitoring with a real discrepancy window: two contacts that stop agreeing latch a fault, which is what a welded contact looks like from the relay's side. Its reset is edge-triggered, so a taped-down button restarts nothing, and it **permits** rather than commands — closing it must start no machine | `relay.reset` (Bit, Output) · `relay.cha`, `relay.chb`, `relay.fault` (Bit, Input) |
+| **Area Scanner** | Warning and protective fields as separate outputs, and muting **that expires**. A mute is a real hole in a guard; the timeout is what stops a bridge request becoming a permanent defeat, and the scanner refuses to honour one past its limit | `scanner.mute` (Bit, Output) · `scanner.stop`, `scanner.warn`, `scanner.muted` (Bit, Input) |
+| **Double-Acting Cylinder** | Two coils on a 5/2 valve with no spring return, and two reeds with a genuine gap between them — so mid-stroke **neither** is made. Dropping both coils leaves the rod coasting where it was going, because a spool without a spring stays where it was put | `cyl.extend`, `cyl.retract` (Bit, Output) · `cyl.extended`, `cyl.retracted`, `cyl.fault` (Bit, Input) |
+| **Dosing Pump** | Gives the tank an *inflow* it does not own, which is what makes cascade control possible: a fast flow loop inside a slow level loop. The speed reference ramps, so commanded and delivered flow genuinely disagree while it gets there | `pump.run`, `pump.speed` (Float, Output) · `pump.flow` (Float), `pump.fault` (Bit, Input) |
+| **Flow Meter** | A rate and a resettable totaliser — a process variable and a batch counter in one part. The reset is a **level**, not an edge, so a program that pulses it clears nothing. Ending a batch on the total rather than on a timer is the lesson: halve the flow and the litres stay the same | `meter.reset` (Bit, Output) · `meter.rate` (Float), `meter.total` (Int, Input) |
 
 ---
 
