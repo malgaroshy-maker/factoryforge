@@ -94,5 +94,29 @@
       "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · oven.heater · oven.temperature · oven.attemp · temp_gauge.value · temp_readout.value · alarm.beacon · alarm.horn",
       "done": "With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does."
     }
+  },
+  {
+    "id": "guarded-cell",
+    "title": "Guarded cell",
+    "blurb": "Guarding as hardware, not as ladder. A dual-channel relay and an area scanner permit a motor starter; the starter runs the belt, and your program never touches the motor's own tag.",
+    "path": "res://templates/guarded_cell.json",
+    "scene": "guarded-cell",
+    "brief": {
+      "task": "Run the transfer cell without ever writing belt.rotate. You command starter.coil; the contactor runs the motor. The safety relay watches one interlock contact from each leaf of the cell gate and holds your coil off until both leaves are shut and somebody presses Reset — so the relay closing hands the coil back and starts nothing. Cartons have to cross the scanner's protective field, so bridge it with scanner.mute while each one passes; the panel's pot is how long you bridge it for. Then transfer each carton into the chute with the cylinder, sequencing on the two reeds and never energising both coils.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · relay.reset · relay.k1 · relay.k2 · relay.fault · guard_a.closed · guard_b.closed · starter.coil · starter.aux · starter.overload · starter.current · scanner.mute · scanner.stop · scanner.warn · scanner.muted · mute_eye.detect · push_eye.detect · cylinder.extend · cylinder.retract · cylinder.extended · cylinder.retracted · emitter.emit · transferred.count · panel.green · panel.red",
+      "done": "Cartons reach transferred.count while your program has never written belt.rotate — belt.rotate follows starter.aux, because the contactor runs the motor and you only run the coil. Opening either gate leaf stops the cell inside 200 ms; closing both and pressing Reset lights relay.k1 and starts nothing at all, and Start is what starts it. Open one leaf on its own and, past the relay's sync window, relay.fault latches: a reset while it is still open will not clear it. Finally turn the pot past the scanner's own mute limit and watch scanner.muted go out while scanner.mute is still commanded — your mute stopped being a mute, the next carton in the field stopped the cell, and that is what a mute without a limit hides."
+    }
+  },
+  {
+    "id": "batch-dosing",
+    "title": "Batch dosing",
+    "blurb": "Two loops, one inside the other. A pump whose speed is not what it delivers, a flow meter that measures what it really is, and a batch that ends on litres rather than on seconds.",
+    "path": "res://templates/batch_dosing.json",
+    "scene": "batch-dosing",
+    "brief": {
+      "task": "Dose the number of litres on the panel's pot into the tank, then transfer the batch out. Do it with two loops: an inner one that trims pump.speed until meter.rate is the dosing rate you want, and an outer one that watches meter.total and decides what that rate should be — full rate at first, tapering over the last few litres so the cut-off does not carry you past the number. Zero the totaliser before each batch, and remember its reset is a level, not an edge.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · pump.run · pump.speed · pump.flow · pump.fault · meter.rate · meter.total · meter.reset · tank.level · tank.drain · flow_gauge.value · total_display.value · level_readout.value · panel.green · panel.red",
+      "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent."
+    }
   }
 ]

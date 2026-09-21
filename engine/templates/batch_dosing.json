@@ -1,0 +1,64 @@
+{
+  "name": "batch-dosing",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "pump",
+      "type": "DosingPump",
+      "position": [0.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "rated_flow": "120", "reach": "1.6", "ramp_rate": "300" }
+    },
+    {
+      "id": "meter",
+      "type": "FlowMeter",
+      "position": [1.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "reach": "0.8", "damping": "0.2" }
+    },
+    {
+      "id": "tank",
+      "type": "LevelTank",
+      "position": [2.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "fill_rate": "6", "drain_rate": "10", "capacity": "200" }
+    },
+    {
+      "id": "flow_gauge",
+      "type": "AnalogGauge",
+      "position": [1.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "scale_min": "0", "scale_max": "150", "alarm_at": "140", "unit": "L/min" }
+    },
+    {
+      "id": "total_display",
+      "type": "DigitalDisplay",
+      "position": [2.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "unit": "L" }
+    },
+    {
+      "id": "level_readout",
+      "type": "DigitalDisplay",
+      "position": [3.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "unit": "%" }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [3.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.0, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "setpoint_min": "5", "setpoint_max": "60", "setpoint_unit": "L", "setpoint": "20"
+      }
+    }
+  ]
+}

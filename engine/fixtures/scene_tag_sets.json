@@ -836,6 +836,340 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "guarded-cell": [
+      {
+        "id": "belt.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "belt.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "cylinder.extend",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "cylinder.extended",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "cylinder.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "cylinder.retract",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "cylinder.retracted",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "emitter.emit",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "guard_a.closed",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "guard_a.lock",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "guard_a.locked",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "guard_b.closed",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "guard_b.lock",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "guard_b.locked",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "line_end.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "mute_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "push_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.cha",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.chb",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.k1",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.k2",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "relay.reset",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "scanner.mute",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "scanner.muted",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "scanner.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "scanner.warn",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "starter.aux",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "starter.coil",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "starter.current",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "starter.overload",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "transferred.count",
+        "type": "int",
+        "kind": "input"
+      }
+    ],
+    "batch-dosing": [
+      {
+        "id": "flow_gauge.value",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "level_readout.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "meter.rate",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "meter.reset",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "meter.total",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pump.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pump.flow",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "pump.run",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pump.speed",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.drain",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tank.fill",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tank.level",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "total_display.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }
