@@ -44,6 +44,10 @@ class TagBusClient:
         self.scene: str | None = None
         self.epoch: int = -1
         self.connected = asyncio.Event()
+        #: Set once every describe hook has finished rebuilding for the current
+        #: epoch. Writes are held back -- discarded, not queued -- while it is
+        #: clear: see `_flush_loop`, and HP-33.
+        self.rebuilt = asyncio.Event()
 
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._pending: dict[str, TagValue] = {}
@@ -60,12 +64,23 @@ class TagBusClient:
         self._on_describe.append(hook)
         # Drivers are usually constructed after the engine's initial describe has
         # already been processed. Replay it so registration order never matters.
+        #
+        # Gated like a real describe: a hook that has just been registered has
+        # no address map at all yet, which is the same state a scene change
+        # leaves every hook in, so writes have to wait for it too (HP-33).
         if self.epoch >= 0 and self.scene is not None:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
-            loop.create_task(hook(self.scene, self.epoch, self.table))
+            self.rebuilt.clear()
+            loop.create_task(self._replay_describe(hook))
+
+    async def _replay_describe(self, hook: DescribeHook) -> None:
+        try:
+            await hook(self.scene or "", self.epoch, self.table)
+        finally:
+            self.rebuilt.set()
 
     def on_update(self, hook: UpdateHook) -> None:
         self._on_update.append(hook)
@@ -152,6 +167,7 @@ class TagBusClient:
                     self.table = TagTable()
                     self.scene = None
                     self.epoch = -1
+                    self.rebuilt.clear()
 
                     log.info("%s to %s (tick %dms)",
                              "reconnected" if was_connected else "connected",
@@ -244,8 +260,15 @@ class TagBusClient:
                 self._pending.clear()
             log.info("scene %r epoch %d, %d tags (%d forced)",
                      scene, epoch, len(tags), len(forced))
-            for hook in self._on_describe:
-                await hook(scene, epoch, self.table)
+            # The window HP-33 is about opens here and closes when the last
+            # hook returns: the client has adopted the new scene, table and
+            # epoch, and no driver has rebuilt its address map yet.
+            self.rebuilt.clear()
+            try:
+                for hook in self._on_describe:
+                    await hook(scene, epoch, self.table)
+            finally:
+                self.rebuilt.set()
         elif kind == "update":
             values = proto.parse_values(msg)
             for tag_id, value in values.items():
@@ -285,6 +308,16 @@ class TagBusClient:
                 if not self._pending:
                     continue
                 batch, self._pending = self._pending, {}
+            if not self.rebuilt.is_set():
+                # Dropped, not held back (HP-33). A write queued before every
+                # describe hook has rebuilt came out of an address map older
+                # than the epoch it would be stamped with -- so the engine
+                # would accept it, onto whichever tag inherited that id. Every
+                # driver re-derives its map and re-reads the PLC inside
+                # `rebuild`, which is what brings the value back.
+                log.debug("dropping %d write(s) queued before the rebuild "
+                          "finished (epoch %s)", len(batch), self.epoch)
+                continue
             await self._send(proto.write(self.epoch, batch))
 
     async def _send(self, msg: dict) -> None:

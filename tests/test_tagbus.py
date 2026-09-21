@@ -193,3 +193,61 @@ async def test_describe_carries_forced_state(engine, bus, mock):
     await _until(lambda: bus.table.is_forced("sensor_high.detect"),
                  what="the forced flag surviving describe")
     assert bus.read("sensor_high.detect") is True
+
+
+# --- HP-33: who owns the epoch ---
+
+async def test_a_write_during_a_rebuild_does_not_get_the_new_epoch(engine, bus, mock):
+    """HP-33's epoch half, reproduced.
+
+    The client adopted the new scene, table and epoch and only then awaited the
+    describe hooks. Any driver that had not yet rebuilt was still holding the
+    previous epoch's address map -- and a value it read through that map and
+    published in the window was stamped with the *new* epoch, so the engine
+    accepted it onto whichever tag had inherited the id.
+
+    The blocking hook here is not a contrivance: it is what a second driver
+    looks like while the first one's `rebuild` is awaiting the PLC, and what
+    any single driver looks like the moment hook dispatch moves off the receive
+    loop (HP-31).
+    """
+    await mock.set("conveyor.rotate", False)
+    await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is False,
+                 what="a known starting value")
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow_rebuild(scene, epoch, table):
+        # Registering a hook replays the describe already in hand, so the first
+        # call is that replay and is not what this test is about. Let it
+        # through and block on the real one.
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return
+        entered.set()
+        await release.wait()
+
+    bus.on_describe(slow_rebuild)
+    await _until(lambda: calls == 1, what="the registration replay")
+    await engine.send_describe()
+    await asyncio.wait_for(entered.wait(), 2)
+
+    try:
+        # A poller still working from the old map publishes here.
+        await bus.write("conveyor.rotate", True)
+        await asyncio.sleep(0.1)          # several flush ticks at 5ms
+        assert engine.scene.tags.visible("conveyor.rotate") is False, (
+            "a write derived from a map older than the current epoch reached "
+            "the engine"
+        )
+    finally:
+        release.set()
+
+    # And once every hook has rebuilt, writes land again.
+    await _until(lambda: bus.rebuilt.is_set(), what="the rebuild finishing")
+    await bus.write("conveyor.rotate", True)
+    await _until(lambda: engine.scene.tags.visible("conveyor.rotate") is True,
+                 what="writes resuming after the rebuild")
