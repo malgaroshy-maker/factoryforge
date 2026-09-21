@@ -124,12 +124,33 @@ public static class PartTagManager
             if (tags.Contains(newPrefix + tag.Id[oldPrefix.Length..])) return false;
         }
 
+        // A force is part of what a tag currently *is*, so it moves with the tag
+        // (HP-17).
+        //
+        // Renaming removes and rebuilds each tag, and TagTable.Remove drops the
+        // force along with it — correctly, because Remove exists for deleting a
+        // part. Here it meant a rename quietly released every force on the part.
+        // Renaming a motor you had forced off, while the PLC was commanding it
+        // on, *started the motor*: the safest thing in the inspector turning
+        // into the most dangerous, from an action that sounds like paperwork.
+        //
+        // Captured before anything is touched, because the loop below removes
+        // the tag it is reading from.
+        var pinned = new List<(string Suffix, object Value)>();
+        foreach (var tag in moving)
+        {
+            if (tags.IsForced(tag.Id))
+                pinned.Add((tag.Id[oldPrefix.Length..], tags.Visible(tag.Id)));
+        }
+
         foreach (var tag in moving)
         {
             string suffix = tag.Id[oldPrefix.Length..];
             tags.Remove(tag.Id);
             tags.Add(new Tag(newPrefix + suffix, tag.Name, tag.Type, tag.Kind, tag.Value));
         }
+
+        foreach (var (suffix, value) in pinned) tags.Force(newPrefix + suffix, value);
 
         return true;
     }
