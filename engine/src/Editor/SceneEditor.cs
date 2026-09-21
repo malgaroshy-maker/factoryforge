@@ -2460,11 +2460,12 @@ public partial class SceneEditor : Node3D
     /// sorting line's tags are dropped first so a template starts from a clean
     /// I/O list rather than inheriting the demo's.
     /// </summary>
-    public void LoadTemplate(string path)
-    {
-        if (Scene is null && Tags is not null) SortingTags.Undeclare(Tags);
-        LoadSceneFromFile(path);
-    }
+    /// <param name="path">The template to open.</param>
+    /// <remarks>The undeclare used to happen here, before the load was
+    /// attempted — the same destroy-before-validating shape as HP-02, one level
+    /// up. A template that could not be opened left the sorting demo's tags
+    /// gone and the scene that was running with nothing declaring them.</remarks>
+    public bool LoadTemplate(string path) => LoadSceneFromFile(path, dropSortingTags: true);
 
     /// <summary>
     /// Write the scene to disk. Returns false if it did not land.
@@ -2585,7 +2586,12 @@ public partial class SceneEditor : Node3D
     /// the user the scene they already had, and they found out by watching their
     /// work disappear. Read, parse, validate, and only then clear.
     /// </summary>
-    public bool LoadSceneFromFile(string path = "user://custom_scene.json")
+    /// <param name="dropSortingTags">Undeclare the sorting demo's engine-owned
+    /// tags first, so a template starts from a clean I/O list rather than
+    /// inheriting the demo's. Done on the far side of validation, with the
+    /// clear, because it is just as destructive.</param>
+    public bool LoadSceneFromFile(string path = "user://custom_scene.json",
+                                  bool dropSortingTags = false)
     {
         if (!Godot.FileAccess.FileExists(path))
         {
@@ -2621,6 +2627,7 @@ public partial class SceneEditor : Node3D
 
         // Past this line the open scene is gone. Everything that could refuse
         // the file has already had its turn.
+        if (dropSortingTags && Scene is null && Tags is not null) SortingTags.Undeclare(Tags);
         ClearAllPlacedParts();
 
         if (data.Name is { Length: > 0 }) SceneName = data.Name;

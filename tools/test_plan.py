@@ -499,12 +499,24 @@ def section_f() -> None:
 def section_g() -> None:
     print("\nG. Robustness")
 
+    # G1 used to write this file and then launch the engine with no `--scene=`
+    # pointing at it, so the corrupt file was never opened and the check asserted
+    # nothing but that an ordinary startup starts (HP-08). It passed, and it
+    # would have passed just as well with the loader destroying the open scene
+    # before parsing -- which is exactly what it was doing.
+    #
+    # Three claims now, because "does not stop startup" was never the whole of
+    # it: the engine comes up, it says which file it refused and why, and it does
+    # *not* claim to have loaded it.
     bad = USER_DIR / "testplan_corrupt.json"
     bad.parent.mkdir(parents=True, exist_ok=True)
     bad.write_text("{ this is not json at all ]", encoding="utf-8")
-    code, out = engine(["--duration=6"], timeout=90)
-    record("G1", "a corrupt scene file on disk does not stop startup",
-           code == 0 and "engine ready" in out, f"exit={code}")
+    code, out = engine(["--scene=user://testplan_corrupt.json", "--duration=6"], timeout=90)
+    refused = "Could not open scene" in out and "testplan_corrupt.json" in out
+    record("G1", "a corrupt scene file is refused by name, and startup survives it",
+           code == 0 and "engine ready" in out and refused
+           and "Loaded scene from user://testplan_corrupt.json" not in out,
+           f"exit={code}; refused={refused}")
 
     code, out = engine(["--duration=6", "--nonsense-flag=1"], timeout=90)
     record("G2", "an unknown CLI flag is ignored rather than fatal",
