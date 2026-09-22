@@ -48,7 +48,7 @@ themselves worked fine. So end-to-end coverage is not optional here.
 
 | # | Check |
 |---|---|
-| B1 | Full pytest suite (73 tests): tag model, bus protocol, Modbus, OPC UA client/server, Siemens, sorting scene |
+| B1 | Full pytest suite: tag model, bus protocol, Modbus, OPC UA client/server, Siemens, sorting scene, grader. Counts and failing test ids come from pytest's JUnit XML, never from its console text; no XML is a failure. `--pytest-marker EXPR` passes `-m EXPR` — CI's `test-plan` job runs `"not graded"` and its `grader` job runs `graded` (every test in `tests/test_grade.py`, marked by `tests/conftest.py`) |
 
 ### C. Engine self-tests (headless)
 

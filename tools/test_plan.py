@@ -3,6 +3,7 @@
     python tools/test_plan.py              # everything that needs no display
     python tools/test_plan.py --gui        # add the checks that need one
     python tools/test_plan.py --only C,E   # just those sections
+    python tools/test_plan.py --only B --pytest-marker graded   # CI's grader job
     python tools/test_plan.py --only H     # all five scene exercises, headless
 
 Exits non-zero if anything failed. See docs/TEST_PLAN.md for what each check is
@@ -415,7 +416,7 @@ def read_junit(xml_path: Path) -> PytestOutcome:
     return outcome
 
 
-def section_b(targets: list[str] | None = None) -> None:
+def section_b(marker: str | None = None, targets: list[str] | None = None) -> None:
     """The Python suite, judged from pytest's JUnit XML (IP-03).
 
     This used to regex the console. ``re.search(r"(\\d+) failed", out)`` takes
@@ -427,14 +428,18 @@ def section_b(targets: list[str] | None = None) -> None:
     else. If the XML is missing or unreadable B1 fails and says so; it never
     falls back to a count scraped from prose.
 
-    ``targets`` defaults to the whole suite.
+    ``marker`` goes to pytest as ``-m``, so CI can run the graded tests in a
+    job of their own (IP-04); None runs everything. ``targets`` defaults to
+    the whole suite.
     """
-    print("\nB. Python unit and integration")
+    print("\nB. Python unit and integration" + (f"  (-m {marker!r})" if marker else ""))
     import tempfile                            # noqa: PLC0415
 
     with tempfile.TemporaryDirectory(prefix="ff_b1_") as scratch:
         xml_path = Path(scratch) / "pytest.xml"
         cmd = [sys.executable, "-m", "pytest", "-q", f"--junitxml={xml_path}"]
+        if marker:
+            cmd += ["-m", marker]
         cmd += targets or ["tests"]
         # 600s was enough until the grader landed: its tests each drive a real
         # scene to a verdict, and together they are most of the suite's ~30
@@ -898,20 +903,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gui", action="store_true", help="also run checks needing a display")
     parser.add_argument("--only", help="comma-separated section letters, e.g. C,E")
+    parser.add_argument("--pytest-marker", metavar="EXPR",
+                        help="section B runs only tests matching this pytest -m expression, "
+                             "e.g. 'not graded'; default runs every test")
     args = parser.parse_args()
 
-    if GODOT is None:
+    wanted = [s.strip().upper() for s in args.only.split(",")] if args.only else None
+    # B is pytest and nothing else, so `--only B` must not demand an engine:
+    # CI's grader job runs exactly that on a runner with no Godot on it.
+    if GODOT is None and (not wanted or set(wanted) - {"B"}):
         print("Godot not found. Set $GODOT to the .NET build's executable.", file=sys.stderr)
         return 2
 
-    wanted = [s.strip().upper() for s in args.only.split(",")] if args.only else None
     print(f"FactoryForge test plan\n  godot:  {GODOT}\n  python: {sys.executable}")
 
     started = time.perf_counter()
     for letter, fn in SECTIONS.items():
         if wanted and letter not in wanted:
             continue
-        fn()
+        if letter == "B":
+            section_b(marker=args.pytest_marker)
+        else:
+            fn()
     if not wanted or "D" in wanted:
         section_d(args.gui)
 

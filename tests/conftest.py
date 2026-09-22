@@ -19,6 +19,23 @@ from scene import SortingScene                # noqa: E402
 #: Tests use a fast tick so they finish quickly; production default is 10ms.
 TEST_TICK_MS = 5
 
+#: Files whose every test carries the `graded` marker (registered in pytest.ini).
+#: The grader's tests drive whole scenes to a verdict and are most of the
+#: suite's wall clock, so CI runs them as a job of their own (IP-04) and the
+#: fast checks report in minutes rather than waiting behind them. Applied here,
+#: keyed on the file, so a test added to test_grade.py is marked without anyone
+#: remembering to.
+GRADED_FILES = {"test_grade.py"}
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # tryfirst: `-m` is applied by pytest's own collection_modifyitems hook,
+    # and the marker has to be on the item before that deselects anything.
+    for item in items:
+        if item.path.name in GRADED_FILES:
+            item.add_marker(pytest.mark.graded)
+
 
 @pytest.fixture
 def scene() -> SortingScene:

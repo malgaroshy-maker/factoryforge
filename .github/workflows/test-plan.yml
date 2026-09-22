@@ -29,8 +29,13 @@ env:
   GODOT_VERSION: 4.7.2
 
 jobs:
+  # The fast signal: build, bus, drivers, self-tests, determinism, scenes.
+  # Everything except the graded tests, which have a job of their own below
+  # so this one does not wait ~30 minutes behind them (IP-04). The ceiling is
+  # about twice what this job took before the grader existed (~16 min).
   test-plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -79,5 +84,27 @@ jobs:
       - name: Install the sidecar (with test extras)
         run: pip install -e "sidecar[dev,siemens]"
 
-      - name: Run the test plan (A, B, C, E, H)
-        run: python tools/test_plan.py --only A,B,C,E,H
+      - name: Run the test plan (A, B without the graded tests, C, E, H)
+        run: python tools/test_plan.py --only A,B,C,E,H --pytest-marker "not graded"
+
+  # The graded tests: tests/test_grade.py, marked `graded` by tests/conftest.py.
+  # They run the headless grader against harness/engine_stub.py over a real
+  # tag bus -- Python end to end, so this job installs neither Godot nor .NET.
+  # Run through test_plan.py rather than bare pytest so a failure is reported
+  # the way B1 reports it: counted and named from pytest's JUnit XML.
+  # The graded half of B took 31 minutes of run 35698579275.
+  grader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the sidecar (with test extras)
+        run: pip install -e "sidecar[dev,siemens]"
+
+      - name: Run the graded tests (B, -m graded)
+        run: python tools/test_plan.py --only B --pytest-marker graded
