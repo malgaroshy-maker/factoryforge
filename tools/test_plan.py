@@ -379,12 +379,22 @@ def section_b() -> None:
     # Name the tests that failed, not just how many. A bare count sends you back
     # to run pytest yourself to find out what broke -- and if it was a flake,
     # the second run tells you nothing at all.
-    names = re.findall(r"^(?:FAILED\s+)?(tests[/\][\w./\]+::[\w\[\]-]+)", out, re.M)
+    # Anchored on FAILED so a traceback location line like
+    # "tests/test_grade.py:502:" is not mistaken for a test id.
+    names = re.findall(r"^FAILED\s+(tests[\w/\.]+::[\w\[\]\-]+)", out, re.M)
     detail = (f"{match.group(1) if match else '?'} passed"
               + (f", {failed.group(1)} FAILED" if failed else "")
               + (f", {skipped.group(1)} skipped" if skipped else ""))
     if names:
         detail += ": " + ", ".join(dict.fromkeys(names))
+    # When the count and the names disagree, the names are not the whole story
+    # and guessing from a summary line wastes a CI cycle -- twice, here. Print
+    # pytest's own tail so the log carries the evidence rather than a number.
+    if failed and len(names) < int(failed.group(1)):
+        tail = "\n".join(out.strip().splitlines()[-40:])
+        print(f"\n  B1 reported {failed.group(1)} failures and named "
+              f"{len(names)}; pytest's own last 40 lines follow:\n{tail}\n",
+              flush=True)
     record("B1", "pytest suite", code == 0, detail)
 
 
