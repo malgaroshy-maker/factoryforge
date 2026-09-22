@@ -78,8 +78,20 @@ def run(cmd: list[str], cwd: Path = ROOT, timeout: float = 180) -> tuple[int, st
                               text=True, encoding="utf-8", errors="replace")
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except subprocess.TimeoutExpired as exc:
-        out = (exc.stdout or "") + (exc.stderr or "")
-        return 124, (out if isinstance(out, str) else out.decode("utf-8", "replace")) + "\n[TIMEOUT]"
+        # Decode each stream BEFORE joining them. TimeoutExpired carries bytes
+        # even when the call asked for text, and it sets only the stream that
+        # had output -- so `(exc.stdout or "") + (exc.stderr or "")` is
+        # `bytes + str`, which raises TypeError before the isinstance check
+        # below it ever runs. The handler whose job is to say what went wrong
+        # then dies instead of saying it, and you get a traceback from the
+        # reporter rather than the word TIMEOUT. Seen in CI the first time the
+        # Python suite outgrew this call's ceiling.
+        def _text(stream) -> str:
+            if stream is None:
+                return ""
+            return stream.decode("utf-8", "replace") if isinstance(stream, bytes) else str(stream)
+
+        return 124, _text(exc.stdout) + _text(exc.stderr) + "\n[TIMEOUT]"
 
 
 def engine(args: list[str], headless: bool = True, timeout: float = 90) -> tuple[int, str]:
@@ -350,7 +362,11 @@ def section_a() -> None:
 
 def section_b() -> None:
     print("\nB. Python unit and integration")
-    code, out = run([sys.executable, "-m", "pytest", "-q", "tests"], timeout=600)
+    # 600s was enough until the grader landed: 51 of these drive a real scene
+    # to a verdict, which is most of the suite's ~30 minutes. CI hit the
+    # ceiling and, because of the bug fixed in run() above, reported a
+    # TypeError from the timeout handler instead of a timeout.
+    code, out = run([sys.executable, "-m", "pytest", "-q", "tests"], timeout=3600)
     match = re.search(r"(\d+) passed", out)
     failed = re.search(r"(\d+) failed", out)
     # Skips too. A skip is neither a pass nor a failure, so counting only the
