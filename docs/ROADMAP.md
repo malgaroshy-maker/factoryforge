@@ -1,14 +1,18 @@
 # FactoryForge — Roadmap
 
-*Status: living document · Last updated: 2026-09-21*
+*Status: living document · Last updated: 2026-09-22*
 
 Pace assumption: **full-time solo**. Every milestone must be independently
 useful — nothing of value should be gated behind a distant v1.
 
-M0 through M6 are complete. What is open is no longer a milestone: it is
-`HARDENING_PLAN.md`, which is where the work that makes any of this survive
-contact with a second person now lives. The one thing M6 never did is publish a
-release — see *Beyond v1* below, and HP-09.
+M0 through M6 are complete, and so is M1.5. **v1.0.0 is published** — tagged
+and released on 2026-09-21 by `release.yml`, with Windows and Linux archives
+(HP-09). `HARDENING_PLAN.md` closed on 2026-09-22. What is open is no longer a
+milestone: it is [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md), the v1.1 plan.
+
+Several things below landed *after* the v1.0.0 tag — the MQTT driver, the
+OpenPLC cross-check and the headless grader among them — so they are on
+`master` and not in the v1.0.0 archives. `git log v1.0.0..master` is the list.
 
 ---
 
@@ -24,21 +28,22 @@ release — see *Beyond v1* below, and HP-09.
 - [x] Driver ABC + registry
 - [x] Modbus TCP driver + hand-written Modbus server
 - [x] Mock driver for CI
-- [x] 27 tests passing
+- [x] A pytest suite that needs no PLC, and passes
 
 **Why this first:** it is the riskiest integration and the cheapest to change
 now. It is also the contract every future contributor codes against.
 
 ---
 
-## M1 — OPC UA ✅ **complete but for two items**
+## M1 — OPC UA ✅ **complete**
 
 *The primary integration path, and the one that reaches beyond Siemens.*
 
-The two unchecked boxes below are the only ones left anywhere in M0–M6, and both
-are still genuinely open rather than quietly abandoned: the OpenPLC cross-check
-was deferred at the user's request and is tracked as HP-45, and the two
-PLCSIM-Advanced facts that need writing down are HP-46.
+The last two boxes here stayed unchecked long after they were done. The
+OpenPLC cross-check was deferred at the user's request, then done as HP-45. The
+two PLCSIM Advanced facts had been written down in `examples/tia/` since the
+initial commit, and this page never said so. HP-46's other half, the same TIA
+program over two drivers, is still open, as IP-13.
 
 Reference target is **S7-PLCSIM Advanced** — no physical hardware is available
 to this project. Everyday development runs against OpenPLC over the existing
@@ -57,16 +62,25 @@ Modbus driver, which needs no licence.
       `drivers/opcua_server.py`. Simulator-owned inputs are read-only, so a
       client cannot fake a sensor.
 - [x] Integration tests against a local `asyncua` server (no Siemens software in
-      CI) — 11 tests, `tests/test_opcua.py`
+      CI) — `tests/test_opcua.py`
 - [x] **Manual verification: TIA Portal → PLCSIM Advanced → OPC UA → scene.
       Working end to end on a real S7-1500 (CPU 1511-1 PN).** Boxes sort by
       height, **100.0% perfect split (99 tall / 99 short)** with SCL v0.4 (`PUSH_HOLD` `T#1S500MS`).
 - [x] Polling read path, now the default — the S7 forces a 1000 ms subscription
       publishing interval that swallowed the 500 ms pusher pulse
 - [x] **`PUSH_HOLD` → `T#1S500MS` (SCL v0.4)** — verified live on real S7-1500 (99 tall / 99 short)
-- [ ] Cross-check the same scene driven by OpenPLC over Modbus
-- [ ] Document the 100-variable unlicensed trial limit, and that **PLCSIM
-      Advanced is required** — plain bundled PLCSIM will not work
+- [x] **Cross-check the same scene driven by OpenPLC over Modbus** —
+      `dd6fac4`, [OPENPLC.md](OPENPLC.md). An unmodified IEC 61131-3 program,
+      `examples/openplc/Sorting.st`, on the OpenPLC v3 runtime under WSL2, drove
+      the Python harness scene (`harness/scene.py`) over the `modbus-tcp`
+      driver: **103 tall / 103 short** in 630 s. The harness scene, not the 3D
+      engine. Landed after v1.0.0.
+- [x] Document the 100-variable unlicensed trial limit, and that **PLCSIM
+      Advanced is required** — plain bundled PLCSIM will not work. Both are in
+      `examples/tia/README.md` (the requirement at the top, the trial limit in
+      its troubleshooting table) and the trial limit also in
+      `examples/tia/FF_IO_datablock.md`. They have been there since the initial
+      commit.
 - [x] Worked example: Node-RED flow connecting to server mode —
       `examples/nodered/factoryforge-flow.json`. Node-RED replaces the PLC
       entirely: runs the belt, pulses the emitter, fires the pusher on the high
@@ -82,7 +96,7 @@ single integration. Do not let it slip to "if there's time."
 
 ---
 
-## M1.5 — MQTT *(~3 days, optional)*
+## M1.5 — MQTT ✅ **complete** *(after v1.0.0; paho-mqtt, not aiomqtt)*
 
 *Small, and it proves the driver abstraction generalises.*
 
@@ -91,11 +105,23 @@ pub/sub with no addressing at all. If the `Driver` ABC survives MQTT unchanged,
 it is a real abstraction — worth confirming **before** contributors start
 writing drivers against it.
 
-- [ ] MQTT driver via `aiomqtt`
-- [ ] Topic scheme: `factoryforge/<scene>/tag/<tag_id>`, retained for inputs
-- [ ] Subscribe on output topics; publish input changes (delta-only, as the bus does)
-- [ ] Tests against a local broker
-- [ ] If the ABC needs changing to fit, **that is the finding** — fix it now
+- [x] MQTT driver — `drivers/mqtt.py`, `--driver mqtt` (`615819a`, wired into
+      the CLI in `a99539f`). **Built on `paho-mqtt`, not the `aiomqtt` this
+      line originally named.** aiomqtt drives the socket through
+      `loop.add_reader()`/`add_writer()`, which Windows' default
+      `ProactorEventLoop` does not implement. The client connects, reports
+      success, and never receives a byte. The sidecar is launched by the engine,
+      which cannot choose the event loop policy, so paho with its own network
+      thread was the fix. The reasoning is in the driver's docstring.
+- [x] Topic scheme: `factoryforge/<scene>/tag/<tag_id>`, retained for inputs
+- [x] Subscribe on output topics; publish input changes (delta-only, as the bus does)
+- [x] Tests against a local broker. `tests/test_mqtt.py` carries its own
+      minimal MQTT 3.1.1 broker, so CI needs no mosquitto. No run against an
+      external broker is recorded.
+- [x] If the ABC needs changing to fit, **that is the finding**. It did not
+      need changing. What MQTT did expose is an ordering: `Driver.start()` runs
+      before the first `rebuild()`, so the last will cannot be put on the
+      scene's own status topic. It sits on a per-sidecar topic instead.
 
 **Ships:** direct IIoT scenarios, and an Industry 4.0 teaching angle Factory I/O
 has no answer to — its driver list contains no MQTT at all.
@@ -191,11 +217,13 @@ whereas OPC UA reaches every vendor.
 download to a PLCSIM-driven sorting scene in under 30 minutes, using only the
 written guide.
 
-**And that word "download" is still unearned.** The build and freeze machinery
-landed afterwards and is verified on both platforms (see *Beyond v1*), but no
-version has been tagged and no archive has been published, so the 30 minutes
-currently start with installing Godot and the .NET SDK. Closing this properly is
-HP-09.
+**The word "download" was unearned until v1.0.0.** The build and freeze
+machinery landed after M6, and for weeks nothing was tagged or published, so
+the 30 minutes started with installing Godot and the .NET SDK. v1.0.0 is now
+published with Windows and Linux archives (HP-09). A student still cannot get
+from that download to a *graded* program without a clone, and the guide never
+mentions OpenPLC, the one licence-free real PLC target. Those are IP-08 and
+IP-09.
 
 ---
 
@@ -260,13 +288,13 @@ most likely to slip.
       cannot drift apart.
 - [x] **A release you can build, and a gate it has to pass.**
       `tools/build_release.py` exports the engine and freezes the sidecar with
-      PyInstaller; `build_windows.bat` does it double-clickably and then runs 25
-      headless self-tests **against the exported binary**, because a build that
-      produced a binary is not the same as one that produced a working binary.
-      Verified on both platforms, three times, last on 2026-09-02 — see
-      [PACKAGING.md](PACKAGING.md). **Not published**: no tag, no GitHub
-      release, no archive anywhere but one machine. That is HP-09, and it is the
-      single largest gap between what this project is and what anyone can use.
+      PyInstaller; `build_windows.bat` does it double-clickably and then runs
+      the release gate's headless self-tests **against the exported binary**,
+      because a build that produced a binary is not the same as one that
+      produced a working binary. See [PACKAGING.md](PACKAGING.md). **Published
+      as v1.0.0** on 2026-09-21: `release.yml` built both platforms from the
+      tag, and the gate passed against both exported binaries before the
+      archives were attached (HP-09).
 
 - [x] **Nine more parts, from fifteen to twenty-four** (CP-01…CP-09, see
       [COMPONENTS_AND_POLISH_PLAN.md](history/COMPONENTS_AND_POLISH_PLAN.md)) — each one
@@ -354,20 +382,27 @@ most likely to slip.
       task, the tags to use and how you know it works, and every tag a brief
       names is checked against the scene it belongs to.
 
-**Next, and ahead of everything below it:**
-[HARDENING_PLAN.md](HARDENING_PLAN.md) — fifty-two items from three reviews run
-on 2026-09-20. None of them are features. The subset that matters is the
-*release gate*: a save that reports success after failing, opening a bad file
+- [x] **A headless grader** — `tools/grade.py`, [GRADING.md](GRADING.md)
+      (`7f1875d`, after v1.0.0). It marks a student's program PASS or FAIL
+      against a scene, over the same tag bus a PLC uses. It is not in the
+      release archive yet (IP-08), and no real student's program has been
+      graded (IP-11).
+
+**Closed:** [HARDENING_PLAN.md](HARDENING_PLAN.md), from three reviews run on
+2026-09-20. None of its items were features. Its release gate is what v1.0.0
+shipped over: a save that reports success after failing, opening a bad file
 destroying the good scene, an undo that hands back a part at factory defaults, a
-rename that quietly reassigns a PLC's tags. All four are on a student's first
-hour, and all four are invisible at the moment they happen. Nothing should ship
-over them.
+rename that quietly reassigns a PLC's tags. It closed on 2026-09-22, and its
+three open items carried forward.
+
+**Next, and ahead of everything below it:**
+[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md), the v1.1 plan. Its Sequencing
+section holds the v1.1 gate and the order to work in.
 
 **Near:** part-to-part linking in the editor — the measuring encoder finds the
 belt under it by geometry, which is right for a wheel resting on a deck and
 would not be right for, say, a drive and a remote readout · more parts driven by
-what contributors ask for · headless grading mode for coursework ·
-MQTT **Sparkplug B** (the industrial MQTT standard, if plain MQTT proves useful) ·
+what contributors ask for · MQTT **Sparkplug B** (the industrial MQTT standard, if plain MQTT proves useful) ·
 an example Node-RED flow and dashboard shipped with the docs
 
 **Later:** `.factoryio` scene importer, once the part library overlaps enough ·

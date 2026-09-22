@@ -3,7 +3,7 @@
 Read this first, then [`docs/IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md) for what
 is open and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
 
-The thirteen completed plan documents live in
+The completed plan documents live in
 [`docs/history/`](docs/history/) — including `PLAN.md`, which this line used to
 send you to first. They are worth reading for *why* something was built the way
 it was, and they are not current instructions; the figures in them are the
@@ -86,8 +86,10 @@ cd C:/Users/masal/source/factoryforge
 # engine/sidecar seam, robustness. Needs no PLC. See docs/TEST_PLAN.md.
 python tools/test_plan.py            # add --gui for the display-dependent check
 
-# The Python suite. 73 of them on 2026-09-21; the command is the authority and
-# this comment is not, which is how it came to say 41 long after it was 73.
+# The Python suite. How many pass is whatever it prints: this comment used to
+# carry the number, and still said 41 long after the suite outgrew it. A6b in
+# test_plan.py now fails if a test count is written into this file.
+# -m "not graded" skips the slow grader tests; -m graded runs only them.
 python -m pytest -q
 
 # Engine build
@@ -308,8 +310,10 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
     mode's first version used it and worked for nobody except by accident: the
     headless self-test passed every assertion it could reach while clicking a
     button did nothing at all. Take the position off the `InputEventMouseButton`.
-    (`SelectPartAtMouse` still reads the cursor; it predates this and is only
-    ever driven by hand.)
+    (Edit mode's press does too now: `PickPartAt(clickBtn.Position)` in
+    `SceneEditor.Input.cs`. The one live-cursor read left in the editor is
+    `UpdatePreviewPosition`, the placement ghost, which is meant to follow the
+    pointer rather than a click.)
 
 11. **A UI that configures nothing is worse than no UI.** The F4 wiring panel
     kept its mappings in a dictionary nothing outside that file ever read, and
@@ -420,21 +424,46 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
 
 ## Current state
 
-**Working end to end**, verified against real hardware:
+**v1.0.0 is published.** `release.yml` built it from the `v1.0.0` tag on
+2026-09-21 and attached `FactoryForge-windows.zip` and `FactoryForge-linux.zip`
+to the GitHub release, after the release gate had passed against both exported
+binaries (run 35566288909). Everything since the tag is on `master` and
+unreleased; `git log v1.0.0..master` is the list.
 
-- Tag bus, drivers (OPC UA client + server, Modbus, mock)
-- OPC UA client → real S7-1500 → boxes sort by height (**100.0% perfect split: 99 tall / 99 short** with SCL v0.4)
+**Working end to end:**
+
+- Tag bus; drivers for OPC UA (client and server), Modbus TCP, MQTT, S7 via
+  snap7, the PLCSIM Advanced native API, and a mock. `factoryforge-sidecar
+  drivers` lists them.
+- OPC UA client → the S7-1500 on PLCSIM Advanced → boxes sort by height
+  (**100.0% perfect split: 99 tall / 99 short** with SCL v0.4). The native
+  API and snap7 paths also drive the 3D scene from that virtual CPU.
 - Node-RED replacing the PLC entirely — **9 tall / 9 short, perfect split**
+- OpenPLC running an unmodified `examples/openplc/Sorting.st` over Modbus —
+  **103 tall / 103 short**, against the Python harness scene rather than the
+  3D engine (`docs/OPENPLC.md`; after v1.0.0)
 - Godot C# engine with 3D geometry driven by tags, screenshot in README
 - The unchanged Python sidecar drives the C# engine (`tools/drive_engine.py`)
-- 73 of 73 Python tests passing (`python -m pytest -q`); CI needs no Siemens
-  software and no GPU
+- A headless grader, `tools/grade.py`, marks a program against a scene
+  (`docs/GRADING.md`; after v1.0.0). It is not in the release archive (IP-08),
+  and no real student's program has been graded yet (IP-11).
+
+The MQTT driver (after v1.0.0) has only met the broker inside
+`tests/test_mqtt.py`, never an external one.
+
+**Tests:** `python -m pytest -q`, and how many pass is whatever it prints.
+`python tools/test_plan.py` runs everything. CI needs no Siemens software and
+no GPU, and runs the graded tests (`-m graded`) as a job of their own beside
+the rest.
 
 **Resolved imperfection:** In SCL v0.3, ~12% of tall boxes slipped past the pusher due to timing margin (0.6s catch window vs ~100ms OPC UA round-trip jitter). Fixed in SCL v0.4 by setting `PUSH_HOLD` `T#500MS` → `T#1S500MS`, verified live on real S7-1500 (99 tall / 99 short).
 
 ---
 
 ## Next steps, in order
+
+Items 1–7 are done. They stay because their notes explain why things are the
+way they are. Item 8 is what is next.
 
 1. **`PUSH_HOLD` → `T#1S500MS`** (SCL v0.4) — **Verified on hardware (99 tall / 99 short, 100% split)**.
 2. **Finish M2**: integer voxel grid, free-look camera, C# protocol tests in CI — **Done**.
@@ -450,37 +479,36 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
    ignored the DInt counters — it now takes a `DBX0.0` / `DBD2` mapping file.
    All three Siemens drivers are verified against a virtual S7-1500.
 6. **M6 — v1 Release**: student getting-started guide, part & driver authoring
-   guides — **Done**. **Packaging: the machinery is built and verified; nothing
-   has ever been published.** Those are two different things and this entry has
-   now been wrong about both of them, so read them separately.
+   guides — **Done**. **Packaging: built, verified, and published as v1.0.0.**
+   Building and publishing are two different things, and this entry has been
+   wrong about both of them, so read them separately.
 
    *Built and verified.* `python tools/build_release.py` exports the engine,
    freezes the sidecar with PyInstaller and writes
    `dist/FactoryForge-<platform>.zip`; on Windows `build_windows.bat` does the
    same double-clickably and then runs the release gate — every self-test in
    `check_release.py`'s `SELF_TESTS` list, headless, against the **exported
-   binary** rather than the checkout. Verified end to end locally on 2026-08-23,
-   in CI on 2026-08-24, and again on 2026-09-02 after the nine new parts, on
-   Windows and Linux both — 25 of them on that last run. The list is 27 now and
-   has not been run since, so `lineparts` and `buildflow` have never met an
-   exported binary. The question this entry once
-   called unanswered — how to ship the Python sidecar — was answered by freezing
-   it; see `docs/PACKAGING.md`.
+   binary** rather than the checkout. The gate passed on Windows and Linux in
+   the v1.0.0 release run. `controlparts`, `editorkeys` and `handlingparts`
+   joined the list after that run and have never met an exported binary
+   (IP-22). How to ship the Python sidecar, which this entry once called
+   unanswered, was answered by freezing it; see `docs/PACKAGING.md`.
 
-   *Never published.* Zero GitHub releases, zero git tags. `release.yml`
-   triggers on `v*` and has only ever been fired by hand as a
-   `workflow_dispatch` dry run. The archives exist on one machine in the world,
-   so running FactoryForge still means installing Godot-mono and the .NET SDK
-   and building from source — for the reason a release would fix, and for none
-   of the reasons this entry used to give. Publishing one is HP-09 in
-   `docs/HARDENING_PLAN.md`.
+   *Published.* `release.yml` triggers on `v*`. The `v1.0.0` tag fired it on
+   2026-09-21, and it built both platforms, ran the gate and attached the
+   archives to a GitHub release (HP-09). That archive holds no grader, and the
+   guide in it never mentions OpenPLC; those are IP-08 and IP-09.
 
    The history is worth keeping: this entry first claimed packaging was done
    when no binary had ever been exported, then claimed it was undone after the
-   machinery had been built and gated on two platforms. Both times the
-   correction was a whole sentence away from a claim nobody had rechecked.
-
-Deliberately skipped at the user's request: OpenPLC/Modbus cross-check.
+   machinery had been built and gated on two platforms, and then kept saying
+   nothing was published after v1.0.0 had shipped. Each time the correction was
+   a whole sentence away from a claim nobody had rechecked.
+7. **Hardening** — `docs/HARDENING_PLAN.md`, **closed** on 2026-09-22. What it
+   left open moved into the v1.1 plan. The OpenPLC/Modbus cross-check, once
+   skipped at the user's request, was done there as HP-45 (`docs/OPENPLC.md`).
+8. **v1.1** — `docs/IMPROVEMENT_PLAN.md`. Its Sequencing section gives the
+   v1.1 gate and the order to work in.
 
 ## What is open
 

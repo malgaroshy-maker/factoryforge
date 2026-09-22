@@ -41,8 +41,8 @@ Siemens software:
 python -m pytest -q
 ```
 
-73 pass as of 2026-09-21. The count is whatever `pytest` prints — it has grown
-steadily and every place that wrote it down went stale. What matters is that
+How many pass is whatever `pytest` prints. This guide does not write the number
+down: it has grown steadily and every place that did went stale. What matters is that
 nothing **fails**, and that pytest *collects* the suite at all: a collection
 error rather than a test failure usually means an optional extra did not
 install.

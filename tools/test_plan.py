@@ -4,7 +4,7 @@
     python tools/test_plan.py --gui        # add the checks that need one
     python tools/test_plan.py --only C,E   # just those sections
     python tools/test_plan.py --only B --pytest-marker graded   # CI's grader job
-    python tools/test_plan.py --only H     # all five scene exercises, headless
+    python tools/test_plan.py --only H     # every shipped scene's exercise, headless
 
 Exits non-zero if anything failed. See docs/TEST_PLAN.md for what each check is
 for; the short reasons here are so a failure explains itself without the doc.
@@ -263,6 +263,100 @@ def dead_types() -> tuple[bool, str]:
     return not dead, ", ".join(sorted(dead))
 
 
+#: The documents a reader takes as describing the project *now*. Dated records
+#: -- TEST_PLAN.md's run log, the plans in docs/history, ROADMAP's completed
+#: milestones -- state the counts of their own day and are not checked here.
+LIVING_DOCS = ("README.md", "AGENTS.md", "docs/GETTING_STARTED.md", "docs/ROADMAP.md",
+               ".github/workflows/test-plan.yml")
+
+_NUMBER_WORDS = {w: n for n, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
+
+
+def _as_count(text: str) -> int | None:
+    text = text.strip().lower()
+    return int(text) if text.isdigit() else _NUMBER_WORDS.get(text)
+
+
+def prose_count_drift(parts: int, templates: int) -> list[str]:
+    """Counts written in prose, checked against the code or refused (IP-02).
+
+    A number in a sentence goes stale the day something is added, and nothing
+    fails when it does: "73 pass" sat in three files while the suite grew past
+    280, README said "eight templates" with eleven in the manifest, and the CI
+    workflow's header cited "five shipped scenes". So a count is either one
+    this function can confirm, or it is not written down.
+
+    - Part and template totals are allowed in the exact phrasings below, each
+      compared with the catalog or the manifest. Add a phrasing here before
+      writing a new one.
+    - Test counts are never allowed in the living docs. pytest's own output
+      is the only authority, and no check here could confirm a number.
+    """
+    checked = [
+        # (file, pattern with the count as group 1, what it counts, true value)
+        ("README.md", r"##\s*\S*\s*(\d+)-Part Industrial Component Library", "parts", parts),
+        ("README.md", r"Start screen with (\w+) templates", "templates", templates),
+    ]
+    test_count = re.compile(
+        r"\b\d+\s+(?:of\s+\d+\s+)?(?:Python\s+|pytest\s+)?(?:tests?|pass(?:ed|es|ing)?)\b", re.I)
+
+    drift = []
+    for name, pattern, what, actual in checked:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        found = re.findall(pattern, text)
+        if not found:
+            drift.append(f"{name} no longer says '{pattern}' -- update prose_count_drift")
+        for said in found:
+            if _as_count(said) != actual:
+                drift.append(f"{name} says {said} {what}; there are {actual}")
+    for name in LIVING_DOCS:
+        for i, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1):
+            for match in test_count.finditer(line):
+                drift.append(f"{name}:{i} states a test count ('{match.group(0)}'); "
+                             "say 'whatever pytest prints' instead")
+    return drift
+
+
+def docs_drift() -> list[str]:
+    """A6b's findings: where the docs disagree with the catalog and the manifest.
+
+    The docs list things the code also lists, and a hand-kept table beside a
+    machine-read list drifts. It has drifted three times in this project's
+    life, twice in one sitting: GETTING_STARTED's template table said seven
+    when the manifest held eight, then eight when it held ten; the README's
+    component table said 29 when the catalog held 35, and three of its rows
+    named parts the palette had since renamed -- so a student searching for
+    "Light Array" found nothing, because it is "Light Curtain" now. A wrong
+    table does not break a build, which is exactly why nobody notices.
+    """
+    drift = []
+
+    catalog = (ROOT / "engine" / "src" / "Editor" / "PartCatalog.cs").read_text(encoding="utf-8")
+    catalog_names = {d for _, d in re.findall(r'new\("([A-Za-z]+)",\s*"([^"]+)"', catalog)}
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_rows = set(re.findall(r"^\| \*\*([^*]+)\*\*", readme, re.M))
+    for name in sorted(catalog_names - readme_rows):
+        drift.append(f"README is missing the part '{name}'")
+    for name in sorted(readme_rows - catalog_names):
+        drift.append(f"README names '{name}', which the catalog does not")
+
+    manifest = json.loads((ROOT / "engine" / "templates" / "manifest.json").read_text(encoding="utf-8"))
+    entries = manifest["templates"] if isinstance(manifest, dict) and "templates" in manifest else manifest
+    titles = {e["title"] for e in entries}
+    guide = (ROOT / "docs" / "GETTING_STARTED.md").read_text(encoding="utf-8")
+    table = re.search(r"^\| Template \| What it is for \|$(.*?)^$", guide, re.M | re.S)
+    listed = set(re.findall(r"^\| \*\*([^*]+)\*\*", table.group(1), re.M)) if table else set()
+    for t in sorted(titles - listed):
+        drift.append(f"GETTING_STARTED is missing the template '{t}'")
+    for t in sorted(listed - titles):
+        drift.append(f"GETTING_STARTED names the template '{t}', which the manifest does not")
+
+    drift += prose_count_drift(len(catalog_names), len(entries))
+    return drift
+
+
 # --- A. build and static ----------------------------------------------------
 
 def section_a() -> None:
@@ -311,40 +405,10 @@ def section_a() -> None:
     # subject matter, the newest checks in the file, gated by nothing. The
     # skips were printed and nobody was counting them, which is HP-56 again in
     # a different file. tank-level-control has both roles and skips none.
-    # The docs list things the code also lists, and a hand-kept table beside a
-    # machine-read list drifts. It has drifted three times in this project's
-    # life, twice in one sitting: GETTING_STARTED's template table said seven
-    # when the manifest held eight, then eight when it held ten; the README's
-    # component table said 29 when the catalog held 35, and three of its rows
-    # named parts the palette had since renamed -- so a student searching for
-    # "Light Array" found nothing, because it is "Light Curtain" now. A wrong
-    # table does not break a build, which is exactly why nobody notices.
-    drift = []
-
-    catalog = (ROOT / "engine" / "src" / "Editor" / "PartCatalog.cs").read_text(encoding="utf-8")
-    catalog_names = {d for _, d in re.findall(r'new\("([A-Za-z]+)",\s*"([^"]+)"', catalog)}
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    readme_rows = set(re.findall(r"^\| \*\*([^*]+)\*\*", readme, re.M))
-    for name in sorted(catalog_names - readme_rows):
-        drift.append(f"README is missing the part '{name}'")
-    for name in sorted(readme_rows - catalog_names):
-        drift.append(f"README names '{name}', which the catalog does not")
-    heading = re.search(r"##\s*\S*\s*(\d+)-Part Industrial Component Library", readme)
-    if heading and int(heading.group(1)) != len(catalog_names):
-        drift.append(f"README's heading says {heading.group(1)} parts; the catalog has {len(catalog_names)}")
-
-    manifest = json.loads((ROOT / "engine" / "templates" / "manifest.json").read_text(encoding="utf-8"))
-    entries = manifest["templates"] if isinstance(manifest, dict) and "templates" in manifest else manifest
-    titles = {e["title"] for e in entries}
-    guide = (ROOT / "docs" / "GETTING_STARTED.md").read_text(encoding="utf-8")
-    table = re.search(r"^\| Template \| What it is for \|$(.*?)^$", guide, re.M | re.S)
-    listed = set(re.findall(r"^\| \*\*([^*]+)\*\*", table.group(1), re.M)) if table else set()
-    for t in sorted(titles - listed):
-        drift.append(f"GETTING_STARTED is missing the template '{t}'")
-    for t in sorted(listed - titles):
-        drift.append(f"GETTING_STARTED names the template '{t}', which the manifest does not")
-
-    record("A6b", "the docs' part and template tables match the catalog and the manifest",
+    # A6b: the docs' part and template tables, and every count written in
+    # prose, against the catalog and the manifest. See docs_drift().
+    drift = docs_drift()
+    record("A6b", "the docs' tables and counts match the catalog and the manifest",
            not drift, "; ".join(drift[:4]))
 
     with EngineProcess("--duration=30", "--scene=res://templates/tank_level_control.json"):

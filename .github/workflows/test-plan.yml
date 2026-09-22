@@ -1,24 +1,23 @@
 name: test-plan
 
 # Runs the checks tools/test_plan.py already sequences: the C# build, the
-# Python suite, the engine self-tests, the determinism contract, and the five
-# scene exercises. See docs/FIX_PLAN.md FF-28.
+# Python suite, the engine self-tests, the determinism contract, and an
+# exercise for every scene in engine/templates/manifest.json. Written as
+# FF-28 (docs/history/FIX_PLAN.md); docs/TEST_PLAN.md says what each check is
+# for.
 #
-# Deliberately --only A,B,C,E,H: those are the checks this workflow was
-# written for. H (tools/try_scene.py against all five shipped scenes) needs no
-# display -- the spike behind UX-10 proved templates simulate headless -- so
-# it belongs beside A/C/E rather than behind --gui. F (the sidecar-seam
-# checks) and G (robustness, including the engine-kill and pause-force
-# regression tests) exercise process lifecycle and port timing in ways only
-# ever run and tuned on Windows so far -- FF-08 (cross-platform sidecar
-# launch) is still open. Widen this to the full suite once F/G have been run
-# and fixed up on Linux for real, not assumed to work here.
+# Deliberately --only A,B,C,E,H. H (tools/try_scene.py against every shipped
+# scene) needs no display -- the spike behind UX-10 proved templates simulate
+# headless -- so it belongs beside A/C/E rather than behind --gui. D needs a
+# display. F (the sidecar-seam checks) and G (robustness, including the
+# engine-kill and pause-force regression tests) exercise process lifecycle and
+# port timing and have only ever been run on Windows. Bringing them here is
+# IP-05 in docs/IMPROVEMENT_PLAN.md: run them on Linux for real rather than
+# assume they work.
 #
-# NOTE: the Godot download step below has not been exercised on an actual
-# runner yet -- written from the documented release-asset naming convention,
-# not verified against a real GitHub Actions run. Expect to fix the archive
-# layout on the first CI failure, the same way docs/PACKAGING.md flags its own
-# export steps as unverified.
+# Two jobs, in parallel. `test-plan` is everything above except the graded
+# tests; `grader` is the graded tests alone (IP-04). Each should be a required
+# check -- that is a branch-protection setting, not something this file sets.
 
 on:
   push:

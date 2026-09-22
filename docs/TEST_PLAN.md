@@ -43,6 +43,7 @@ themselves worked fine. So end-to-end coverage is not optional here.
 | A4 | The C# tag model matches the shared parity fixture (`--self-test=parity`) | the C# and Python models are two implementations of one contract and drift silently |
 | A5 | `hello`/`describe`/`update` carry exactly the fields `docs/tag-bus.md` names (`check_protocol.py`) | the wire format is what every driver is written against |
 | A6 | No type in `engine/src` is referenced nowhere outside its own file | a whole feature once shipped this way — `FloatingTagBadge3D` was a complete billboard label the README advertised and nothing ever constructed. Dead code builds cleanly, so A1–A5 could not see it |
+| A6b | README's part table and GETTING_STARTED's template table match `PartCatalog` and the manifest. Every part or template count in prose is one `prose_count_drift` checks, and no living doc (README, AGENTS, GETTING_STARTED, ROADMAP, the CI workflow) states a test count | a hand-kept list or number beside a machine-read one drifts, and nothing fails when it does. "73 pass" sat in three files while the suite passed 280, and README said eight templates with eleven shipped |
 
 ### B. Python unit and integration
 
