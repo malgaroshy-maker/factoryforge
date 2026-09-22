@@ -508,26 +508,15 @@ def test_a_batch_timed_in_seconds_delivers_half_when_the_pump_is_re_rated(tmp_pa
     assert second["delivered_L"] < first["delivered_L"] * 0.65
     assert second["delivered_L"] > first["delivered_L"] * 0.35
 
-    # Deliberately NOT asserted: that the first batch lands inside tolerance.
-    #
-    # It does on an idle machine and it did here for a while. But a stopwatch
-    # with no taper cuts off at a scan boundary, so it overshoots by up to one
-    # scan's worth of delivery -- 2 L/s at the rated flow -- and how coarse the
-    # scans get is a fact about how busy the machine is. Asserting it made this
-    # test fail on Linux CI under a full suite and pass alone, which reads as a
-    # flaky grader and is really a claim that was never the controller's to
-    # make. The overshoot is also the thing the scene teaches, so pinning it
-    # would pin the lesson to a machine.
-    #
-    # Except that it is asserted, one line down: `_batch_feedback` only writes
-    # "ends on seconds cannot see that" when the first batch IS inside
-    # tolerance. That is the line master failed on (IP-06), with the first
-    # batch at 23.52 L. In lockstep the scans cannot coarsen and the first
-    # batch lands on the same number every run -- 23.4999999999996 L against
-    # a 22 L pot, inside the 1.5 L tolerance by floating-point rounding. So it
-    # is no longer a flake, but it is a knife edge a change to the tick or scan
-    # arithmetic could tip. The x1.07 calibration in `_bd_body` puts it there;
-    # 1.0 would land on 21.9 L. That is left as a decision, not tuned here.
+    # The first batch lands inside tolerance, asserted directly now that it can
+    # be. On wall-clock scans it could not: a stopwatch cuts off at a scan
+    # boundary, scans coarsen under load, and master failed here on Linux CI
+    # with the first batch at 23.52 L against a 23.5 L limit. In lockstep
+    # (IP-06) the scans are exact and the number is the same every run, so it
+    # is a fact about the controller again. `_feedback` only writes the lesson
+    # line below when this holds, which is how the old test asserted it
+    # without saying so.
+    assert abs(first["delivered_L"] - report["evidence"]["pot_litres"]) < 1.0, first
     assert first["delivered_L"] >= second["delivered_L"]
     assert any("ends on seconds cannot see that" in line
                for line in report["feedback"])

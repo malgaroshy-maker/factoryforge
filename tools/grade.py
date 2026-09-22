@@ -4255,12 +4255,15 @@ async def _bd_body(bus, stop, *, by_litres: bool, zero_the_meter: bool,
                 # nameplate, not against a dose rate it never reaches: twenty
                 # litres at 120 L/min is ten seconds, and at full speed that is
                 # exactly right -- once.
-                # x1.07 because this controller was calibrated on the line,
-                # the way a student would calibrate it: the pump ramps, the
-                # command lands a scan late, and the first batch came out a
-                # litre short until the number was nudged. That calibration is
-                # the whole trap -- it is a measurement of one pump on one day.
-                seconds_for = (target / BD_RATED_FIRST * 60.0 * 1.07 if open_loop
+                # x1.03 because this controller was calibrated on the line,
+                # the way a student would calibrate it: the pump ramps and the
+                # command lands a scan late, so the first batch came out short
+                # until the number was nudged. That calibration is the whole
+                # trap -- it is a measurement of one pump on one day.
+                # It was x1.07, tuned against wall-clock scans. In lockstep
+                # (IP-06) that put the first batch on 23.4999999999996 L against
+                # a 23.5 L limit, inside by rounding; x1.03 lands it mid-band.
+                seconds_for = (target / BD_RATED_FIRST * 60.0 * 1.03 if open_loop
                                else target / DOSE_RATE * 60.0)
                 done = (total >= target if by_litres
                         else state["seconds"] >= seconds_for)
