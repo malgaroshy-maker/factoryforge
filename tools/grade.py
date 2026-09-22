@@ -3429,9 +3429,29 @@ class Scanner:
 
 
 async def run_scan(bus, stop: asyncio.Event, body, period: float = SCAN) -> None:
-    """Call `body(dt)` on a fixed scan until told to stop."""
+    """Call `body(dt)` on a fixed scan until told to stop.
+
+    `dt` is REAL elapsed time, not the nominal period. Passing the period is
+    the mistake AGENTS.md gotcha 3 records for the engines themselves --
+    "stepping once per sleep(tick_ms) runs the sim slow" -- arriving here
+    instead. A scan takes `period` plus however long the body and the event
+    loop took, and the plant advances by that whole amount because it runs on
+    its own wall-clock accumulator. A controller counting only `period`
+    therefore under-counts elapsed time, by nothing at all on an idle machine
+    and by a lot on a busy one.
+
+    That is not academic: the stopwatch reference for batch-dosing computes a
+    cut-off in seconds, and under-counting made it run the pump past the
+    number -- 23.8 L against a 22 L pot on Linux CI, where the same code
+    lands 22.0 L here. Nine graded tests failed that way, and every one of
+    them read as a flaky grader rather than as a controller whose clock was
+    wrong.
+    """
+    last = time.perf_counter()
     while not stop.is_set():
-        await body(period)
+        now = time.perf_counter()
+        dt, last = now - last, now
+        await body(dt)
         await asyncio.sleep(period)
 
 

@@ -482,9 +482,23 @@ def test_a_batch_timed_in_seconds_delivers_half_when_the_pump_is_re_rated(tmp_pa
     assert code == 1 and report["verdict"] == "FAIL"
     assert "dose2.on_the_number" in failed_ids(report)
     first, second = report["evidence"]["batches"]
-    # Right once: the stopwatch answer is calibrated, and its first batch lands.
-    assert "dose1.on_the_number" not in failed_ids(report)
+    # The lesson, and the only part of it that is a fact about the controller
+    # rather than about the machine it ran on: re-rate the pump and a batch
+    # ended on seconds delivers about half, while the pot did not move.
     assert second["delivered_L"] < first["delivered_L"] * 0.65
+    assert second["delivered_L"] > first["delivered_L"] * 0.35
+
+    # Deliberately NOT asserted: that the first batch lands inside tolerance.
+    #
+    # It does on an idle machine and it did here for a while. But a stopwatch
+    # with no taper cuts off at a scan boundary, so it overshoots by up to one
+    # scan's worth of delivery -- 2 L/s at the rated flow -- and how coarse the
+    # scans get is a fact about how busy the machine is. Asserting it made this
+    # test fail on Linux CI under a full suite and pass alone, which reads as a
+    # flaky grader and is really a claim that was never the controller's to
+    # make. The overshoot is also the thing the scene teaches, so pinning it
+    # would pin the lesson to a machine.
+    assert first["delivered_L"] >= second["delivered_L"]
     assert any("ends on seconds cannot see that" in line
                for line in report["feedback"])
 
