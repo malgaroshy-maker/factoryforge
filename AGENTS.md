@@ -1,6 +1,6 @@
 # AGENTS.md — handoff for the next agent
 
-Read this first, then [`docs/HARDENING_PLAN.md`](docs/HARDENING_PLAN.md) for what
+Read this first, then [`docs/IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md) for what
 is open and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
 
 The thirteen completed plan documents live in
@@ -484,8 +484,10 @@ Deliberately skipped at the user's request: OpenPLC/Modbus cross-check.
 
 ## What is open
 
-`docs/HARDENING_PLAN.md` (HP-01 … HP-52) is the live work list. Every *feature*
-plan in `docs/` is closed. Read the release gate in that file's Sequencing
+`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-24, the v1.1 plan) is the live work
+list. `docs/HARDENING_PLAN.md` closed on 2026-09-22 with 53 of 56 done; its
+three survivors are carried into the new plan. Every *feature*
+plan in `docs/` is closed. Read the v1.1 gate in that file's Sequencing
 section before starting anything: it is the list of items that must land before a
 release, drawn from every phase rather than from the phase order.
 

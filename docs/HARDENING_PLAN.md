@@ -1,6 +1,6 @@
 # FactoryForge — The Things That Break Before Anyone Sees Them
 
-**Status:** HP-01 … HP-56. 25 done (the release gate bar HP-09), 31 open.
+**Status:** HP-01 … HP-56. **Closed 2026-09-22:** 53 done, HP-08 partly done, HP-44 and HP-46 open, all three carried into [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) (IP-07, IP-05, IP-13). Appendix A gives each item's commit. Until that date this line said "25 done" and the index said two, and neither matched git.
 **Revised:** 2026-09-20, after a second Codex pass over the first draft (Appendix C).
 **Started:** 2026-09-20, against `f597e27`.
 
@@ -1030,62 +1030,62 @@ Sizes below are the revised ones. **Gate** marks an item on the release gate.
 
 | Item | Title | Phase | Size | Gate | Status |
 |---|---|---|---|---|---|
-| HP-01 | A failed save must not report success | 0 | S | ● | open |
-| HP-02 | Validate a scene file before destroying the open one | 0 | M | ● | open |
-| HP-03 | Undoing a delete must restore the part's settings | 0 | S | ● | open |
-| HP-04 | `M`-move must undo as a move | 0 | M | ● | open |
-| HP-05 | Command history must not hold freed nodes | 0 | M | ● | open |
-| HP-06 | Settings a part exposes must survive a save | 0 | M | ● | open |
-| HP-07 | Read the scene-file version already being written | 0 | S | ● | open |
-| HP-08 | Make the tests able to see Phase 0 | 0 | M / L | ● (regressions) | open |
-| HP-09 | Publish a real release | 1 | S |  | open |
-| HP-10 | Make the project findable | 1 | S |  | open |
-| HP-11 | Reconcile the documentation with the code | 1 | S | ● | open |
-| HP-12 | Remove the tracked scratch files | 1 | S | ● | open |
-| HP-13 | A forced output must read as forced from the sidecar | 2 | M | ● | open |
-| HP-14 | Undo of a paste must republish the tag set | 2 | S |  | open |
-| HP-15 | Renaming must not let a later part inherit its tags | 2 | M | ● | open |
-| HP-16 | A copied part must not keep the original's tag refs | 2 | M | ● | open |
-| HP-17 | Renaming a part must not release its forces | 2 | S | ● | open |
-| HP-18 | Close the three known parity divergences | 2 | M |  | open |
-| HP-19 | Parity must cover server behaviour | 2 | L / XL |  | open |
-| HP-20 | Redoing a duplicate must not mint a new identity | 2 | S | ● | open |
-| HP-21 | `demo --duration` must do what AGENTS.md says | 3 | S |  | open |
-| HP-22 | Modbus: loopback by default, and a hardened server | 3 | M | ● | open |
-| HP-23 | Non-finite analog values rejected at the edge | 3 | M | ● | open |
-| HP-24 | snap7 must not block the loop, and must retry | 3 | M |  | open |
-| HP-25 | A transient read error must not strand the poller | 3 | M |  | open |
-| HP-26 | Native Siemens drivers must seed initial inputs | 3 | M | ● | open |
-| HP-27 | OPC UA subscriptions must not accumulate | 3 | S |  | open |
-| HP-28 | Coerce driver options at the boundary | 3 | S |  | open |
-| HP-29 | The OPC UA server must be able to enable security | 3 | M |  | open |
-| HP-30 | Tools must leave the engine as they found it | 3 | S |  | open |
-| HP-31 | Decouple driver I/O from the bus receive loop | 3 | L |  | open |
-| HP-32 | The Siemens tests must test something | 3 | M |  | open |
-| HP-33 | Confirm or dismiss the epoch/poll race | 3 | M |  | open |
-| HP-34 | A part owns its tags, properties and tick | 4 | XL |  | open |
-| HP-35 | Fix the drift this design already produced | 4 | S | ● | open |
-| HP-36 | A test that fails when a part is special-cased | 4 | M |  | open |
-| HP-37 | One definition of part identity across commands | 4 | M | ● | open |
-| HP-38 | One key, one action | 5 | S |  | open |
-| HP-39 | Arrow-key nudge must follow the screen | 5 | S |  | open |
-| HP-40 | A cleared filter must restore the rows it hid | 5 | S |  | open |
-| HP-41 | A placement preview must not touch the simulation | 5 | M | ● | open |
-| HP-42 | A contribution path that exists | 6 | S |  | open |
-| HP-43 | Separate the live documents from the closed ones | 6 | S |  | open |
-| HP-44 | Widen CI to the sections it skips | 6 | M |  | open |
-| HP-45 | OpenPLC drives the scene over Modbus | 6 | L |  | open |
-| HP-46 | The same TIA program over both drivers | 6 | M |  | open |
-| HP-47 | Saving must be atomic | 0 | M | ● | open |
-| HP-48 | Modbus addresses must not move when a scene is edited | 3 | M |  | open |
-| HP-49 | Modbus integers must carry the range the tag promises | 3 | M |  | open |
-| HP-50 | A dropped simulator-input write must be retried | 3 | M | ● | open |
-| HP-51 | Honour the connect timeout AGENTS.md prescribes | 3 | S |  | open |
-| HP-52 | snap7 must stop repeating gotcha 19c's misdiagnosis | 3 | S |  | open |
-| HP-53 | No fixed ports in anything a second run might start | 3 | M |  | **done** |
-| HP-54 | A wait must be able to observe what it waits for | 3 | S |  | open |
-| HP-55 | CI must install snap7, or the Siemens suite tests its own fake | 6 | S |  | **done** |
-| HP-56 | B1 should report skips, not just passes | 6 | S |  | open |
+| HP-01 | A failed save must not report success | 0 | S | ● | **done** b7a14ff |
+| HP-02 | Validate a scene file before destroying the open one | 0 | M | ● | **done** fa2501e |
+| HP-03 | Undoing a delete must restore the part's settings | 0 | S | ● | **done** fe93b43 |
+| HP-04 | `M`-move must undo as a move | 0 | M | ● | **done** fe93b43 |
+| HP-05 | Command history must not hold freed nodes | 0 | M | ● | **done** fe93b43 |
+| HP-06 | Settings a part exposes must survive a save | 0 | M | ● | **done** eb7d6fa |
+| HP-07 | Read the scene-file version already being written | 0 | S | ● | **done** fa2501e |
+| HP-08 | Make the tests able to see Phase 0 | 0 | M / L | ● (regressions) | partial: the tautology at `SceneSelfTest.cs:416` → IP-07 |
+| HP-09 | Publish a real release | 1 | S |  | **done** `v1.0.0` |
+| HP-10 | Make the project findable | 1 | S |  | **done** 2ba48e4 |
+| HP-11 | Reconcile the documentation with the code | 1 | S | ● | **done** 5a1e9fb |
+| HP-12 | Remove the tracked scratch files | 1 | S | ● | **done** 4607fc6 |
+| HP-13 | A forced output must read as forced from the sidecar | 2 | M | ● | **done** 6e4d117 |
+| HP-14 | Undo of a paste must republish the tag set | 2 | S |  | **done** fe93b43 |
+| HP-15 | Renaming must not let a later part inherit its tags | 2 | M | ● | **done** fa2501e |
+| HP-16 | A copied part must not keep the original's tag refs | 2 | M | ● | **done** ebe0cbd |
+| HP-17 | Renaming a part must not release its forces | 2 | S | ● | **done** 01e4e8d |
+| HP-18 | Close the three known parity divergences | 2 | M |  | **done** f3bfa84 |
+| HP-19 | Parity must cover server behaviour | 2 | L / XL |  | **done** e5f024d, e711dfa |
+| HP-20 | Redoing a duplicate must not mint a new identity | 2 | S | ● | **done** fe93b43 |
+| HP-21 | `demo --duration` must do what AGENTS.md says | 3 | S |  | **done** 2c2799e |
+| HP-22 | Modbus: loopback by default, and a hardened server | 3 | M | ● | **done** 12eb30f |
+| HP-23 | Non-finite analog values rejected at the edge | 3 | M | ● | **done** 4594c8f |
+| HP-24 | snap7 must not block the loop, and must retry | 3 | M |  | **done** b7ee6aa |
+| HP-25 | A transient read error must not strand the poller | 3 | M |  | **done** b02a9b4 |
+| HP-26 | Native Siemens drivers must seed initial inputs | 3 | M | ● | **done** 3d1f9ff |
+| HP-27 | OPC UA subscriptions must not accumulate | 3 | S |  | **done** 9c7e60f |
+| HP-28 | Coerce driver options at the boundary | 3 | S |  | **done** 70c8cc7 |
+| HP-29 | The OPC UA server must be able to enable security | 3 | M |  | **done** 6d3e566 |
+| HP-30 | Tools must leave the engine as they found it | 3 | S |  | **done** d2287fa |
+| HP-31 | Decouple driver I/O from the bus receive loop | 3 | L |  | **done** d3b6145 |
+| HP-32 | The Siemens tests must test something | 3 | M |  | **done** 8746ee9 |
+| HP-33 | Confirm or dismiss the epoch/poll race | 3 | M |  | **done** afc04f7, 09f1b44 |
+| HP-34 | A part owns its tags, properties and tick | 4 | XL |  | **done** 6303520 |
+| HP-35 | Fix the drift this design already produced | 4 | S | ● | **done** 2c37159 |
+| HP-36 | A test that fails when a part is special-cased | 4 | M |  | **done** 576552b |
+| HP-37 | One definition of part identity across commands | 4 | M | ● | **done** fe93b43 |
+| HP-38 | One key, one action | 5 | S |  | **done** f1b835e |
+| HP-39 | Arrow-key nudge must follow the screen | 5 | S |  | **done** f1b835e |
+| HP-40 | A cleared filter must restore the rows it hid | 5 | S |  | **done** 3c4a343 |
+| HP-41 | A placement preview must not touch the simulation | 5 | M | ● | **done** 54c199b |
+| HP-42 | A contribution path that exists | 6 | S |  | **done** c4b9683 |
+| HP-43 | Separate the live documents from the closed ones | 6 | S |  | **done** 7f02746 |
+| HP-44 | Widen CI to the sections it skips | 6 | M |  | open → IP-05 |
+| HP-45 | OpenPLC drives the scene over Modbus | 6 | L |  | **done** dd6fac4 |
+| HP-46 | The same TIA program over both drivers | 6 | M |  | open → IP-13 |
+| HP-47 | Saving must be atomic | 0 | M | ● | **done** 811773e |
+| HP-48 | Modbus addresses must not move when a scene is edited | 3 | M |  | **done** 8feeab2 |
+| HP-49 | Modbus integers must carry the range the tag promises | 3 | M |  | **done** 697eeb1 |
+| HP-50 | A dropped simulator-input write must be retried | 3 | M | ● | **done** 7a3ec7d |
+| HP-51 | Honour the connect timeout AGENTS.md prescribes | 3 | S |  | **done** 1ca328b |
+| HP-52 | snap7 must stop repeating gotcha 19c's misdiagnosis | 3 | S |  | **done** 2718508 |
+| HP-53 | No fixed ports in anything a second run might start | 3 | M |  | **done** 700052e |
+| HP-54 | A wait must be able to observe what it waits for | 3 | S |  | **done** f30a478 |
+| HP-55 | CI must install snap7, or the Siemens suite tests its own fake | 6 | S |  | **done** 9ef16ec |
+| HP-56 | B1 should report skips, not just passes | 6 | S |  | **done** f30a478 |
 
 ## Appendix B — where the findings came from
 
