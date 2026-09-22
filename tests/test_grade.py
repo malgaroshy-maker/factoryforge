@@ -19,6 +19,7 @@ The few that do not are marked, and say why.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import random
@@ -814,3 +815,100 @@ def test_a_lockstep_mark_does_not_move_when_the_machine_is_busy(tmp_path, monkey
     strip = lambda evidence: {k: v for k, v in evidence.items()  # noqa: E731
                               if k not in WALL_CLOCK_LABELS}
     assert strip(busy["evidence"]) == strip(calm["evidence"])
+
+
+# --- one file per scene (IP-18) -----------------------------------------
+#
+# Adding a graded scene is `grading/scenes/<scene>.py` plus
+# `grading/reference/<scene>.py` and nothing else -- the bar HP-34 set for
+# parts. That only stays true while no shared file knows any scene by name,
+# because the first one that does is the file the next scene has to edit.
+
+from factoryforge_sidecar import grading                     # noqa: E402
+from factoryforge_sidecar.grading import registry            # noqa: E402
+
+GRADING = Path(grading.__file__).resolve().parent
+
+
+def _scene_names() -> set[str]:
+    """Every way a shared file could name a scene, read from the registry
+    rather than written here: the id, the id as a module name, the class or
+    function that builds its plant, and the class of the plant it builds."""
+    names: set[str] = set()
+    for scene_id, rubric in registry.rubrics().items():
+        names |= {scene_id, scene_id.replace("-", "_"), rubric["build"].__name__,
+                  type(rubric["build"](1)).__name__}
+    names |= set(registry.references())
+    return names
+
+
+def _names_in_code(source: str) -> set[str]:
+    """Every identifier and string literal the code uses -- comments and
+    docstrings left out. A comment saying the stopwatch reference for one
+    scene is why lockstep exists is history, and this codebase keeps its
+    history next to the code; a string or a name is a dependency."""
+    tree = ast.parse(source)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                docstrings.add(id(first.value))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in docstrings:
+                found.add(node.value)
+        elif isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            found.add(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, ast.arg):
+            found.add(node.arg)
+        elif isinstance(node, ast.keyword) and node.arg:
+            found.add(node.arg)
+        elif isinstance(node, ast.alias):
+            found |= {node.name, node.asname or ""}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+    return found
+
+
+def _scenes_named(source: str, names: set[str]) -> set[str]:
+    used = _names_in_code(source)
+    return {name for name in names if any(name in word for word in used)}
+
+
+#: Every module in the package that is not one scene's own: the core and
+#: whatever the scenes and their references are built from.
+SHARED_MODULES = sorted(
+    path.relative_to(GRADING).as_posix() for path in GRADING.rglob("*.py")
+    if path.parent.name not in ("scenes", "reference")
+    or path.name.startswith("_"))
+
+
+def test_the_registry_finds_every_scene_and_its_references():
+    """The half of the bar the registry carries: each scene module is found
+    by its own `SCENE`, and each has a reference module found the same way."""
+    assert set(registry.rubrics()) == set(registry.references())
+    for scene_id, rubric in registry.rubrics().items():
+        assert rubric["build"](1).name == scene_id
+
+
+@pytest.mark.parametrize("module", SHARED_MODULES)
+def test_no_shared_grading_file_names_a_scene(module):
+    """IP-18: `core.py` above all, and every other file a new scene would be
+    built on. Scene ids are read from the registry, so a scene added later
+    is covered without anyone editing this test."""
+    names = _scene_names()
+    assert "core.py" in SHARED_MODULES and len(names) >= 20, SHARED_MODULES
+    # The check has to be able to see one, or it passes by being blind.
+    some_scene = next(iter(sorted(registry.rubrics())))
+    assert _scenes_named(f"rubric = RUBRICS[{some_scene!r}]", names) == {some_scene}
+
+    source = (GRADING / module).read_text(encoding="utf-8")
+    named = _scenes_named(source, names)
+    assert not named, f"grading/{module} names {sorted(named)}"
