@@ -4409,11 +4409,33 @@ async def run_grading(args) -> Report:
             print(f"controller connected after {engine.sessions[0]['connected_at']:.1f}s; "
                   f"grading for {args.duration:g}s\n", flush=True)
 
-        # Wall-clock, and deliberately not a tick count: the engine's own
-        # accumulator decides how many fixed steps fit, and counting
-        # iterations to measure time is how a 500-step loop finishes in 10 ms
-        # on Windows (AGENTS.md gotcha 2).
-        await asyncio.sleep(args.duration)
+        # The PLANT's clock, not the wall's and not a tick count.
+        #
+        # Counting iterations would be wrong for the reason gotcha 2 gives: a
+        # 500-step loop can finish in 10 ms on Windows. But wall-clock is wrong
+        # too, and more quietly. The engine paces itself with a real-time
+        # accumulator, so on a loaded machine it falls behind and a 78-second
+        # wall-clock window buys less than 78 seconds of plant. A batch that
+        # needed the tail of that window simply never completes, and the mark
+        # changes because the marking machine was busy -- which for a grader an
+        # instructor runs in a CI job is the worst property it could have.
+        # Observed: this is exactly how the re-rated-pump case failed inside a
+        # full suite run and passed alone.
+        #
+        # watched.sim_time advances inside tick(), on the fixed step, so it is
+        # the same number the rubric already reasons about. The wall-clock
+        # ceiling is a liveness bound, not the criterion: an engine that has
+        # stopped stepping must not hang the run forever (HP-54), and it says
+        # which of the two ended the window.
+        ceiling = time.perf_counter() + args.duration * 4 + 30
+        while watched.sim_time < args.duration:
+            if time.perf_counter() > ceiling:
+                report.feedback.append(
+                    f"the plant only advanced {watched.sim_time:.1f}s of the "
+                    f"{args.duration:g}s asked for before the wall-clock ceiling; "
+                    f"the engine was not stepping, so this mark is not trustworthy")
+                break
+            await asyncio.sleep(0.05)
 
         if check_integrity(watched, engine, report, args.duration):
             rubric["grade"](watched, engine, report, args.duration)

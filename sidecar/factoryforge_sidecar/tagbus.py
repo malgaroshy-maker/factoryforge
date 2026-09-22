@@ -50,7 +50,18 @@ class TagBusClient:
         self.rebuilt = asyncio.Event()
 
         self._ws: websockets.WebSocketClientProtocol | None = None
-        self._pending: dict[str, TagValue] = {}
+        #: tag id -> (value, generation it was derived under). The generation
+        #: is what makes HP-33's "dropped, not held back" true in fact and not
+        #: only in intent: the drop used to be decided at FLUSH time, so a
+        #: write queued while the gate was shut but flushed after it reopened
+        #: was sent, carrying an address map older than the epoch stamped on
+        #: it. Windows hid this -- the flush landed inside the window -- and
+        #: Linux did not, failing 2 runs in 3. Judged at flush against the
+        #: generation in force when the value was computed, the timing stops
+        #: mattering.
+        self._pending: dict[str, tuple[TagValue, int, bool]] = {}
+        #: Bumped by every describe, so a write cannot outlive its map.
+        self._write_gen = 0
         self._pending_lock = asyncio.Lock()
         self._tick_ms = proto.DEFAULT_TICK_MS
         self._on_describe: list[DescribeHook] = []
@@ -117,7 +128,14 @@ class TagBusClient:
             )
         coerced = tag.coerce(value)
         async with self._pending_lock:
-            self._pending[tag_id] = coerced
+            # Stamped with BOTH the generation and whether the gate was open
+            # when this value was computed. The generation catches a write
+            # queued before the describe; the gate flag catches one computed
+            # during the window, which shares the new generation but came from
+            # a poller still holding the old address map. Judging either at
+            # flush time alone lets the other through whenever the flush lands
+            # on the far side of the gate reopening.
+            self._pending[tag_id] = (coerced, self._write_gen, self.rebuilt.is_set())
 
         # Reflect it locally too. For an output tag the client is ordinarily
         # the authority — the engine never echoes one back, because the
@@ -328,6 +346,9 @@ class TagBusClient:
         self._next_observe = ({}, [])
         self._dispatch_wake.clear()
         self.rebuilt.clear()
+        # Anything already queued was derived under the old map, and
+        # anything queued from here until the hooks return is too.
+        self._write_gen += 1
 
     def _queue_describe(self) -> None:
         """Hand the current scene to the describe hooks, off the receive loop.
@@ -348,6 +369,9 @@ class TagBusClient:
         self._next_updates = {}
         self._next_observe = ({}, [])
         self.rebuilt.clear()
+        # Anything already queued was derived under the old map, and
+        # anything queued from here until the hooks return is too.
+        self._write_gen += 1
         self._dispatch_wake.set()
 
     async def _dispatch_loop(self) -> None:
@@ -426,17 +450,25 @@ class TagBusClient:
                 if not self._pending:
                     continue
                 batch, self._pending = self._pending, {}
-            if not self.rebuilt.is_set():
-                # Dropped, not held back (HP-33). A write queued before every
-                # describe hook has rebuilt came out of an address map older
-                # than the epoch it would be stamped with -- so the engine
-                # would accept it, onto whichever tag inherited that id. Every
-                # driver re-derives its map and re-reads the PLC inside
-                # `rebuild`, which is what brings the value back.
-                log.debug("dropping %d write(s) queued before the rebuild "
-                          "finished (epoch %s)", len(batch), self.epoch)
+            # Dropped, not held back (HP-33), and judged per value against
+            # the generation it was computed under rather than against the
+            # gate's state right now. A write derived before the current
+            # describe came out of an address map older than the epoch it
+            # would be stamped with, so the engine would accept it onto
+            # whichever tag inherited that id. Every driver re-derives its map
+            # and re-reads the PLC inside `rebuild`, which is what brings the
+            # value back.
+            gen = self._write_gen
+            fresh = {tag_id: value
+                     for tag_id, (value, at, ready) in batch.items()
+                     if at == gen and ready}
+            stale = len(batch) - len(fresh)
+            if stale:
+                log.debug("dropping %d write(s) derived before this epoch's "
+                          "rebuild finished (epoch %s)", stale, self.epoch)
+            if not fresh or not self.rebuilt.is_set():
                 continue
-            await self._send(proto.write(self.epoch, batch))
+            await self._send(proto.write(self.epoch, fresh))
 
     async def _send(self, msg: dict) -> None:
         if self._ws is None:
