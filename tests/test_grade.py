@@ -273,6 +273,301 @@ def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
     assert not any(c["id"].startswith("sort.") for c in report["checks"])
 
 
+# --- the other scenes, end to end -------------------------------------
+#
+# One PASS and one FAIL per scene, both real: a tag bus on an ephemeral port, a
+# controller on the far end of a websocket, and a verdict read out of the JSON
+# report. Nothing else answers the only question worth asking about a rubric,
+# which is whether it can tell a program that does the job from one that does
+# not (AGENTS.md gotcha 24).
+#
+# They cost wall clock -- a thermal plant takes as long to heat here as it does
+# in the engine -- and the windows below are the shortest each exercise can be
+# marked in rather than the windows an instructor would use. `--duration` on
+# the command line is longer for that reason.
+
+
+def graded(tmp_path, scene: str, reference: str, duration: float,
+           seed: int = 11) -> tuple[int, dict]:
+    out = tmp_path / f"{scene}-{reference}.json"
+    code = run("--scene", scene, "--reference", reference,
+               "--duration", duration, "--seed", seed, "--wait", 30, "--json", out)
+    return code, json.loads(out.read_text(encoding="utf-8"))
+
+
+def failed_ids(report: dict) -> set[str]:
+    return {c["id"] for c in report["checks"] if not c["ok"]}
+
+
+def test_the_start_stop_station_passes_a_latching_estop_and_an_exact_batch(tmp_path):
+    code, report = graded(tmp_path, "start-stop-station", "good", 45)
+    assert code == 0 and report["verdict"] == "PASS"
+    batch = report["evidence"]["batch"]
+    assert batch["made"] == batch["target"] and batch["overrun"] == 0
+    # Gotcha 16: a batch of the right size on a line that never moved is not a
+    # batch. Cartons have to have reached the far end.
+    assert report["evidence"]["removed"] >= 4
+
+
+def test_a_station_that_ignores_the_mushroom_fails_on_belt_travel(tmp_path):
+    """The whole point of this scene. The failure is measured in millimetres of
+    belt that moved while the station was tripped, not in the state of a lamp."""
+    code, report = graded(tmp_path, "start-stop-station", "noestop", 45)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "estop.stopped_the_belt" in failed_ids(report)
+    estop = report["evidence"]["estop"]
+    assert estop["travel_while_tripped_m"] > estop["allowed_m"]
+    assert any("NORMALLY CLOSED" in line for line in report["feedback"])
+
+
+def test_a_station_that_never_stops_at_the_target_fails_the_batch(tmp_path):
+    code, report = graded(tmp_path, "start-stop-station", "runon", 45)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"batch.hit_the_number", "batch.stopped_itself"} <= failed_ids(report)
+
+
+def test_the_tank_passes_a_controller_that_settles_at_both_ends(tmp_path):
+    code, report = graded(tmp_path, "tank-level-control", "good", 62)
+    assert code == 0 and report["verdict"] == "PASS"
+    phases = report["evidence"]["phases"]
+    assert len(phases) == 2 and phases[0]["setpoint"] != phases[1]["setpoint"]
+    # Gotcha 16: every settling number is vacuously good on a tank that never
+    # filled, so the run has to show the level actually travelled.
+    assert report["evidence"]["travel"] >= 40.0
+    # And the settled window is a window, not the one sample a phase whose end
+    # was in the year 10000 used to fall back to.
+    assert all(p["samples"] > 500 for p in phases)
+
+
+def test_float_switches_fail_the_tank_on_settled_error(tmp_path):
+    code, report = graded(tmp_path, "tank-level-control", "bangbang", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "hold1.settled" in failed_ids(report)
+
+
+def test_a_setpoint_written_into_the_program_fails_when_the_pot_moves(tmp_path):
+    """The check that separates 'reads panel.setpoint' from 'holds 70'."""
+    code, report = graded(tmp_path, "tank-level-control", "fixedsp", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "hold2.settled" in failed_ids(report)
+    assert any("written into the program" in line for line in report["feedback"])
+
+
+def test_the_oven_passes_a_controller_that_closes_the_offset(tmp_path):
+    code, report = graded(tmp_path, "heat-treat-station", "good", 62)
+    assert code == 0 and report["verdict"] == "PASS"
+    assert report["evidence"]["travel"] >= 80.0
+
+
+def test_proportional_only_parks_short_of_the_oven_setpoint(tmp_path):
+    """The lesson of the scene, asserted as a number: the offset is the loss
+    the plate needs divided by the gain, and it gets bigger at the higher
+    setpoint because the standing output does."""
+    code, report = graded(tmp_path, "heat-treat-station", "ponly", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"hold1.settled", "hold2.settled"} <= failed_ids(report)
+    first, second = report["evidence"]["phases"]
+    assert second["settled_error"] > first["settled_error"] > 3.0
+
+
+def test_a_thermostat_reaches_the_oven_setpoint_and_still_fails(tmp_path):
+    """The trap `hold*.steady` exists for. Mean error near zero, setpoint
+    reached every couple of seconds, from alternate sides, forever."""
+    code, report = graded(tmp_path, "heat-treat-station", "thermostat", 62)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"hold1.steady", "hold2.steady"} <= failed_ids(report)
+    for phase in report["evidence"]["phases"]:
+        assert phase["settled_error"] < 3.0, "the cycling controller missed setpoint"
+        assert phase["ripple"] > 5.0
+
+
+def test_the_light_curtain_passes_a_controller_that_sorts_on_the_number(tmp_path):
+    code, report = graded(tmp_path, "light-curtain-sorting", "good", 62, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["misrouted"] == []
+    assert evidence["chute"] >= 2 and evidence["far_end"] >= 2
+    # Both rules were really exercised, or the pot-moving half of the rubric
+    # marked nothing.
+    assert len(evidence["thresholds_seen"]) == 2
+
+
+def test_a_threshold_written_into_the_program_fails_the_light_curtain(tmp_path):
+    """The difference between this scene and sorting-by-height: there the rule
+    is two bits of wiring, here it is a number that the run changes."""
+    code, report = graded(tmp_path, "light-curtain-sorting", "fixed", 62, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "sort.followed_the_measurement" in failed_ids(report)
+    wrong = report["evidence"]["misrouted"]
+    assert wrong, "a fixed threshold sorted every carton correctly"
+    # All of them under one threshold: that is the signature of a latched
+    # setpoint rather than of a misjudged height, and the feedback says so.
+    assert len({entry["threshold_m"] for entry in wrong}) == 1
+
+
+def test_diverting_every_second_carton_fails_the_light_curtain(tmp_path):
+    code, report = graded(tmp_path, "light-curtain-sorting", "everyother", 62, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "sort.followed_the_measurement" in failed_ids(report)
+
+
+def test_the_roller_line_passes_a_controller_that_weighs_and_spaces(tmp_path):
+    code, report = graded(tmp_path, "roller-line-weighing", "good", 70, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["shared_the_deck"] == 0
+    assert evidence["misjudged"] == []
+    # The exam has to have contained at least one carton the two instruments
+    # disagree about, or `metalonly` below would pass for want of a question.
+    assert evidence["metal_and_weight_disagree"] >= 1
+
+
+def test_rejecting_on_the_inductive_sensor_fails_when_the_limit_moves(tmp_path):
+    """Metal and over-limit are the same cartons at 3000 g and different ones
+    at 1500 g, because a tall cardboard carton weighs 2160 g."""
+    code, report = graded(tmp_path, "roller-line-weighing", "metalonly", 70, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "reject.matched_the_weight" in failed_ids(report)
+    wrong = report["evidence"]["misjudged"]
+    assert wrong and all(entry["flagged"] == entry["metal"] for entry in wrong)
+    assert any("inductive sensor disagree" in line for line in report["feedback"])
+
+
+def test_feeding_faster_than_the_deck_fails_the_roller_line(tmp_path):
+    code, report = graded(tmp_path, "roller-line-weighing", "fastfeed", 70, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert {"scale.singulated", "reject.matched_the_weight"} <= failed_ids(report)
+
+
+def test_the_buffer_passes_a_release_measured_in_encoder_pulses(tmp_path):
+    code, report = graded(tmp_path, "accumulation-buffer", "good", 78, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["escaped_a_raised_blade"] == []
+    # Gotcha 16 again, in the form this scene invites: "nothing got past the
+    # blade" is trivially true of a belt that was not running, so the plant
+    # counts the metres that ran underneath it.
+    assert evidence["belt_travel_while_held_m"] >= 3.0
+    # And the exam really did change the drive, or there was no second speed.
+    assert (evidence["second_speed"]["belt_m_per_s"]
+            > evidence["first_speed"]["belt_m_per_s"] * 1.5)
+
+
+def test_a_release_timed_in_seconds_fails_when_the_drive_speeds_up(tmp_path):
+    """The whole scene. Same command, same blade, a drive whose top speed the
+    run doubled -- and twice as much product out of a release timed on a
+    clock."""
+    code, report = graded(tmp_path, "accumulation-buffer", "timed", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "release.same_size_at_both_speeds" in failed_ids(report)
+    evidence = report["evidence"]
+    assert (evidence["second_speed"]["mean_cartons"]
+            > evidence["first_speed"]["mean_cartons"] + 1.0)
+    assert any("timed in seconds" in line for line in report["feedback"])
+
+
+def test_batch_dosing_passes_a_batch_that_ends_on_litres(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "good", 78, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    batches = report["evidence"]["batches"]
+    assert len(batches) == 2
+    # The same litres at two pump ratings, in about twice the time.
+    assert batches[0]["rated_flow"] == 2 * batches[1]["rated_flow"]
+    assert abs(batches[0]["delivered_L"] - batches[1]["delivered_L"]) <= 1.5
+    assert batches[1]["seconds"] > batches[0]["seconds"]
+
+
+def test_a_batch_timed_in_seconds_delivers_half_when_the_pump_is_re_rated(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "timed", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "dose2.on_the_number" in failed_ids(report)
+    first, second = report["evidence"]["batches"]
+    # Right once: the stopwatch answer is calibrated, and its first batch lands.
+    assert "dose1.on_the_number" not in failed_ids(report)
+    assert second["delivered_L"] < first["delivered_L"] * 0.65
+    assert any("ends on seconds cannot see that" in line
+               for line in report["feedback"])
+
+
+def test_not_zeroing_the_totaliser_ends_the_second_batch_before_it_starts(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "noreset", 78, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "dose2.on_the_number" in failed_ids(report)
+    assert report["evidence"]["batches"][1]["delivered_L"] < 2.0
+    assert any("over before it started" in line for line in report["feedback"])
+
+
+def test_the_guarded_cell_passes_a_program_that_never_writes_the_motor(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "good", 68, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["wrote_belt_rotate"] is False
+    assert evidence["started_without_a_press_at"] == []
+    assert evidence["transferred"] >= 3
+    # The exam has to have actually stopped and restarted the cell, or the
+    # check below it is about a gate that never opened.
+    assert 0.3 < evidence["contactor_fraction"] < 0.95
+
+
+def test_a_program_that_starts_the_motor_on_the_permissive_fails(tmp_path):
+    """The whole lesson of the scene, and the one a student writes by accident.
+
+    The relay closing hands `starter.coil` back; it does not command it. A
+    program holding the coil for as long as the cell "should be running"
+    restarts the machine the instant the guard is reset, with somebody still
+    inside. The plant records the tick the contactor pulled in and whether
+    anybody had pressed Start since it last stopped -- neither of which a
+    controller can arrange from the bus."""
+    code, report = graded(tmp_path, "guarded-cell", "autostart", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.no_start_on_the_permissive" in failed_ids(report)
+    assert report["evidence"]["started_without_a_press_at"]
+    assert any("automatic restart" in line for line in report["feedback"])
+
+
+def test_writing_the_motors_own_tag_fails_the_guarded_cell(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "writesbelt", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.never_wrote_the_motor" in failed_ids(report)
+    assert report["evidence"]["wrote_belt_rotate"] is True
+
+
+def test_a_mute_held_past_the_scanners_limit_fails(tmp_path):
+    code, report = graded(tmp_path, "guarded-cell", "tapedmute", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.mute_within_the_limit" in failed_ids(report)
+    assert report["evidence"]["longest_mute_s"] > grade.GC_MUTE_LIMIT
+
+
+def test_the_cell_passes_a_sequence_written_on_feedback(tmp_path):
+    code, report = graded(tmp_path, "pick-and-place-cell", "good", 72, seed=5)
+    assert code == 0 and report["verdict"] == "PASS"
+    evidence = report["evidence"]
+    assert evidence["dropped"] == [] and evidence["empty_carries_at"] == []
+    # Carried at both travel speeds, which is the only thing that separates
+    # this from a cell that happened to work at one.
+    assert evidence["placed_before_the_axis_slowed"] >= 1
+    assert evidence["placed_after_the_axis_slowed"] >= 1
+    # And the drive really is analog: a bit output wearing a float's clothes
+    # would report its own reference back instantly.
+    assert evidence["max_ramp_gap_percent"] > 1.0
+
+
+def test_a_sequence_on_timers_drops_cartons_when_the_axis_slows(tmp_path):
+    """Right at one travel speed, which is what makes it worth catching. The
+    plant records where on the rail the vacuum was released, so a cycle that
+    let go over the middle is a dropped carton and not a slow one."""
+    code, report = graded(tmp_path, "pick-and-place-cell", "timed", 72, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cell.nothing_dropped" in failed_ids(report)
+    dropped = report["evidence"]["dropped"]
+    assert dropped
+    assert all(entry["phase"] == "slow" for entry in dropped), (
+        "the timed sequence dropped cartons before the axis was even slowed, "
+        "so this proves nothing about timers")
+    assert all(20.0 < entry["position"] < 80.0 for entry in dropped)
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -291,13 +586,75 @@ def test_an_unknown_scene_is_an_error_not_a_crash(capsys):
     assert "no rubric" in capsys.readouterr().err
 
 
+MANIFEST = json.loads(
+    (ROOT / "engine" / "templates" / "manifest.json").read_text(encoding="utf-8"))
+SHIPPED = [entry["id"] for entry in MANIFEST]
+
+
 def test_list_names_only_the_scenes_that_are_really_marked(capsys):
+    """`--list` is a promise. A scene named there that has no rubric behind it
+    is a class told an exercise will be marked and then finding it is not."""
     assert run("--list") == 0
     listed = capsys.readouterr().out
-    assert "sorting-by-height" in listed
-    assert set(grade.RUBRICS) == {"sorting-by-height"}, (
-        "a scene was added to RUBRICS -- docs/GRADING.md claims one, and that "
-        "claim is the whole point of the 'what this does not do' section")
+    for scene_id in grade.RUBRICS:
+        assert scene_id in listed
+        assert scene_id in SHIPPED, (
+            f"{scene_id} is graded but is not a scene the engine ships")
+
+
+def test_the_claim_in_the_docs_matches_the_rubrics_that_exist():
+    """docs/GRADING.md's 'what this does not do' section is the honest half of
+    this tool, and the way it goes wrong is by being written once and then
+    outliving the code. Every scene with a rubric has to be named there, and
+    every shipped scene without one has to be named there too."""
+    doc = (ROOT / "docs" / "GRADING.md").read_text(encoding="utf-8")
+    for scene_id in grade.RUBRICS:
+        assert scene_id in doc, f"{scene_id} is graded and docs/GRADING.md never says so"
+    for scene_id in SHIPPED:
+        if scene_id not in grade.RUBRICS:
+            assert scene_id in doc, (
+                f"{scene_id} ships and is not graded, and docs/GRADING.md does "
+                f"not admit it")
+
+
+#: The ten scenes this grader was built for. Named rather than read from the
+#: manifest, and that is deliberate: the manifest is a live list that other
+#: work adds to, and a scene landing there tomorrow should not silently rewrite
+#: what this claim covers. A new scene is caught by
+#: `test_the_claim_in_the_docs_matches_the_rubrics_that_exist` instead, which
+#: makes docs/GRADING.md admit it rather than making this test change meaning.
+GRADED_TEN = [
+    "sorting-by-height", "start-stop-station", "tank-level-control",
+    "light-curtain-sorting", "roller-line-weighing", "pick-and-place-cell",
+    "accumulation-buffer", "heat-treat-station", "guarded-cell", "batch-dosing",
+]
+
+
+def test_all_ten_scenes_this_was_built_for_have_a_rubric():
+    """The claim this work exists to make true."""
+    missing = [scene for scene in GRADED_TEN if scene not in grade.RUBRICS]
+    assert not missing, f"not graded: {missing}"
+
+
+def test_nothing_is_graded_that_the_engine_does_not_ship():
+    """The other direction, and the one that would embarrass a marking rig:
+    a rubric for a scene id no student can open."""
+    assert set(grade.RUBRICS) <= set(SHIPPED), (
+        f"graded but not shipped: {sorted(set(grade.RUBRICS) - set(SHIPPED))}")
+
+
+def test_every_rubric_has_a_right_answer_and_a_wrong_one():
+    """AGENTS.md gotcha 24: a rubric only ever seen to pass is a rubric nobody
+    knows the shape of. Each scene carries a `good` that must pass and at least
+    one controller that is wrong about *that scene's* lesson and must fail."""
+    for scene_id, rubric in grade.RUBRICS.items():
+        refs = rubric["references"]
+        assert refs[0] == "good", f"{scene_id}'s first reference is not `good`"
+        assert len(refs) >= 2, f"{scene_id} has no deliberately wrong controller"
+        for name in refs:
+            assert grade.reference_for(scene_id, name) is not None
+        for name in grade.SHARED_REFERENCES:
+            assert grade.reference_for(scene_id, name) is not None
 
 
 async def test_two_graded_runs_can_share_a_machine():
