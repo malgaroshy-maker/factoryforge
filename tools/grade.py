@@ -4111,8 +4111,18 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
         coil = running if latch_the_trip else (relay_closed and field_clear
                                                and scanner.running)
 
-        eye = scanner.bit("mute_eye.detect")
-        if eye and not state["eye"] and running:
+        # The edge of "a carton at the eye while the cell runs", not of the eye
+        # alone. A carton the gate caught standing in the eye window -- short
+        # of the field, so going in did not take it out -- is still blocking
+        # the eye when the cell restarts, so the eye never rises again; muting
+        # on the eye's own edge left it unmuted, it walked into the field and
+        # the scanner stopped the cell for good. Whether a carton was standing
+        # there came down to where the scans happened to fall, which on the
+        # wall clock differs between Windows and Linux: on Windows the cell
+        # tripped 0.5 s after its restart in five runs out of five, and the
+        # suite's `contactor_fraction > 0.3` failed, while Linux CI passed.
+        eye = scanner.bit("mute_eye.detect") and running
+        if eye and not state["eye"]:
             state["mute_until"] = now + mute_window
         state["eye"] = eye
         mute = running and now < state["mute_until"]
