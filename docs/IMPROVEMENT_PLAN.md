@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-24. All open but IP-01.
+**Status:** IP-01 … IP-24. IP-21 done; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -453,7 +453,7 @@ as it was, and this plan's index is closed the way IP-01 closed the last one.
 | IP-18 | `grade.py` becomes a package | 4 | L |  | open |
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | open |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | open |
-| IP-21 | Split `SceneEditor.cs` | 4 | M |  | open |
+| IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
 | IP-22 | Every release self-test meets the binary | 5 | S | ● | open |
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
