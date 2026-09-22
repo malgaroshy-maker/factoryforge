@@ -360,42 +360,129 @@ def section_a() -> None:
 
 # --- B. python suite --------------------------------------------------------
 
-def section_b() -> None:
+@dataclass
+class PytestOutcome:
+    """What pytest's JUnit XML says happened -- the counts and the names."""
+    passed: int = 0
+    skipped: int = 0
+    failed: list[str] = field(default_factory=list)    # test ids, failures and errors alike
+
+
+def _junit_test_id(classname: str, name: str) -> str:
+    """Turn a JUnit (classname, name) pair back into a pytest node id.
+
+    pytest writes ``tests/test_x.py::TestC::test_a[1]`` as classname
+    ``tests.test_x.TestC`` and name ``test_a[1]``, and a collection error in a
+    whole file as classname ``""`` and name ``tests.test_x``. Which dotted
+    prefix is the module cannot be told from the string alone -- a class and a
+    package look the same -- so ask the filesystem, longest prefix first. If
+    nothing matches, the raw pair still names the test, which is the point.
+    """
+    dotted = classname if classname else name
+    parts = dotted.split(".")
+    for cut in range(len(parts), 0, -1):
+        module = Path(*parts[:cut]).with_suffix(".py")
+        if (ROOT / module).is_file():
+            rest = parts[cut:] + ([name] if classname else [])
+            return "::".join([module.as_posix()] + rest)
+    return f"{classname}::{name}" if classname else name
+
+
+def read_junit(xml_path: Path) -> PytestOutcome:
+    """Read pytest's result from its JUnit XML.
+
+    Raises if the file is missing or is not the XML pytest writes. The caller
+    must treat that as a failure, never as a reason to go back to the console.
+    """
+    import xml.etree.ElementTree as ET        # noqa: PLC0415 -- only B needs it
+
+    root = ET.parse(xml_path).getroot()
+    if root.tag not in ("testsuites", "testsuite"):
+        raise ValueError(f"root element is <{root.tag}>, not a JUnit test suite")
+    outcome = PytestOutcome()
+    # Count per testcase rather than trusting the suite's attributes: a test
+    # that fails in its body and again in teardown carries both a <failure>
+    # and an <error>, and is one failing test, not two. A collection or setup
+    # error is an <error> too, and counts as a failure here, by name.
+    for case in root.iter("testcase"):
+        test_id = _junit_test_id(case.get("classname", ""), case.get("name", ""))
+        if case.find("failure") is not None or case.find("error") is not None:
+            outcome.failed.append(test_id)
+        elif case.find("skipped") is not None:
+            outcome.skipped += 1
+        else:
+            outcome.passed += 1
+    return outcome
+
+
+def section_b(targets: list[str] | None = None) -> None:
+    """The Python suite, judged from pytest's JUnit XML (IP-03).
+
+    This used to regex the console. ``re.search(r"(\\d+) failed", out)`` takes
+    the *first* match anywhere, and pytest's output carries the captured output
+    and assertion text of every failing test -- a grader report can say
+    "9 failed" about its own subject. CI once reported ``285 passed, 9 FAILED``
+    and named one test; nothing ever showed the nine was nine. The XML is
+    pytest's own record of each test's outcome, so B1 reads that and nothing
+    else. If the XML is missing or unreadable B1 fails and says so; it never
+    falls back to a count scraped from prose.
+
+    ``targets`` defaults to the whole suite.
+    """
     print("\nB. Python unit and integration")
-    # 600s was enough until the grader landed: 51 of these drive a real scene
-    # to a verdict, which is most of the suite's ~30 minutes. CI hit the
-    # ceiling and, because of the bug fixed in run() above, reported a
-    # TypeError from the timeout handler instead of a timeout.
-    code, out = run([sys.executable, "-m", "pytest", "-q", "tests"], timeout=3600)
-    match = re.search(r"(\d+) passed", out)
-    failed = re.search(r"(\d+) failed", out)
-    # Skips too. A skip is neither a pass nor a failure, so counting only the
-    # first two makes a test that quietly stops running anywhere invisible in
-    # this line -- which is exactly how CI spent weeks measuring FakeUtil
-    # against itself, because snap7 was not installed and
-    # test_the_fake_agrees_with_real_snap7 hit its importorskip. The count was
-    # accurate and incomplete, and that is how a suite shrinks (HP-56).
-    skipped = re.search(r"(\d+) skipped", out)
-    # Name the tests that failed, not just how many. A bare count sends you back
-    # to run pytest yourself to find out what broke -- and if it was a flake,
-    # the second run tells you nothing at all.
-    # Anchored on FAILED so a traceback location line like
-    # "tests/test_grade.py:502:" is not mistaken for a test id.
-    names = re.findall(r"^FAILED\s+(tests[\w/\.]+::[\w\[\]\-]+)", out, re.M)
-    detail = (f"{match.group(1) if match else '?'} passed"
-              + (f", {failed.group(1)} FAILED" if failed else "")
-              + (f", {skipped.group(1)} skipped" if skipped else ""))
-    if names:
-        detail += ": " + ", ".join(dict.fromkeys(names))
-    # When the count and the names disagree, the names are not the whole story
-    # and guessing from a summary line wastes a CI cycle -- twice, here. Print
-    # pytest's own tail so the log carries the evidence rather than a number.
-    if failed and len(names) < int(failed.group(1)):
+    import tempfile                            # noqa: PLC0415
+
+    with tempfile.TemporaryDirectory(prefix="ff_b1_") as scratch:
+        xml_path = Path(scratch) / "pytest.xml"
+        cmd = [sys.executable, "-m", "pytest", "-q", f"--junitxml={xml_path}"]
+        cmd += targets or ["tests"]
+        # 600s was enough until the grader landed: its tests each drive a real
+        # scene to a verdict, and together they are most of the suite's ~30
+        # minutes when they are not split into a job of their own.
+        code, out = run(cmd, timeout=3600)
+        try:
+            outcome: PytestOutcome | None = read_junit(xml_path)
+            problem = ""
+        except FileNotFoundError:
+            outcome, problem = None, "pytest wrote no JUnit XML"
+        except Exception as exc:              # noqa: BLE001 -- any unreadable XML fails B1
+            outcome, problem = None, f"pytest's JUnit XML could not be read ({type(exc).__name__}: {exc})"
+
+    if outcome is None:
+        detail = f"{problem} (exit {code}{', timed out' if code == 124 else ''}); no count reported"
+        named_all = False
+        ok = False
+    else:
+        # Skips too. A skip is neither a pass nor a failure, so counting only
+        # the first two makes a test that quietly stops running invisible in
+        # this line -- which is how CI spent weeks measuring FakeUtil against
+        # itself behind an importorskip (HP-56).
+        detail = (f"{outcome.passed} passed"
+                  + (f", {len(outcome.failed)} FAILED" if outcome.failed else "")
+                  + (f", {outcome.skipped} skipped" if outcome.skipped else ""))
+        # Name the tests that failed, not just how many: a bare count sends you
+        # back to run pytest yourself, and if it was a flake the second run
+        # tells you nothing at all.
+        if outcome.failed:
+            detail += ": " + ", ".join(dict.fromkeys(outcome.failed))
+        total = outcome.passed + outcome.skipped + len(outcome.failed)
+        # A non-zero exit with no failing test in the XML is a failure nobody
+        # named: an internal error, a usage error, an interrupt, or no test
+        # selected at all (exit 5). Say so rather than report a clean count.
+        named_all = code == 0 or bool(outcome.failed)
+        if not named_all:
+            detail += f"; pytest exited {code} with no failing test in its XML"
+        elif total == 0:
+            detail += "; no tests ran"
+        ok = code == 0 and not outcome.failed and total > 0
+
+    # When pytest failed and the XML cannot say which test, print pytest's own
+    # tail so the log carries the evidence rather than a guess.
+    if not named_all:
         tail = "\n".join(out.strip().splitlines()[-40:])
-        print(f"\n  B1 reported {failed.group(1)} failures and named "
-              f"{len(names)}; pytest's own last 40 lines follow:\n{tail}\n",
+        print(f"\n  B1 could not name what failed; pytest's own last 40 lines follow:\n{tail}\n",
               flush=True)
-    record("B1", "pytest suite", code == 0, detail)
+    record("B1", "pytest suite", ok, detail)
 
 
 # --- C/D. engine self-tests -------------------------------------------------
