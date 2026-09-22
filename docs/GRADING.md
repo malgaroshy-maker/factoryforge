@@ -101,9 +101,9 @@ controller *can* touch — the counters, the sensor values, the actuator command
 — is recorded as **evidence**, because a student who fails needs it, but none
 of it is the criterion. A criterion you can reach is a criterion you can fake.
 
-Every check on every scene is written down twice: once as a check id in
-`tools/grade.py`, and once here, as the plant fact it reads and the fake it
-shuts.
+Every check on every scene is written down twice: once as a check id in that
+scene's own file under `grading/scenes/`, and once here, as the plant fact it
+reads and the fake it shuts.
 
 | scene | the fact that decides the mark | how a program would fake it, and what stops that |
 |---|---|---|
@@ -213,7 +213,7 @@ FAIL — a.patel   2 of 8 checks failed
     itself takes 0.30s to come out -- so command it between 0.60s and 1.20s.
 ```
 
-Those numbers are computed from `harness/scene.py`'s own geometry — belt speed,
+Those numbers are computed from `sorting_scene.py`'s own geometry — belt speed,
 sensor position, pusher travel and catch width — rather than written into the
 grader. A change to the line changes the advice instead of quietly making it
 wrong, and there is a test that fails if anyone hard-codes them back.
@@ -356,7 +356,8 @@ What "all ten" does *not* mean is that every scene is marked on everything its
 brief describes; see the next four paragraphs.
 
 **Python models of the plants, not the 3D engine.** The sorting line runs
-`harness/scene.py`; the other nine run models that live in `tools/grade.py`.
+`factoryforge_sidecar/sorting_scene.py`; the other nine run models that live
+in `factoryforge_sidecar/grading/scenes/`.
 All of them are 1-D kinematic plants with no physics. They are faithful about
 sensor semantics, about timing, and — where the lesson is analog — about the
 engine's own dynamics, which are copied from the C# part and the template that
@@ -420,10 +421,34 @@ functional test and it is worth saying out loud on a document about assessment.
 
 ---
 
+## Adding a graded scene
+
+The grader is the `factoryforge_sidecar.grading` package, and a scene is two
+files in it:
+
+* `grading/scenes/<scene>.py` — the plant model, the rubric, the feedback and
+  the summary. It defines `SCENE`, the id from `engine/templates/manifest.json`,
+  and `RUBRIC`, the table `--list` prints and the run reads.
+* `grading/reference/<scene>.py` — the built-in controllers, a `good` one and
+  at least one that is wrong about the scene's own lesson. It defines `SCENE`
+  and `REFERENCES`.
+
+`grading/registry.py` finds both by those names, so no existing file changes:
+not `core.py`, not `tools/grade.py`, not a list anywhere. A test fails if
+`core.py`, or any other file the scenes are built on, names a scene. What the
+plant models are built from (`Item`, `Script`, `Panel`, `PlantScene`) is in
+`grading/plant.py`, and the reference controllers' scan loop and panel logic
+are in `grading/lockstep.py` and `grading/reference/_shared.py`. The tests
+still have to be written by hand, and so does this file's table.
+
+---
+
 ## Reference
 
-* `tools/grade.py` — the tool, the ten plant models, the rubrics and the
-  reference controllers
+* `tools/grade.py` — the command, a shim over `factoryforge_sidecar.grading`
+* `sidecar/factoryforge_sidecar/grading/` — the tool: `core.py` runs it,
+  `scenes/` holds the ten plant models with their rubrics, and `reference/`
+  holds their reference controllers
 * `tests/test_grade.py` — what is claimed above, asserted
 * `tools/try_scene.py` — the other side of the same seam: drives a scene
   against the real 3D engine to prove the scene works, including the fault

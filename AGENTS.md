@@ -54,7 +54,8 @@ interface and cannot be used.
 
 The **tag bus** ([`docs/tag-bus.md`](docs/tag-bus.md)) is the seam and the most
 important contract in the project. Two engine implementations already speak it
-(`harness/engine_stub.py` and `engine/src/TagBus/TagBusServer.cs`) and the
+(`sidecar/factoryforge_sidecar/engine_stub.py`, still importable as
+`harness/engine_stub.py`, and `engine/src/TagBus/TagBusServer.cs`) and the
 sidecar cannot tell them apart. Keep it that way.
 
 `kind` is always from the **controller's** point of view: `output` = PLC writes
@@ -65,10 +66,12 @@ it, `input` = simulator writes it. This trips everyone up; it is enforced.
 ```
 engine/          Godot 4.7 C# project
   src/TagBus/    Tag, TagTable, TagBusServer  (C# port, must match Python)
-  src/Scenes/    SortingScene.cs              (port of harness/scene.py)
+  src/Scenes/    SortingScene.cs              (port of sidecar/.../sorting_scene.py)
   src/View/      SceneView.cs, OrbitCamera.cs (reads state only, never writes)
-harness/         Python engine reference + headless scenes (CI scene runner)
-sidecar/         Python package: bus client, drivers, minimal Modbus server
+harness/         aliases: engine_stub.py and scene.py *are* the sidecar's modules
+sidecar/         Python package: bus client, drivers, minimal Modbus server,
+                 the Python engine reference (engine_stub.py), the headless
+                 sorting scene (sorting_scene.py) and the grader (grading/)
 examples/tia/    Sorting.scl, FF_IO DB spec, setup walkthrough
 examples/nodered/ flow that replaces the PLC entirely
 tools/           drive_engine.py (parity check), drv_trace.py (driver tracing)
@@ -248,7 +251,7 @@ never terminate.
 **Two scenes, one tag interface.** The engine launches the *rigid-body* scene:
 real colliders, real gravity, a held-out pusher genuinely blocks the line.
 `--deterministic` swaps in the fixed-timestep `SortingScene` instead — that one
-advances by exactly `TickMs`, mirrors `harness/scene.py`, and is the regression
+advances by exactly `TickMs`, mirrors `sorting_scene.py`, and is the regression
 contract (`tools/drive_engine.py` → `tall=5 short=5`). Jolt cannot promise
 reproducible counts, so **anything asserting exact numbers must pass
 `--deterministic`.**
@@ -445,8 +448,10 @@ unreleased; `git log v1.0.0..master` is the list.
 - Godot C# engine with 3D geometry driven by tags, screenshot in README
 - The unchanged Python sidecar drives the C# engine (`tools/drive_engine.py`)
 - A headless grader, `tools/grade.py`, marks a program against a scene
-  (`docs/GRADING.md`; after v1.0.0). It is not in the release archive (IP-08),
-  and no real student's program has been graded yet (IP-11).
+  (`docs/GRADING.md`; after v1.0.0). Since IP-18 that file is a shim over the
+  `factoryforge_sidecar.grading` package, one file per scene under
+  `grading/scenes/` and `grading/reference/`. It is not in the release
+  archive (IP-08), and no real student's program has been graded yet (IP-11).
 
 The MQTT driver (after v1.0.0) has only met the broker inside
 `tests/test_mqtt.py`, never an external one.

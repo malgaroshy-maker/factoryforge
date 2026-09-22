@@ -87,8 +87,9 @@ jobs:
         run: python tools/test_plan.py --only A,B,C,E,H --pytest-marker "not graded"
 
   # The graded tests: tests/test_grade.py, marked `graded` by tests/conftest.py.
-  # They run the headless grader against harness/engine_stub.py over a real
-  # tag bus -- Python end to end, so this job installs neither Godot nor .NET.
+  # They run the headless grader (factoryforge_sidecar.grading) against
+  # factoryforge_sidecar/engine_stub.py over a real tag bus -- Python end to
+  # end, so this job installs neither Godot nor .NET.
   # Run through test_plan.py rather than bare pytest so a failure is reported
   # the way B1 reports it: counted and named from pytest's JUnit XML.
   # The graded half of B took 31 minutes of run 35698579275.
