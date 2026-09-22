@@ -165,13 +165,26 @@ public partial class PartContractSelfTest : Node
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
+    /// <summary>Every .cs file under the editor directory, subfolders
+    /// included, as paths relative to it. It used to read only the top level,
+    /// which was the whole editor until IP-21 moved the commands into
+    /// <c>Editor/Commands/</c> -- and a scan that stops at the top level would
+    /// then pass a part type named in any of them without ever reading it.</summary>
     private static List<string> ListEditorSources()
     {
         var files = new List<string>();
-        foreach (string name in DirAccess.GetFilesAt(EditorDir))
-        {
-            if (name.EndsWith(".cs", System.StringComparison.Ordinal)) files.Add(name);
-        }
+        Collect("", files);
         return files;
+    }
+
+    private static void Collect(string relative, List<string> files)
+    {
+        string dir = relative.Length == 0 ? EditorDir : $"{EditorDir}/{relative}";
+        string prefix = relative.Length == 0 ? "" : relative + "/";
+        foreach (string name in DirAccess.GetFilesAt(dir))
+        {
+            if (name.EndsWith(".cs", System.StringComparison.Ordinal)) files.Add(prefix + name);
+        }
+        foreach (string sub in DirAccess.GetDirectoriesAt(dir)) Collect(prefix + sub, files);
     }
 }
