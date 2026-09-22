@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-24. IP-02, IP-03 and IP-21 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-27. IP-02, IP-03, IP-06 and IP-21 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -382,6 +382,37 @@ tag, and the release notes list the new scenes, parts and the grader.
 as it was, and this plan's index is closed the way IP-01 closed the last one.
 *Size:* S.
 
+## Added by implementing it — IP-25 … IP-27
+
+Found by IP-06's agent while it reproduced the batch-dosing flake.
+
+**IP-25 — The graded plant starts when the controller connects** · gate
+*Files:* `tools/grade.py` (`GradedEngine`, the run's start), `tests/test_grade.py`.
+*Done when:* on the wall-clock path a real student uses, the plant and the
+graded window start when the controller's sidecar has connected and been
+described to. Today they start when the engine starts. In IP-06's experiment
+a controller that connected 8 s late into a 20 s window was graded on 12 s,
+and its first batch scored 0.0 L. Nothing in the report said why.
+*Verify:* a test that connects a `good` reference controller several seconds
+after the grader starts, on the wall clock, gets PASS. Moving the start back
+to engine start makes that test fail.
+*Size:* S.
+
+**IP-26 — A tag-bus coalescing test that flakes on its own**
+*Files:* `tests/test_tagbus.py::test_updates_coalesce_behind_a_slow_push`.
+*Done when:* the cause is known and fixed, or the test waits on an event
+rather than on elapsed time (gotcha 2). It failed 1 of 30 runs on unmodified
+`5c2f26a` on Windows, so it is not caused by IP-06.
+*Verify:* 100 consecutive passes, and the fixed flaw reintroduced fails.
+*Size:* S.
+
+**IP-27 — Re-measure `GRADING.md`'s wrong-controller table**
+*Files:* `docs/GRADING.md`.
+*Done when:* every number in the table (for example, "22.1 L and then 11.0 L")
+is from a lockstep run, which is now reproducible, with the command that
+produced it. Ideally a test regenerates it or asserts it (the IP-02 approach).
+*Size:* S.
+
 ---
 
 ## Sequencing
@@ -397,6 +428,7 @@ as it was, and this plan's index is closed the way IP-01 closed the last one.
 | IP-19 | the grader can mark against a plant that is not the one in the scene |
 | IP-14 | seven parts in the palette that no scene uses (gates only the parts it ships) |
 | IP-22 | three self-tests have never met a binary |
+| IP-25 | a student who connects late is graded on a shorter run, and can score zero |
 
 ### Order
 
@@ -440,7 +472,7 @@ as it was, and this plan's index is closed the way IP-01 closed the last one.
 | IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
 | IP-04 | Graded tests get their own job | 1 | S | ● | code done d1ac12d; CI unverified |
 | IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | open |
-| IP-06 | A graded test must not depend on machine load | 1 | M | ● | open |
+| IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | open |
 | IP-08 | Ship the grader in the release | 2 | M | ● | open |
 | IP-09 | A no-licence first hour | 2 | M | ● | open |
@@ -459,6 +491,9 @@ as it was, and this plan's index is closed the way IP-01 closed the last one.
 | IP-22 | Every release self-test meets the binary | 5 | S | ● | open |
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
+| IP-25 | The graded plant starts when the controller connects | 2 | S | ● | open |
+| IP-26 | A tag-bus coalescing test that flakes on its own | 1 | S |  | open |
+| IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | open |
 
 ## Appendix B — where the findings came from
 
