@@ -75,6 +75,7 @@ sys.path.insert(0, str(ROOT / "harness"))
 
 from engine_stub import EngineStub                      # noqa: E402
 from factoryforge_sidecar.tags import Tag, TagTable, TagValue  # noqa: E402
+from factoryforge_sidecar.tagbus import TagBusClient     # noqa: E402
 import scene as scene_model                             # noqa: E402
 
 #: Ports a graded run may bind when the instructor asks for a fixed one. The
@@ -214,6 +215,9 @@ class GradedEngine(EngineStub):
         #: cartons. Nothing else uses it as a criterion.
         self.written_tags: set[str] = set()
         self.arrived = asyncio.Event()
+        #: Set when a reference controller is stepped in lockstep with this
+        #: plant rather than racing it on the wall clock. See `Lockstep`.
+        self.lockstep: Lockstep | None = None
         self._t0 = time.perf_counter()
 
     @property
@@ -255,7 +259,34 @@ class GradedEngine(EngineStub):
                 and tag.kind != "output")
             if wrong:
                 self.input_writes.append({"at": self.elapsed, "tags": wrong})
-        await super()._on_message(msg)
+        try:
+            await super()._on_message(msg)
+        finally:
+            # Counted once the message has been *applied*, not when it
+            # arrived: lockstep's promise is that a scan's writes are in the
+            # plant before the plant moves.
+            if self.lockstep is not None:
+                self.lockstep.engine_read += 1
+                self.lockstep.poke()
+
+    async def _send(self, msg: dict) -> None:
+        if self.lockstep is not None and self._client is not None:
+            self.lockstep.engine_sent += 1
+            self.lockstep.poke()
+        await super()._send(msg)
+
+    async def step(self) -> None:
+        """One fixed step and its publication, and nothing else.
+
+        What `EngineStub._tick_loop` does for each step it runs, without the
+        wall-clock accumulator that decides how many to run. Only `Lockstep`
+        calls this; a graded run against a real controller never does, because
+        a real PLC does not wait for anybody.
+        """
+        self.scene.tick(self.tick_ms / 1000.0)
+        self.tick_count += 1
+        await self._send_observations()
+        await self._send_updates()
 
 
 # --- the sorting-by-height rubric --------------------------------------
@@ -3367,13 +3398,26 @@ EMIT_GAP = 1.6
 SCAN = 0.05
 
 
-async def _feed(bus, stop: asyncio.Event, gap: float = EMIT_GAP,
-                tag: str = "emitter.emit") -> None:
-    while not stop.is_set():
-        await bus.write(tag, True)
-        await asyncio.sleep(EMIT_PULSE)
-        await bus.write(tag, False)
-        await asyncio.sleep(gap)
+class Feed:
+    """The emitter, pulsed on the scan: EMIT_PULSE high, then `gap` low.
+
+    On the scan and not on `asyncio.sleep`, like everything else a reference
+    controller times, so that `Lockstep` can put it on the plant's clock. A
+    sleeping feeder would go on emitting in wall-clock seconds while the plant
+    ran at whatever speed lockstep managed, and nothing would say so.
+    """
+
+    def __init__(self, gap: float = EMIT_GAP) -> None:
+        self.gap = gap
+        self.left = 0.0
+        self.on = False
+
+    def __call__(self, dt: float) -> bool:
+        self.left -= dt
+        if self.left <= 0.0:
+            self.on = not self.on
+            self.left = EMIT_PULSE if self.on else self.gap
+        return self.on
 
 
 class Scanner:
@@ -3446,7 +3490,20 @@ async def run_scan(bus, stop: asyncio.Event, body, period: float = SCAN) -> None
     lands 22.0 L here. Nine graded tests failed that way, and every one of
     them read as a flaky grader rather than as a controller whose clock was
     wrong.
+
+    Real elapsed time fixed the controller's arithmetic and not the race: the
+    plant and the controller were still two wall clocks, and on a loaded
+    machine both coarsen. So when the bus is a `LockstepClient` this loop does
+    not run at all. The body is handed to `Lockstep`, which calls it once per
+    scan with `dt` equal to exactly the plant time that passed, and nothing on
+    that path reads the wall clock (IP-06).
     """
+    lockstep = getattr(bus, "lockstep", None)
+    if lockstep is not None:
+        lockstep.attach(body, period)
+        await stop.wait()
+        return
+
     last = time.perf_counter()
     while not stop.is_set():
         now = time.perf_counter()
@@ -3455,47 +3512,237 @@ async def run_scan(bus, stop: asyncio.Event, body, period: float = SCAN) -> None
         await asyncio.sleep(period)
 
 
-async def _stroke(bus, delay: float, hold: float = 0.5) -> None:
-    await asyncio.sleep(delay)
-    await bus.write("pusher.extend", True)
-    await asyncio.sleep(hold)
-    await bus.write("pusher.extend", False)
+# --- lockstep: a reference controller on the plant's clock ---------------
+
+class LockstepStalled(RuntimeError):
+    """One side of a lockstep run stopped answering."""
+
+
+class Lockstep:
+    """A plant and a reference controller on one clock: the plant's.
+
+    A graded run against a real PLC is two machines on two wall clocks -- the
+    engine paces itself with a real-time accumulator and the PLC scans when it
+    scans -- and that is right, because a real PLC does not wait for anybody.
+    A *reference* controller runs in this process, though, so it can be made
+    to wait, and a test that marks one has to: on a loaded machine both clocks
+    coarsen, each in its own way, and a quantity the rubric measures moves with
+    how busy the machine was. The stopwatch reference for batch-dosing passed
+    its PR run and failed the same code on master that way (IP-06).
+
+    So each scan is one cycle, in a fixed order:
+
+    1. the controller scans -- reads the inputs it has been sent and writes its
+       outputs -- and is told `dt`, which is exactly the plant time since its
+       previous scan (0 on the first);
+    2. the plant applies those writes;
+    3. the plant advances by exactly one scan period, in its own fixed steps;
+    4. every update those steps published reaches the controller.
+
+    Nothing in that loop reads the wall clock. Steps 2 and 4 *wait* on real
+    I/O -- the controller still talks to the plant over a real websocket
+    through the real `TagBusClient`, so it crosses the seam a student's
+    sidecar crosses -- but the plant is not moving while they wait, so however
+    long they take changes nothing. The wall clock appears only as a liveness
+    bound: a side that stops answering ends the run as ERROR rather than
+    hanging it.
+
+    It runs faster than real time, by however much the machine allows.
+    """
+
+    #: Wall-clock seconds one barrier may wait before the run is declared
+    #: broken. Liveness only: it decides whether the run ends, never what the
+    #: plant or the controller sees.
+    STALL = 20.0
+    #: How often a barrier re-checks when nothing has poked it. It only
+    #: matters when a flush drops every write it held (HP-33's gate), which
+    #: sends nothing and so pokes nothing.
+    RECHECK = 0.01
+
+    def __init__(self, engine: GradedEngine, period: float = SCAN) -> None:
+        tick = engine.tick_ms / 1000.0
+        steps = round(period / tick)
+        if steps < 1 or abs(steps * tick - period) > 1e-9:
+            raise ValueError(f"a {period:g}s scan is not a whole number of "
+                             f"{engine.tick_ms} ms plant steps")
+        self.engine = engine
+        self.period = period
+        self.steps_per_scan = steps
+        self.bus: LockstepClient | None = None
+        self.scan = None
+        self.scans = 0
+        self.started = False
+        self.error: BaseException | None = None
+        #: Frames the plant published, and how many the controller handled.
+        self.engine_sent = 0
+        self.bus_read = 0
+        #: Frames the controller sent, and how many the plant applied.
+        self.bus_sent = 0
+        self.engine_read = 0
+        self._progress = asyncio.Event()
+
+    def poke(self) -> None:
+        self._progress.set()
+
+    def attach(self, body, period: float) -> None:
+        """Take over a reference controller's scan. Called by `run_scan`."""
+        if self.started:
+            problem = ("a scan attached after the plant had started moving, so "
+                       "lockstep cannot say which plant time it began at")
+        elif self.scan is not None:
+            problem = "a second scan attached; lockstep steps exactly one"
+        elif abs(period - self.period) > 1e-9:
+            problem = (f"a {period:g}s scan attached to a {self.period:g}s "
+                       f"lockstep")
+        else:
+            self.scan = body
+            return
+        # Raised here, inside the controller's task, where nobody is looking --
+        # so it is also kept for `run` to raise where somebody is.
+        self.error = RuntimeError(problem)
+        raise self.error
+
+    def _connected(self) -> bool:
+        return self.engine._client is not None and self.bus is not None
+
+    def _writes_applied(self) -> bool:
+        if not self._connected():
+            return True                       # nobody left to wait for
+        return self.bus.flushed and self.engine_read >= self.bus_sent
+
+    def _updates_delivered(self) -> bool:
+        if not self._connected():
+            return True
+        return self.bus_read >= self.engine_sent
+
+    async def _until(self, ready, what: str) -> None:
+        deadline = time.perf_counter() + self.STALL
+        while not ready():
+            if time.perf_counter() > deadline:
+                raise LockstepStalled(
+                    f"{what} had not arrived {self.STALL:g}s later (wall clock), "
+                    f"at plant time {self.engine.tick_count * self.engine.tick_ms / 1000:.2f}s")
+            self._progress.clear()
+            try:
+                await asyncio.wait_for(self._progress.wait(), self.RECHECK)
+            except asyncio.TimeoutError:
+                pass
+
+    async def run(self, duration: float) -> None:
+        """Advance the plant exactly `duration` seconds, a scan at a time."""
+        engine = self.engine
+        target = round(duration * 1000.0 / engine.tick_ms)
+        done = 0
+        dt = 0.0
+        self.started = True
+        while done < target:
+            if self.error is not None:
+                raise self.error
+            if self.scan is not None:
+                await self.scan(dt)
+                self.scans += 1
+            await self._until(self._writes_applied, "the controller's writes")
+            steps = min(self.steps_per_scan, target - done)
+            for _ in range(steps):
+                await engine.step()
+            done += steps
+            await self._until(self._updates_delivered, "the plant's updates")
+            dt = steps * engine.tick_ms / 1000.0
+
+
+class LockstepClient(TagBusClient):
+    """The real bus client, counting frames so `Lockstep` can tell when each
+    direction has gone quiet. Every frame still crosses the websocket, and the
+    writes still go out through the client's own flush loop -- including its
+    HP-33 gate -- so nothing a reference does in lockstep takes a path a
+    student's sidecar would not."""
+
+    def __init__(self, url: str, lockstep: Lockstep) -> None:
+        super().__init__(url)
+        self.lockstep = lockstep
+
+    @property
+    def flushed(self) -> bool:
+        """Nothing written is still waiting for the flush loop."""
+        return not self._pending
+
+    async def _handle(self, msg: dict) -> None:
+        try:
+            await super()._handle(msg)
+        finally:
+            self.lockstep.bus_read += 1
+            self.lockstep.poke()
+
+    async def _send(self, msg: dict) -> None:
+        # Counted before the send and with no await between the flush loop
+        # emptying `_pending` and this line, so a barrier can never see the
+        # writes gone from the queue and not yet in flight.
+        if self._ws is not None:
+            self.lockstep.bus_sent += 1
+            self.lockstep.poke()
+        await super()._send(msg)
+
+
+#: How long a sorting reference holds the plate out once it fires.
+STROKE_HOLD = 0.5
 
 
 async def _good(bus, stop: asyncio.Event) -> None:
     """What the exercise is asking for."""
     low, high = _beam_to_pusher_window()
     delay = (low + high) / 2
+    feed = Feed()
+    # `strokes` holds the plant time each pending stroke starts, not a flag:
+    # the next carton can break the beam before the last one's stroke is over.
+    state = {"now": 0.0, "high": False, "strokes": []}
 
-    async def on_update(values) -> None:
-        # Updates are delta-only, so a True here *is* the rising edge -- no
-        # edge memory, and no poll loop under the 15.6ms clock floor.
-        if values.get("sensor_high.detect") is True:
-            asyncio.create_task(_stroke(bus, delay))
+    async def body(dt: float) -> None:
+        state["now"] += dt
+        now = state["now"]
+        high = bool(bus.read("sensor_high.detect"))
+        if high and not state["high"]:
+            state["strokes"].append(now + delay)
+        state["high"] = high
+        state["strokes"] = [at for at in state["strokes"] if now < at + STROKE_HOLD]
+        await bus.write_many({
+            "conveyor.rotate": True,
+            "emitter.emit": feed(dt),
+            "pusher.extend": any(at <= now for at in state["strokes"]),
+        })
 
-    bus.on_update(on_update)
-    await bus.write("conveyor.rotate", True)
-    await _feed(bus, stop)
+    await run_scan(bus, stop, body)
 
 
 async def _blind(bus, stop: asyncio.Event) -> None:
     """Pushes on a timer and never reads a sensor. Passes a line that
     alternates; fails this one, which is why the feed pattern is shuffled."""
-    await bus.write("conveyor.rotate", True)
-    feeder = asyncio.create_task(_feed(bus, stop))
-    try:
-        while not stop.is_set():
-            await asyncio.sleep(EMIT_PULSE + EMIT_GAP)
-            await _stroke(bus, 1.0)
-    finally:
-        feeder.cancel()
+    #: One stroke a cycle, one second after the cycle's feed pause ends.
+    CYCLE = EMIT_PULSE + EMIT_GAP + 1.0 + STROKE_HOLD
+    feed = Feed()
+    state = {"cycle": 0.0}
+
+    async def body(dt: float) -> None:
+        state["cycle"] += dt
+        if state["cycle"] >= CYCLE:
+            state["cycle"] -= CYCLE
+        await bus.write_many({
+            "conveyor.rotate": True,
+            "emitter.emit": feed(dt),
+            "pusher.extend": state["cycle"] >= CYCLE - STROKE_HOLD,
+        })
+
+    await run_scan(bus, stop, body)
 
 
 async def _greedy(bus, stop: asyncio.Event) -> None:
     """Holds the plate out, so everything goes down the chute."""
-    await bus.write("conveyor.rotate", True)
-    await bus.write("pusher.extend", True)
-    await _feed(bus, stop)
+    feed = Feed()
+
+    async def body(dt: float) -> None:
+        await bus.write_many({"conveyor.rotate": True, "pusher.extend": True,
+                              "emitter.emit": feed(dt)})
+
+    await run_scan(bus, stop, body)
 
 
 async def _idle(bus, stop: asyncio.Event) -> None:
@@ -3514,17 +3761,20 @@ async def _forcer(bus, stop: asyncio.Event) -> None:
                or tag.id in ("counter.tall", "counter.short")}
     run_tags = [t for t in ("conveyor.rotate", "belt.rotate", "buffer.run",
                             "infeed.rotate", "scale.rotate") if t in bus.table]
-    for tag_id in run_tags:
-        await bus.write(tag_id, True)
-    feeder = (asyncio.create_task(_feed(bus, stop))
-              if "emitter.emit" in bus.table else None)
-    try:
-        while not stop.is_set():
+    feed = Feed() if "emitter.emit" in bus.table else None
+    state = {"force_in": 0.0}
+
+    async def body(dt: float) -> None:
+        writes = {tag_id: True for tag_id in run_tags}
+        if feed is not None:
+            writes["emitter.emit"] = feed(dt)
+        await bus.write_many(writes)
+        state["force_in"] -= dt
+        if state["force_in"] <= 0.0:
             await bus.force(targets or {"panel.green": True})
-            await asyncio.sleep(0.5)
-    finally:
-        if feeder is not None:
-            feeder.cancel()
+            state["force_in"] = 0.5
+
+    await run_scan(bus, stop, body)
 
 
 # --- start / stop station references ------------------------------------
@@ -3728,11 +3978,12 @@ async def _lc_body(bus, stop, *, fixed: float | None, every_other: bool) -> None
     # carton, which read from the outside exactly like a controller that had
     # misjudged the height.
     state = {"blocked": False, "feed": 0.0, "emit": False, "seen": 0,
-             "pending": [], "drop_at": None}
+             "pending": [], "drop_at": None, "now": 0.0}
 
     async def body(dt: float) -> None:
         scanner.scan()
-        now = time.perf_counter()
+        state["now"] += dt           # the scan clock; see `run_scan`
+        now = state["now"]
 
         if scanner.running:
             state["feed"] -= dt
@@ -3808,11 +4059,12 @@ async def _rw_body(bus, stop, *, on_metal: bool, feed_gap: float) -> None:
     # and being right at one limit is the failure the scene demonstrates.
     state = {"feed": 0.0, "emit": False, "peak": 0.0, "loaded": False,
              "reject": False, "clear_at": None, "metal": [], "eye": False,
-             "this_is_metal": False}
+             "this_is_metal": False, "now": 0.0}
 
     async def body(dt: float) -> None:
         scanner.scan()
-        now = time.perf_counter()
+        state["now"] += dt           # the scan clock; see `run_scan`
+        now = state["now"]
         weight = scanner.num("scale.weight")
 
         # Feed into space. `feed_gap` is the whole difference between the two
@@ -3899,11 +4151,12 @@ async def _ab_body(bus, stop, *, by_pulses: bool) -> None:
     TIMED_HOLD = 2.4
     HOLD_FOR = 9.0
     state = {"phase": "accumulate", "until": 0.0, "pulses_at": 0.0,
-             "feed": 0.0, "emit": False}
+             "feed": 0.0, "emit": False, "now": 0.0}
 
     async def body(dt: float) -> None:
         scanner.scan()
-        now = time.perf_counter()
+        state["now"] += dt           # the scan clock; see `run_scan`
+        now = state["now"]
         pulses = scanner.num("enc.count")
 
         if scanner.running:
@@ -4081,12 +4334,13 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
     scanner = Scanner(bus)
     state = {"safety_trip": True, "mute_until": 0.0, "eye": False,
              "push": False, "transfer": "idle", "wait": 0.0,
-             "feed": 0.0, "emit": False}
+             "feed": 0.0, "emit": False, "now": 0.0}
     #: Push eye to the transfer station: 0.4 m at 0.5 m/s.
     PUSH_DELAY = 0.8
 
     async def body(dt: float) -> None:
-        now = time.perf_counter()
+        state["now"] += dt           # the scan clock; see `run_scan`
+        now = state["now"]
         # Read Reset before the panel scan consumes it: this cell has two
         # things to reset, the relay's latch and the controller's, and one
         # button does both the way it does on a real cell.
@@ -4375,15 +4629,18 @@ def reference_choices() -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-async def start_reference(kind: str, url: str, scene: str):
-    """Connect a reference controller. Returns an awaitable that stops it."""
-    from factoryforge_sidecar.tagbus import TagBusClient       # noqa: PLC0415
+async def start_reference(kind: str, url: str, scene: str,
+                          lockstep: Lockstep | None = None):
+    """Connect a reference controller. Returns an awaitable that stops it.
 
+    With `lockstep`, the controller's scan is handed to it before this
+    returns, while the plant is still at t = 0.
+    """
     controller = reference_for(scene, kind)
     if controller is None:
         raise RuntimeError(f"{scene} has no {kind!r} reference controller")
 
-    bus = TagBusClient(url)
+    bus = TagBusClient(url) if lockstep is None else LockstepClient(url, lockstep)
     stop = asyncio.Event()
     runner = asyncio.create_task(bus.run(stop))
     await asyncio.wait_for(bus.connected.wait(), timeout=15)
@@ -4393,7 +4650,23 @@ async def start_reference(kind: str, url: str, scene: str):
             raise RuntimeError("reference controller never received a describe")
         await asyncio.sleep(0.05)
 
+    if lockstep is not None:
+        # A write computed before the describe hooks finish is dropped by
+        # design (HP-33). On the wall clock the next scan writes it again; in
+        # lockstep the first scan is at t = 0 and has to count, so wait here,
+        # while the plant is not moving and waiting costs nothing.
+        await asyncio.wait_for(bus.rebuilt.wait(), timeout=15)
+        lockstep.bus = bus
+
     task = asyncio.create_task(controller(bus, stop))
+    if lockstep is not None:
+        # Run the controller up to its first suspension, which for one that
+        # scans is `run_scan` handing its body over. `Lockstep.attach` refuses
+        # a body that turns up after the plant has started, so a controller
+        # that awaited something first fails loudly rather than joining late.
+        await asyncio.sleep(0)
+        if task.done():
+            task.result()                     # re-raise if it died starting
 
     async def shutdown() -> None:
         stop.set()
@@ -4417,15 +4690,22 @@ async def run_grading(args) -> Report:
     sim = rubric["build"](seed)
     watched = Watched(sim, observe=rubric["observe"])
     engine = GradedEngine(watched, port=args.bus_port)
+    # Before the engine starts, so the frames of the very first connection
+    # are counted. Only a reference controller can be stepped: `main` refuses
+    # --lockstep without --reference, because a real PLC does not wait.
+    lockstep = Lockstep(engine) if getattr(args, "lockstep", False) else None
+    engine.lockstep = lockstep
     await engine.start()
 
     _announce(args, engine, rubric, seed)
 
-    ticker = asyncio.create_task(engine._tick_loop())
+    ticker = (asyncio.create_task(engine._tick_loop()) if lockstep is None
+              else None)
     reference = None
     try:
         if args.reference:
-            reference = await start_reference(args.reference, engine.url, args.scene)
+            reference = await start_reference(args.reference, engine.url,
+                                              args.scene, lockstep)
 
         try:
             await asyncio.wait_for(engine.arrived.wait(), timeout=args.wait)
@@ -4457,15 +4737,30 @@ async def run_grading(args) -> Report:
         # ceiling is a liveness bound, not the criterion: an engine that has
         # stopped stepping must not hang the run forever (HP-54), and it says
         # which of the two ended the window.
-        ceiling = time.perf_counter() + args.duration * 4 + 30
-        while watched.sim_time < args.duration:
-            if time.perf_counter() > ceiling:
-                report.feedback.append(
-                    f"the plant only advanced {watched.sim_time:.1f}s of the "
-                    f"{args.duration:g}s asked for before the wall-clock ceiling; "
-                    f"the engine was not stepping, so this mark is not trustworthy")
-                break
-            await asyncio.sleep(0.05)
+        #
+        # That fixes the window's length and not what happens inside it: the
+        # plant and the controller are still two wall clocks racing, and a
+        # stopwatch controller's batch still moved with the load. For a
+        # reference controller, `Lockstep` removes the race instead (IP-06).
+        if lockstep is not None:
+            report.evidence["clock"] = "lockstep"
+            try:
+                await lockstep.run(args.duration)
+            except LockstepStalled as exc:
+                report.verdict = ERROR
+                report.headline = f"the lockstep run stalled: {exc}"
+                report.evidence["sim_seconds"] = round(watched.sim_time, 2)
+                return report
+        else:
+            ceiling = time.perf_counter() + args.duration * 4 + 30
+            while watched.sim_time < args.duration:
+                if time.perf_counter() > ceiling:
+                    report.feedback.append(
+                        f"the plant only advanced {watched.sim_time:.1f}s of the "
+                        f"{args.duration:g}s asked for before the wall-clock ceiling; "
+                        f"the engine was not stepping, so this mark is not trustworthy")
+                    break
+                await asyncio.sleep(0.05)
 
         if check_integrity(watched, engine, report, args.duration):
             rubric["grade"](watched, engine, report, args.duration)
@@ -4475,7 +4770,8 @@ async def run_grading(args) -> Report:
                 "every check met" if not failed
                 else f"{len(failed)} of {len(report.checks)} checks failed")
     finally:
-        ticker.cancel()
+        if ticker is not None:
+            ticker.cancel()
         if reference is not None:
             await reference()
         await engine.stop()
@@ -4593,6 +4889,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="grade a built-in controller instead of waiting for "
                              "one, to check the grader itself. Which ones a scene "
                              "has is in --list")
+    parser.add_argument("--lockstep", action="store_true",
+                        help="with --reference: step the plant and the built-in "
+                             "controller together on the plant's clock, one scan "
+                             "at a time, so the mark cannot depend on how busy "
+                             "this machine is. Faster than real time. Not for "
+                             "students: a real PLC cannot be made to wait")
     args = parser.parse_args(argv)
 
     if args.list:
@@ -4608,6 +4910,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT[ERROR]
     if args.duration is None:
         args.duration = RUBRICS[args.scene]["duration"]
+    if args.lockstep and not args.reference:
+        print("RESULT grade=ERROR --lockstep needs --reference: only a built-in "
+              "controller can be made to wait for the plant, and a real PLC "
+              "scans on its own clock", file=sys.stderr)
+        return EXIT[ERROR]
     if args.reference and reference_for(args.scene, args.reference) is None:
         print(f"RESULT grade=ERROR {args.scene} has no {args.reference!r} "
               f"reference; it has: "

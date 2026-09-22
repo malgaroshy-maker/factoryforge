@@ -6,15 +6,22 @@ the one question worth asking about a grader is whether a program that does
 the job gets a PASS and a program that does not gets a FAIL, and neither is
 answerable from unit tests.
 
-That costs about a minute of wall clock, which is the bulk of it. The
-alternative is a grader whose only evidence is that its helper functions
+The alternative is a grader whose only evidence is that its helper functions
 return the right numbers, and the project has been bitten by exactly that
 before (AGENTS.md gotcha 16).
+
+Almost all of them pass `--lockstep`: the built-in controller and the plant
+are stepped together on the plant's clock, so a verdict cannot depend on how
+busy the machine running the suite is (IP-06). That is also why the suite no
+longer costs the half hour of wall clock that the sum of its windows would.
+The few that do not are marked, and say why.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -33,6 +40,10 @@ PASS_WINDOW = 24.0
 
 def run(*args) -> int:
     return grade.main([str(a) for a in args])
+
+
+#: Every graded end-to-end run below passes this unless it says why not.
+LOCKSTEP = "--lockstep"
 
 
 # --- the feed pattern --------------------------------------------------
@@ -188,7 +199,7 @@ def good_run(tmp_path_factory) -> dict:
     """One correct controller, graded once, read by several tests."""
     out = tmp_path_factory.mktemp("grade") / "good.json"
     code = run("--reference", "good", "--duration", PASS_WINDOW,
-               "--seed", 11, "--wait", 30, "--json", out)
+               "--seed", 11, "--wait", 30, "--json", out, LOCKSTEP)
     return {"exit": code, "report": json.loads(out.read_text(encoding="utf-8"))}
 
 
@@ -228,7 +239,7 @@ def test_a_timer_instead_of_the_sensor_fails_on_misrouted_cartons(tmp_path):
     period sorts nothing, however tidy the code looks."""
     out = tmp_path / "blind.json"
     code = run("--reference", "blind", "--duration", 18, "--seed", 11,
-               "--wait", 30, "--json", out)
+               "--wait", 30, "--json", out, LOCKSTEP)
     report = json.loads(out.read_text(encoding="utf-8"))
     assert code == 1 and report["verdict"] == "FAIL"
     assert report["evidence"]["misrouted"], "a blind timer sorted everything correctly"
@@ -239,16 +250,22 @@ def test_a_timer_instead_of_the_sensor_fails_on_misrouted_cartons(tmp_path):
 def test_holding_the_pusher_out_fails_on_the_short_cartons(tmp_path):
     out = tmp_path / "greedy.json"
     code = run("--reference", "greedy", "--duration", 14, "--seed", 11,
-               "--wait", 30, "--json", out)
+               "--wait", 30, "--json", out, LOCKSTEP)
     report = json.loads(out.read_text(encoding="utf-8"))
     assert code == 1 and report["verdict"] == "FAIL"
     assert "sort.short_passed" in {c["id"] for c in report["checks"] if not c["ok"]}
     assert any("held out" in line for line in report["feedback"])
 
 
+# `idle` and `forcer` stay on the wall clock, deliberately. They are the only
+# end-to-end runs of the path a real student's sidecar takes -- the engine's own
+# real-time tick loop, the grader's wall-clock window -- and neither verdict
+# depends on timing: a belt nobody started never moves, and a force is
+# recorded whenever it lands.
+
 def test_a_controller_that_connects_and_does_nothing_cannot_pass(tmp_path):
     """The run that has to fail loudly, because it is also what a broken
-    connection looks like from here."""
+    connection looks like from here. Wall clock, on purpose; see above."""
     out = tmp_path / "idle.json"
     code = run("--reference", "idle", "--duration", 6, "--seed", 11,
                "--wait", 30, "--json", out)
@@ -261,7 +278,7 @@ def test_a_controller_that_connects_and_does_nothing_cannot_pass(tmp_path):
 def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
     """A forced tag is a value that disagrees with the simulation on purpose.
     An instructor wants to tell 'got it wrong' apart from 'tried it on', so it
-    gets its own verdict and its own exit code."""
+    gets its own verdict and its own exit code. Wall clock, on purpose."""
     out = tmp_path / "forcer.json"
     code = run("--reference", "forcer", "--duration", 5, "--seed", 11,
                "--wait", 30, "--json", out)
@@ -281,17 +298,20 @@ def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
 # which is whether it can tell a program that does the job from one that does
 # not (AGENTS.md gotcha 24).
 #
-# They cost wall clock -- a thermal plant takes as long to heat here as it does
-# in the engine -- and the windows below are the shortest each exercise can be
-# marked in rather than the windows an instructor would use. `--duration` on
-# the command line is longer for that reason.
+# They used to cost wall clock -- a thermal plant took as long to heat here as
+# it does in the engine -- and they no longer do, because they run in lockstep.
+# The windows below are still the shortest each exercise can be marked in
+# rather than the windows an instructor would use, because a window is plant
+# time and the exam's script is written in plant time; `--duration` on the
+# command line is longer for that reason.
 
 
 def graded(tmp_path, scene: str, reference: str, duration: float,
            seed: int = 11) -> tuple[int, dict]:
     out = tmp_path / f"{scene}-{reference}.json"
     code = run("--scene", scene, "--reference", reference,
-               "--duration", duration, "--seed", seed, "--wait", 30, "--json", out)
+               "--duration", duration, "--seed", seed, "--wait", 30, "--json", out,
+               LOCKSTEP)
     return code, json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -498,6 +518,16 @@ def test_a_batch_timed_in_seconds_delivers_half_when_the_pump_is_re_rated(tmp_pa
     # flaky grader and is really a claim that was never the controller's to
     # make. The overshoot is also the thing the scene teaches, so pinning it
     # would pin the lesson to a machine.
+    #
+    # Except that it is asserted, one line down: `_batch_feedback` only writes
+    # "ends on seconds cannot see that" when the first batch IS inside
+    # tolerance. That is the line master failed on (IP-06), with the first
+    # batch at 23.52 L. In lockstep the scans cannot coarsen and the first
+    # batch lands on the same number every run -- 23.4999999999996 L against
+    # a 22 L pot, inside the 1.5 L tolerance by floating-point rounding. So it
+    # is no longer a flake, but it is a knife edge a change to the tick or scan
+    # arithmetic could tip. The x1.07 calibration in `_bd_body` puts it there;
+    # 1.0 would land on 21.9 L. That is left as a decision, not tuned here.
     assert first["delivered_L"] >= second["delivered_L"]
     assert any("ends on seconds cannot see that" in line
                for line in report["feedback"])
@@ -685,3 +715,113 @@ async def test_two_graded_runs_can_share_a_machine():
     finally:
         await first.stop()
         await second.stop()
+
+
+# --- lockstep ----------------------------------------------------------
+#
+# IP-06. A graded run against a real PLC is two machines on two wall clocks,
+# and it has to be: a real PLC does not wait for anybody. A built-in reference
+# controller runs in this process, so it can be made to wait -- and the tests
+# above make it, because on the wall clock a mark moved with how busy the
+# machine was. These are the claims that makes, asserted.
+
+def test_lockstep_is_refused_without_a_built_in_controller(capsys):
+    """A real controller scans on its own clock and cannot be stepped, so a
+    lockstep run with nobody built in to step would mark a student against a
+    clock their PLC never saw. Refused, before anything binds a port."""
+    assert run("--lockstep", "--duration", 1, "--wait", 1) == 2
+    assert "--lockstep needs --reference" in capsys.readouterr().err
+
+
+def test_a_scan_that_joins_after_the_plant_has_moved_is_refused():
+    """Lockstep can only promise `dt` is plant time if it has stepped every
+    scan since t = 0. A controller whose scan turned up late would have missed
+    some, silently -- so it is refused, and kept for `run` to raise where
+    somebody is looking rather than inside the controller's own task."""
+    lockstep = grade.Lockstep(grade.GradedEngine(scene_model.SortingScene(), port=0))
+    lockstep.started = True
+
+    async def body(dt: float) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="after the plant had started"):
+        lockstep.attach(body, grade.SCAN)
+    assert lockstep.error is not None and lockstep.scan is None
+
+
+async def test_every_built_in_controller_but_idle_scans_on_the_plants_clock():
+    """A reference that timed itself with `asyncio.sleep` would go on in
+    wall-clock seconds while lockstep ran the plant as fast as the machine
+    allowed: a controller on a different clock from its plant, which is the
+    bug IP-06 removed, back and silent. So every one of them has to hand its
+    scan over -- all but `idle`, which has nothing to scan."""
+    for scene_id, rubric in grade.RUBRICS.items():
+        for name in tuple(rubric["references"]) + grade.SHARED_REFERENCES:
+            engine = grade.GradedEngine(grade.Watched(rubric["build"](5)), port=0)
+            engine.lockstep = lockstep = grade.Lockstep(engine)
+            await engine.start()
+            try:
+                shutdown = await grade.start_reference(name, engine.url, scene_id,
+                                                       lockstep)
+                try:
+                    scans = lockstep.scan is not None
+                    assert scans == (name != "idle"), (
+                        f"{scene_id}/{name}: "
+                        f"{'no scan handed over' if not scans else 'idle scans'}")
+                finally:
+                    await shutdown()
+            finally:
+                await engine.stop()
+
+
+#: Evidence fields stamped with the wall clock rather than the plant's. They
+#: label a session; nothing is marked on them.
+WALL_CLOCK_LABELS = {"sessions"}
+
+
+def test_a_lockstep_mark_does_not_move_when_the_machine_is_busy(tmp_path, monkeypatch):
+    """IP-06, asserted inside the suite rather than left to CI's weather.
+
+    The stopwatch batch that failed on master, twice: once as fast as the
+    machine allows, once with both halves stalling at random -- the plant
+    between its steps, the controller between the frames it reads -- the way a
+    loaded machine stalls them. On the wall clock a stall moves the cut-off,
+    because the plant goes on moving while the controller is not looking. In
+    lockstep the plant is not moving while anybody stalls, so the two runs must
+    agree on every number the rubric reads."""
+    code, calm = graded(tmp_path, "batch-dosing", "timed", 78, seed=5)
+
+    rng = random.Random(1)
+    stalls = {"plant": 0, "controller": 0}
+    step, handle = grade.GradedEngine.step, grade.LockstepClient._handle
+
+    async def stalling_step(self) -> None:
+        if rng.random() < 0.02:
+            stalls["plant"] += 1
+            await asyncio.sleep(0.02)
+        await step(self)
+
+    async def stalling_handle(self, msg) -> None:
+        if rng.random() < 0.02:
+            stalls["controller"] += 1
+            await asyncio.sleep(0.02)
+        await handle(self, msg)
+
+    monkeypatch.setattr(grade.GradedEngine, "step", stalling_step)
+    monkeypatch.setattr(grade.LockstepClient, "_handle", stalling_handle)
+    busy_code, busy = graded(tmp_path, "batch-dosing", "timed", 78, seed=5)
+
+    # Gotcha 16: two runs agreeing proves nothing if neither did anything, and
+    # a stall that never happened makes the second run the first one again.
+    assert calm["evidence"]["clock"] == "lockstep"
+    assert calm["evidence"]["ticks"] == 7800
+    assert calm["evidence"]["batches"][0]["delivered_L"] >= 5.0
+    assert stalls["plant"] > 50 and stalls["controller"] > 50, stalls
+
+    assert busy_code == code
+    assert busy["verdict"] == calm["verdict"]
+    assert busy["checks"] == calm["checks"]
+    assert busy["feedback"] == calm["feedback"]
+    strip = lambda evidence: {k: v for k, v in evidence.items()  # noqa: E731
+                              if k not in WALL_CLOCK_LABELS}
+    assert strip(busy["evidence"]) == strip(calm["evidence"])

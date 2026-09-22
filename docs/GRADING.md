@@ -73,6 +73,7 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 | `--student` | a name for the report |
 | `--quiet` | the `RESULT` line and nothing else |
 | `--reference` | grade a built-in controller instead of waiting — see below |
+| `--lockstep` | with `--reference` only: step the plant and the built-in controller together on the plant's clock — see below |
 
 ### Exit codes
 
@@ -296,6 +297,43 @@ same `TagBusClient` the sidecar uses, so they cross the same seam a real one
 does. They run inside the grader's own process, which a real controller never
 does — that is the one thing they do not prove. Run them before a marking
 session; they are also what `tests/test_grade.py` asserts against.
+
+### Two clocks, or one
+
+A graded run is normally two machines on two wall clocks. The plant paces
+itself against real time, and the controller scans whenever it scans. That is
+the only honest way to grade a real PLC, because a real PLC does not wait for
+the grader. It also means a run's numbers depend a little on how busy the
+marking machine is. When the machine is loaded, both clocks get coarser, and
+anything measured at a scan boundary moves with them. The stopwatch `timed`
+batch is an example. It ends on a scan, and with the same seed on one machine
+under load its first batch landed anywhere from 23.28 L to 23.52 L, against a
+limit of 23.5 L. That was enough to fail `tests/test_grade.py` on a loaded CI
+runner while the same code passed on its PR run (IP-06).
+
+A built-in controller runs in the grader's own process, so it *can* be made to
+wait. `--lockstep` does that:
+
+```bash
+python tools/grade.py --scene <id> --reference good --lockstep
+```
+
+Each scan of the built-in controller runs in the same order. The controller
+reads its inputs and writes its outputs, and the plant applies those writes.
+Then the plant advances by exactly one 50 ms scan, and its updates reach the
+controller before the next scan begins. Nothing on that path reads the wall
+clock. The controller still talks to the plant over the real websocket, so it
+crosses the same seam as before. It just cannot fall behind or run ahead of
+the plant. The run is therefore reproducible from its seed alone, and it
+finishes much faster than real time. On an idle Windows machine, the
+seventy-eight-second batch-dosing window took three seconds. The JSON report
+says `"clock": "lockstep"` in its evidence.
+
+It is refused without `--reference` (exit 2). A student's program is always
+graded on the wall clock, exactly as before, because there is no way to make
+their PLC wait. For the same reason, lockstep proves less than a wall-clock
+run about the real-time path. The test suite keeps `idle` and `forcer` on the
+wall clock for that reason: their verdicts do not depend on timing.
 
 ---
 
