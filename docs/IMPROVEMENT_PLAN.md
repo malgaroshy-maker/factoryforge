@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-24. IP-21 done; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-24. IP-02, IP-03 and IP-21 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -111,8 +111,10 @@ skipped and the failing test ids from the XML. It does not regex the console
 output. If the XML is missing, B1 fails and says so; it never falls back to a
 count.
 *Verify:* add a throwaway test that fails with the message `"9 failed"`, and
-confirm B1 reports **1** failure and names it. Today it would report 9 and
-name 0. Remove the test afterwards.
+confirm B1 reports **1** failure and names it. Today it would report 9.
+Remove the test afterwards. (This line first said the old code would also
+name nothing. It names the test in that case; its name regex failed on
+classes and parametrized ids instead, which the new code handles.)
 *Size:* S.
 
 **IP-04 — Graded tests get their own job** · gate
@@ -434,9 +436,9 @@ as it was, and this plan's index is closed the way IP-01 closed the last one.
 | Item | Title | Phase | Size | Gate | Status |
 |---|---|---|---|---|---|
 | IP-01 | Close the hardening plan honestly | 0 | S |  | in review |
-| IP-02 | Take the counts out of the prose | 0 | S |  | open |
-| IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | open |
-| IP-04 | Graded tests get their own job | 1 | S | ● | open |
+| IP-02 | Take the counts out of the prose | 0 | S |  | **done** ee4ede9 |
+| IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
+| IP-04 | Graded tests get their own job | 1 | S | ● | code done d1ac12d; CI unverified |
 | IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | open |
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | open |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | open |
