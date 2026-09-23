@@ -552,20 +552,25 @@ def test_the_buffer_passes_a_release_measured_in_encoder_pulses(tmp_path):
     # counts the metres that ran underneath it.
     assert evidence["belt_travel_while_held_m"] >= 3.0
     # And the exam really did change the drive, or there was no second speed.
+    # It halves it (IP-29): a buffer driven faster than the outfeed backs its
+    # releases up against the outfeed, in the engine as in the model.
     assert (evidence["second_speed"]["belt_m_per_s"]
-            > evidence["first_speed"]["belt_m_per_s"] * 1.5)
+            < evidence["first_speed"]["belt_m_per_s"] * 0.6)
+    # Gotcha 16 once more: a buffer that overfilled its belt spilled cartons
+    # off the infeed end, and "the same size" is then about what was left.
+    assert evidence["spilled_off_the_infeed_end"] == []
 
 
-def test_a_release_timed_in_seconds_fails_when_the_drive_speeds_up(tmp_path):
+def test_a_release_timed_in_seconds_fails_when_the_drive_changes(tmp_path):
     """The whole scene. Same command, same blade, a drive whose top speed the
-    run doubled -- and twice as much product out of a release timed on a
+    run halved -- and half as much product out of a release timed on a
     clock."""
     code, report = graded(tmp_path, "accumulation-buffer", "timed", 78, seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "release.same_size_at_both_speeds" in failed_ids(report)
     evidence = report["evidence"]
     assert (evidence["second_speed"]["mean_cartons"]
-            > evidence["first_speed"]["mean_cartons"] + 1.0)
+            < evidence["first_speed"]["mean_cartons"] - 1.0)
     assert any("timed in seconds" in line for line in report["feedback"])
 
 
@@ -653,6 +658,37 @@ def test_a_mute_held_past_the_scanners_limit_fails(tmp_path):
     assert code == 1 and report["verdict"] == "FAIL"
     assert "cell.mute_within_the_limit" in failed_ids(report)
     assert report["evidence"]["longest_mute_s"] > grade.GC_MUTE_LIMIT
+
+
+def test_a_cell_that_locks_its_guard_properly_still_sits_the_whole_exam(tmp_path):
+    """IP-29. The examiner obeys the gate's solenoid locks now, as the engine
+    does. A program that locks while the motor can run and releases once it
+    has stopped is found locked, Stop is pressed, and the gate opens -- and
+    everything the exam asks after that is still asked."""
+    code, report = graded(tmp_path, "guarded-cell", "guardlock", 68, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    access = report["evidence"]["access"]
+    assert access["refused"] == ["guard_a", "guard_b"]
+    assert access["stop_pressed_at"] is not None
+    assert access["opened_at"] - access["stop_pressed_at"] < 1.0
+    # Gotcha 16: the gate test did run -- the gate opened, and the cell came
+    # back only on the Start after it.
+    assert report["evidence"]["gate_openings"] == 1
+    assert "cell.gate_stopped_it" not in failed_ids(report)
+    assert report["evidence"]["transferred"] >= 3
+
+
+def test_a_guard_locked_for_good_fails_on_access(tmp_path):
+    """The other side of obeying the lock: a gate that never lets go keeps the
+    examiner out after Stop. It fails for that, and only for that -- not by
+    being marked on a gate test that could not run."""
+    code, report = graded(tmp_path, "guarded-cell", "lockedshut", 68, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"cell.guard_released_for_access"}
+    assert report["evidence"]["access"]["opened_at"] is None
+    assert report["evidence"]["gate_openings"] == 0
+    assert "cell.gate_stopped_it" not in {c["id"] for c in report["checks"]}
+    assert any("never let go" in line for line in report["feedback"])
 
 
 def test_the_cell_passes_a_sequence_written_on_feedback(tmp_path):

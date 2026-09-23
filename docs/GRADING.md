@@ -158,9 +158,9 @@ reads and the fake it shuts.
 | `light-curtain-sorting` | each carton's measured height and the lane it ended in, against the rule in force when it was measured | a threshold written into the program — the pot is set twice, and the feed is eight shuffled heights rather than two |
 | `roller-line-weighing` | each carton's true mass, whether it was weighed alone, and whether the program flagged it | rejecting on the inductive sensor — the limit moves below a tall cardboard carton, where metal and heavy stop agreeing |
 | `pick-and-place-cell` | which cartons the gantry carried to the outfeed, and the rail position it let go of the others at | a sequence on timers — the run slows the axis down, and a timed release drops cartons at half rail |
-| `accumulation-buffer` | cartons that physically passed the blade, per release | a release timed in seconds — the run doubles the drive's top speed |
+| `accumulation-buffer` | cartons that physically passed the blade, per release | a release timed in seconds — the run halves the drive's top speed |
 | `heat-treat-station` | the temperature trace: settled error, ripple and overshoot | proportional-only parks short by an offset the plant's own numbers predict; a thermostat reaches setpoint and swings 9 °C |
-| `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's |
+| `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's; and whether a program that locks the gate lets the operator in once the cell has stopped |
 | `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
 
 Every scene also carries `controller.stayed_connected`,
@@ -179,17 +179,37 @@ Six of the ten scenes are only gradeable because the run reaches in and changes
 something physical that no tag reports:
 
 * the **setpoint pot** moves, on the tank, the oven, the curtain and the scale
-* the **drive's top speed** doubles, on the accumulation buffer
-* the **gantry's travel speed** halves, on the pick and place cell
+* the **drive's top speed** halves, on the accumulation buffer
+* the **gantry's travel speed** drops to 0.4 of the template's, 80 %/s to
+  32 %/s, on the pick and place cell
 * the **pump's rating** halves, between the two batches of the dosing exercise
 * the **gate** opens and shuts, on the guarded cell, with the operator taking
   the part out as they go in
 
 None of those is visible as a value on the bus. The controller can only find
-out by measuring — the encoder counting faster, the flow meter reading less,
+out by measuring — the encoder counting slower, the flow meter reading less,
 the axis taking longer to arrive — which is exactly the difference between a
 program written on feedback and one written on a stopwatch. A rubric that never
 moved anything would mark both the same.
+
+Everything else the exam changes, it changes the way the engine would. The
+gate is the case worth spelling out. Its leaves have solenoid locks
+(`guard_a.lock`, `guard_b.lock`), and in the engine a leaf locked shut cannot be
+opened. The brief never mentions them, so a program written to the brief has
+its gate opened at 22 s while the cell runs. A program that does lock the gate
+is answered the way an operator answers a locked guard: they press Stop and
+keep trying the handle for 5 s. If the lock is released once the motor has
+stopped, which is guard locking done properly, the gate opens and the rest of
+the exam runs from that moment: the gate stopping the cell, Reset starting
+nothing, and Start restarting it. A lock that never lets go fails
+`cell.guard_released_for_access`, because a guard that stays locked on a stopped
+cell keeps out the people who have to clear it. Until IP-29 the grader opened
+the gate through the lock. The accumulation buffer's drive used to double
+rather than halve, too. That was only gradeable because the model carried every
+carton at the buffer's speed, including the ones already on the 0.5 m/s
+outfeed. A buffer driven faster than the outfeed backs its releases up against
+it, in the engine and now in the model, so a correct release comes out short
+at the higher speed.
 
 ### The feed patterns are shuffled, and that is the point
 
@@ -204,6 +224,16 @@ shuffle lands. The curtain draws from eight heights shuffled in blocks, and the
 checkweigher from all four mass classes shuffled in blocks of four — the second
 of those also guarantees that the carton the two instruments disagree about
 actually turns up, so a metal-sensing program cannot pass on a lucky draw.
+
+Those two feeds are the exam's, not the scene's. The emitters in
+`light-curtain-sorting` and `roller-line-weighing` alternate a short and a tall
+carton, and the checkweigher's makes every third one steel. `everyother` would
+pass the first, and the second need not produce the carton the rubric is
+about. Every other scene's feed is the engine's own: short, tall, short, tall,
+with every `metal_every`-th steel, which is also what decides the pick and
+place cell's barcode (101, 102 or 201, read off the carton).
+`tests/test_grade_templates.py` lists these two exceptions by name, and holds
+every position the models use to the template's.
 
 The seed is chosen at random unless you give one, and it is in the report
 either way, so a disputed mark can be re-run exactly.
@@ -274,18 +304,18 @@ of its run's feedback begins:
   - At 200C it parked 15.7C off and stayed there. An error that stops closing
     is a controller with no way to produce output from a small error [...]
 
-  - The belt ran at 0.49 m/s for the first half of this run and 1.00 m/s for
-    the second -- 2.0 times faster -- and your releases went from 5.3 cartons
-    to 11.0. That is a release timed in seconds. `panel.setpoint` is a window
+  - The belt ran at 0.49 m/s for the first half of this run and 0.25 m/s for
+    the second -- 51% of the speed -- and your releases went from 6.0 cartons
+    to 3.0. That is a release timed in seconds. `panel.setpoint` is a window
     in ENCODER PULSES, which is a distance [...]
 
-  - The motor started at 28.11s with nobody having pressed Start since it last
+  - The motor started at 28.16s with nobody having pressed Start since it last
     stopped. That is automatic restart, and it is the failure this whole cell
     exists to prevent: the relay closing hands `starter.coil` back to your
     program, it does not command it. [...]
 
   - Every carton you got wrong is one where the scale and the inductive sensor
-    disagree -- 1 of them in this run. A tall cardboard carton weighs 2160 g
+    disagree -- 2 of them in this run. A tall cardboard carton weighs 2160 g
     and a short steel one 4320 g [...]
 ```
 
@@ -349,15 +379,21 @@ scene's own 60 s window. Neither is thirteen.
 | | `everyother` | diverts on a count, never reads the height |
 | `roller-line-weighing` | `metalonly` | gets exactly the cartons the two instruments disagree about wrong |
 | | `fastfeed` | two on the deck read as one peak |
-| `pick-and-place-cell` | `timed` | places 5 at 80 %/s; slowed to 32 %/s, it drops 7 cartons at 51.2 % and 71.8 % of the rail |
-| `accumulation-buffer` | `timed` | 5.3 cartons a release becomes 11.0 when the drive speeds up |
+| `pick-and-place-cell` | `timed` | places 6 at 80 %/s; slowed to 32 %/s, it drops 6 cartons at 51.5 % of the rail |
+| `accumulation-buffer` | `timed` | 6.0 cartons a release becomes 3.0 when the drive slows down |
 | `heat-treat-station` | `ponly` | parks 10.0 °C short of 135 °C and 15.7 °C short of 200 °C |
 | | `thermostat` | mean error 2.1 °C and 2.0 °C, swinging 8.3 °C and 8.1 °C peak to peak |
-| `guarded-cell` | `autostart` | the motor starts at 28.11 s, just after the Reset at 27.99 s, with no Start pressed |
+| `guarded-cell` | `autostart` | the motor starts at 28.16 s, just after the Reset at 28.00 s, with no Start pressed |
 | | `writesbelt` | writes `belt.rotate`, the motor's own tag |
 | | `tapedmute` | holds the bridge 6.05 s against the scanner's 6 s limit, which withdraws it 2 times |
+| | `lockedshut` | locks the gate and never releases it, so the operator cannot get in after Stop |
 | `batch-dosing` | `timed` | 22.6 L and then 11.3 L against the same 22 L pot |
 | | `noreset` | the second batch is over before it starts |
+
+`guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
+guard locking done properly: locked while the contactor can run and released
+once it has stopped. It has to pass, and it shows that a program that locks the
+gate can sit the whole exam.
 
 These are built-in controllers that connect over a real websocket through the
 same `TagBusClient` the sidecar uses, so they cross the same seam a real one
@@ -431,7 +467,9 @@ in `factoryforge_sidecar/grading/scenes/`.
 All of them are 1-D kinematic plants with no physics. They are faithful about
 sensor semantics, about timing, and — where the lesson is analog — about the
 engine's own dynamics, which are copied from the C# part and the template that
-configures it rather than invented: Torricelli outflow, a 20-second thermal
+configures it rather than invented. Since IP-29 that includes where every part
+stands along the line and what it does there (IP-19 found half of them
+somewhere else): Torricelli outflow, a 20-second thermal
 time constant, a flow meter's 0.2 s damping, a relay's 0.5 s channel-sync
 window, carton masses out of `BoxPhysics.cs`. But a carton in them cannot jam,
 tip, or ride two centimetres low into the end face of the next conveyor

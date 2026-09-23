@@ -18,10 +18,15 @@ which can be checked without Godot:
   (`grading/templates.py`), and a test below moves one and watches the model
   follow. A number a C# part owns is a named constant in the grader, and a
   test below reads it out of the C# source.
-* **The disagreements.** Where the model and the template disagree today, the
-  model has been left as it was pending a decision, and the table below pins
-  both sides: changing either one fails here, so the difference cannot move
-  without somebody looking at it.
+* **The positions and the behaviour (IP-29).** IP-19 found the models
+  disagreeing with the templates about where half the parts were, and about
+  some of what they did; it pinned both sides pending a decision. The user's
+  decision was that the grader adopts the engine's values everywhere, so each
+  of those is now asserted as agreement, worked out from the template and the
+  C# part independently of the model -- and each behaviour the model gained is
+  stepped here on its own. What the exam does on purpose that the engine would
+  not (the shuffled feeds) is written down, with its reason, rather than
+  pinned.
 
 None of this starts Godot, and none of it runs a graded window.
 
@@ -216,7 +221,32 @@ CSHARP_MIRRORS = [
     (pp.PP_CODES[2], "Parts/BarcodeScanner.cs", r"CodeMetal = (\d+);"),
     (sh.SORTING_PANEL_SETPOINT, "Editor/SceneEditor.DefaultScene.cs",
      r'ConfigureSetpoint\([\d.]+f, [\d.]+f, "s", ([\d.]+)f\)'),
+    # IP-29: the numbers the positions and behaviours the models adopted rest on.
+    (plant.WORK_PLANE_Y, "Parts/PartLayout.cs", r"WorkPlaneY = ([\d.]+)f"),
+    (plant.BELT_THICKNESS, "Parts/PartLayout.cs", r"BeltThickness = ([\d.]+)f"),
+    (plant.VFD_DEAD_BAND, "Parts/VariableConveyor.cs", r"DeadBand = ([\d.]+)f"),
+    (ab.AB_BLADE_THICKNESS, "Parts/StopGate.cs", r"BladeThickness = ([\d.]+)f"),
+    (rw.RW_SCALE_AREA, "Parts/WeighingConveyor.cs",
+     r"new Vector3\(Size\.X \* ([\d.]+)f, 0\.30f, Size\.Z\)"),
+    (pp.PP_PICK_ZONE, "Parts/PickPlaceArm.cs",
+     r"new BoxShape3D \{ Size = new Vector3\(([\d.]+)f, 0\.14f, 0\.28f\)"),
+    (pp.PP_RAIL_Y, "Parts/PickPlaceArm.cs", r"const float RailY = ([\d.]+)f"),
+    (pp.PP_COLUMN_DROP, "Parts/PickPlaceArm.cs", r"ColumnTopY = RailY - ([\d.]+)f"),
+    (pp.PP_REST_STUB, "Parts/PickPlaceArm.cs", r"const float restStub = ([\d.]+)f"),
+    (gc.GC_ROD_STUB, "Parts/PneumaticCylinder.cs",
+     r"Mathf\.Max\(Extension \+ ([\d.]+)f, [\d.]+f\)"),
+    (gc.GC_PLATE_THICKNESS, "Parts/PneumaticCylinder.cs",
+     r"PlateThickness = ([\d.]+)f"),
+    (gc.GC_GATE_CLOSED_BELOW, "Parts/SafetyGate.cs", r"IsClosed => _opening <= ([\d.]+)f"),
 ]
+
+
+def test_the_grader_falls_under_godots_default_gravity():
+    """A carton the gantry lets go of falls under the project's gravity
+    (`pp.GRAVITY`). The project does not set one, so it is Godot's 9.8."""
+    project = (ROOT / "engine" / "project.godot").read_text(encoding="utf-8")
+    assert "default_gravity" not in project
+    assert pp.GRAVITY == 9.8
 
 
 @pytest.mark.parametrize("value,path,pattern", CSHARP_MIRRORS,
@@ -242,6 +272,13 @@ def _edit(path: Path, part_id: str, **properties) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _move(path: Path, part_id: str, x: float) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    (part,) = [p for p in data["parts"] if p["id"] == part_id]
+    part["position"][0] = x
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 _PROBE = """
 import sys
 sys.path.insert(0, {sidecar!r})
@@ -250,7 +287,7 @@ from factoryforge_sidecar.grading.scenes import start_stop_station as ss
 from factoryforge_sidecar.grading.scenes import heat_treat_station as ht
 from factoryforge_sidecar.grading.scenes import guarded_cell as gc
 print(bd.BD_RATED_FIRST, bd.BD_RATED_THEN, ss.SS_BELT_SPEED, ht.OVEN_POWER,
-      gc.GC_MUTE_LIMIT)
+      gc.GC_MUTE_LIMIT, ss.SS_EYE_POS, gc.GC_STATION_POS)
 """
 
 
@@ -271,17 +308,21 @@ def test_the_plant_moves_with_its_template(tmp_path):
     their template once, when they are imported. Each number is moved away
     from whatever the checkout has, so the test cannot pass by the edit
     happening to be a no-op."""
-    rated, _, speed, power, mute = _probe(None)
+    rated, _, speed, power, mute, eye, station = _probe(None)
 
     copy = _copy_templates(tmp_path)
     _edit(copy / "batch_dosing.json", "pump", rated_flow=rated + 17)
     _edit(copy / "start_stop_station.json", "belt", speed=speed + 0.15)
     _edit(copy / "heat_treat_station.json", "oven", heater_power=power - 15)
     _edit(copy / "guarded_cell.json", "scanner", mute_limit=mute + 2)
+    # IP-29: positions too, which until then the models kept of their own.
+    _move(copy / "start_stop_station.json", "part_present", eye - 0.25)
+    _move(copy / "guarded_cell.json", "cylinder", station + 0.1)
     # The re-rating is the exam's: a fixed fraction of whatever the pump is
     # rated for, so it follows the rating.
     assert _probe(copy) == pytest.approx(
-        [rated + 17, (rated + 17) * bd.BD_RERATE, speed + 0.15, power - 15, mute + 2])
+        [rated + 17, (rated + 17) * bd.BD_RERATE, speed + 0.15, power - 15, mute + 2,
+         eye - 0.25, station + 0.1])
 
 
 def test_the_templates_are_found_in_a_checkout(monkeypatch):
@@ -320,82 +361,286 @@ def test_a_scene_built_in_csharp_has_no_template_to_read():
         templates.template("sorting-by-height")
 
 
-# --- where the model and the template disagree today --------------------
+# --- where the model and the template used to disagree (IP-19, IP-29) ----
 #
-# Found by IP-19. Each of these is a place the grader's model has never been
-# the plant the template builds -- every one is a position -- and each was left
-# exactly as it was, because moving it changes timings a mark can depend on
-# and that is a decision, not a refactor. Both sides are pinned: fix the model,
-# or move the part, and this fails and asks for the entry to go.
+# IP-19 found every one of these: a place the grader's model had never been the
+# plant the template builds. IP-29 settled them the way the user decided -- the
+# grader adopts the engine's values everywhere, because it has to mark the
+# plant the student sees -- and each is now asserted as agreement. The
+# template's side is worked out here from the template and the C# part, not
+# through the model's own helpers, so a model that drifts back fails. The old
+# model value is kept in the table as history, and as a second tripwire: a
+# number that has gone back to what IP-19 found is named as such.
 
 def _t(scene: str) -> templates.Template:
     return templates.template(scene)
 
 
-def _field_edge(sign: int) -> float:
-    """Where the guarded cell's protective field crosses the belt's centreline:
+def _field_edge(sign: int, key: str = "stop_radius") -> float:
+    """Where the guarded cell's scanner field crosses the belt's centreline:
     `AreaScanner.cs` measures a carton's centre, flat, from the scanner."""
-    scanner = _t("guarded-cell").part("scanner", "AreaScanner")
-    reach = math.sqrt(scanner.number("stop_radius") ** 2 - scanner.position[2] ** 2)
-    return round(scanner.x + sign * reach, 2)
+    cell = _t("guarded-cell")
+    scanner = cell.part("scanner", "AreaScanner")
+    off = scanner.position[2] - cell.part("belt", "ConveyorBelt").position[2]
+    reach = math.sqrt(scanner.number(key) ** 2 - off ** 2)
+    return scanner.x + sign * reach
 
 
-DISAGREEMENTS = [
-    # (constant, the model's value, the template's, how the template's is read)
-    ("SS_EYE_POS", ss.SS_EYE_POS, 1.5, 2.0,
+def _taken_at(scene: str, remover_id: str) -> float:
+    """Where a `Remover` takes a carton riding the belt: `Remover.cs` fires on
+    the first overlap of the two colliders, so as the carton's nose reaches
+    the zone's near face -- provided the zone reaches above the deck, which is
+    asserted rather than assumed."""
+    remover = _t(scene).part(remover_id, "Remover")
+    assert remover.position[1] + remover.number("zone_y") / 2 > (
+        plant.WORK_PLANE_Y + plant.BELT_THICKNESS / 2), (scene, remover_id)
+    return remover.x - remover.number("zone_x") / 2 - plant.CARTON_LENGTH / 2
+
+
+def _emitter(scene: str) -> float:
+    return _t(scene).part("emitter", "Emitter").x
+
+
+AGREEMENTS = [
+    # (constant, the model's value now, what IP-19 found it at, the template's)
+    ("SS_EYE_POS", ss.SS_EYE_POS, 1.5,
      lambda: _t("start-stop-station").part("part_present", "PhotoelectricSensor").x),
-    ("SS_REMOVER_POS", ss.SS_REMOVER_POS, 2.8, 3.0,
-     lambda: _t("start-stop-station").part("belt", "ConveyorBelt").span()[1]),
-    ("LC_CURTAIN_POS", lc.LC_CURTAIN_POS, 1.2, 1.5,
+    ("SS_REMOVER_POS", ss.SS_REMOVER_POS, 2.8,
+     lambda: _taken_at("start-stop-station", "counter")),
+    ("SS_START_POS", ss.SS_START_POS, None, lambda: _emitter("start-stop-station")),
+    ("LC_CURTAIN_POS", lc.LC_CURTAIN_POS, 1.2,
      lambda: _t("light-curtain-sorting").part("height_gauge", "LightArray").x),
-    ("LC_DIVERTER_POS", lc.LC_DIVERTER_POS, 2.2, 2.5,
+    ("LC_DIVERTER_POS", lc.LC_DIVERTER_POS, 2.2,
      lambda: _t("light-curtain-sorting").part("diverter", "PusherMechanism").x),
-    ("RW_METAL_EYE_POS", rw.RW_METAL_EYE_POS, 1.2, 1.5,
+    ("LC_REMOVER_POS", lc.LC_REMOVER_POS, 3.0,
+     lambda: _taken_at("light-curtain-sorting", "short_count")),
+    ("LC_START_POS", lc.LC_START_POS, None, lambda: _emitter("light-curtain-sorting")),
+    ("RW_METAL_EYE_POS", rw.RW_METAL_EYE_POS, 1.2,
      lambda: _t("roller-line-weighing").part("metal_check", "InductiveSensor").x),
-    ("RW_REMOVER_POS", rw.RW_REMOVER_POS, 3.3, 3.0,
-     lambda: _t("roller-line-weighing").part("scale", "WeighingConveyor").span()[1]),
-    ("PP_SCANNER_POS", pp.PP_SCANNER_POS, 1.4, 1.5,
+    ("RW_REMOVER_POS", rw.RW_REMOVER_POS, 3.3,
+     lambda: _taken_at("roller-line-weighing", "outfeed")),
+    ("RW_START_POS", rw.RW_START_POS, None, lambda: _emitter("roller-line-weighing")),
+    ("PP_SCANNER_POS", pp.PP_SCANNER_POS, 1.4,
      lambda: _t("pick-and-place-cell").part("scanner", "BarcodeScanner").x),
-    ("PP_STATION_POS", pp.PP_STATION_POS, 2.9, 2.5,
+    ("PP_EYE_POS", pp.PP_EYE_POS, 2.9,
      lambda: _t("pick-and-place-cell").part("atstation", "PhotoelectricSensor").x),
-    ("AB_BLADE_POS", ab.AB_BLADE_POS, 3.0, 2.6,
+    # The model picked at 2.9 and called that 0 % of the rail.
+    ("PP_RAIL_FROM", pp.PP_RAIL_FROM, 2.9,
+     lambda: (_t("pick-and-place-cell").part("gantry", "PickPlaceArm").x
+              - _t("pick-and-place-cell").part("gantry", "PickPlaceArm")
+              .number("rail_length") / 2)),
+    ("PP_OUTFEED_X", pp.PP_OUTFEED_X, None,
+     lambda: _t("pick-and-place-cell").part("outfeed", "Remover").x),
+    ("PP_START_POS", pp.PP_START_POS, None, lambda: _emitter("pick-and-place-cell")),
+    ("AB_BLADE_POS", ab.AB_BLADE_POS, 3.0,
      lambda: _t("accumulation-buffer").part("stop", "StopGate").x),
-    ("AB_EYE_POS", ab.AB_EYE_POS, 3.15, 2.75,
+    ("AB_EYE_POS", ab.AB_EYE_POS, 3.15,
      lambda: _t("accumulation-buffer").part("exit_eye", "PhotoelectricSensor").x),
-    ("GC_MUTE_EYE_POS", gc.GC_MUTE_EYE_POS, 1.35, 1.0,
+    ("AB_START_POS", ab.AB_START_POS, 0.0, lambda: _emitter("accumulation-buffer")),
+    ("AB_REMOVER_POS", ab.AB_REMOVER_POS, 4.2,
+     lambda: _taken_at("accumulation-buffer", "released")),
+    ("GC_MUTE_EYE_POS", gc.GC_MUTE_EYE_POS, 1.35,
      lambda: _t("guarded-cell").part("mute_eye", "PhotoelectricSensor").x),
-    ("GC_PUSH_EYE_POS", gc.GC_PUSH_EYE_POS, 2.8, 2.0,
+    ("GC_PUSH_EYE_POS", gc.GC_PUSH_EYE_POS, 2.8,
      lambda: _t("guarded-cell").part("push_eye", "PhotoelectricSensor").x),
-    ("GC_STATION_POS", gc.GC_STATION_POS, 3.2, 2.5,
+    ("GC_STATION_POS", gc.GC_STATION_POS, 3.2,
      lambda: _t("guarded-cell").part("cylinder", "PneumaticCylinder").x),
-    ("GC_LINE_END_POS", gc.GC_LINE_END_POS, 3.9, 3.0,
-     lambda: _t("guarded-cell").part("belt", "ConveyorBelt").span()[1]),
-    ("GC_FIELD_FROM", gc.GC_FIELD_FROM, 1.6, 1.04, lambda: _field_edge(-1)),
-    ("GC_FIELD_TO", gc.GC_FIELD_TO, 2.4, 1.96, lambda: _field_edge(+1)),
+    ("GC_LINE_END_POS", gc.GC_LINE_END_POS, 3.9,
+     lambda: _taken_at("guarded-cell", "line_end")),
+    ("GC_FIELD_FROM", gc.GC_FIELD_FROM, 1.6, lambda: _field_edge(-1)),
+    ("GC_FIELD_TO", gc.GC_FIELD_TO, 2.4, lambda: _field_edge(+1)),
+    # The model used the protective field as the warning field as well.
+    ("GC_WARN_FROM", gc.GC_WARN_FROM, 1.6, lambda: _field_edge(-1, "warn_radius")),
+    ("GC_WARN_TO", gc.GC_WARN_TO, 2.4, lambda: _field_edge(+1, "warn_radius")),
+    ("GC_START_POS", gc.GC_START_POS, None, lambda: _emitter("guarded-cell")),
 ]
 
 
-@pytest.mark.parametrize("name,model,model_was,template_was,read", DISAGREEMENTS,
-                         ids=[d[0] for d in DISAGREEMENTS])
-def test_a_known_disagreement_has_not_moved_unnoticed(name, model, model_was,
-                                                      template_was, read):
+@pytest.mark.parametrize("name,model,model_was,read", AGREEMENTS,
+                         ids=[a[0] for a in AGREEMENTS])
+def test_the_model_puts_each_part_where_the_template_does(name, model, model_was, read):
     template_is = read()
-    assert (model, template_is) == (model_was, template_was), (
-        f"{name}: the model has {model} (was {model_was}) and the template "
-        f"{template_is} (was {template_was}). If they now agree, the finding is "
-        f"resolved: load it from the template and delete this entry.")
+    assert model == pytest.approx(template_is, abs=1e-9), (
+        f"{name}: the model has {model}, the template {template_is:g}"
+        + (f" -- and {model_was} is the number IP-19 found the model at, before "
+           f"IP-29 made it read the template" if model == model_was else ""))
+
+
+def test_no_disagreement_is_left_pinned():
+    """IP-19 pinned sixteen positions and the pot here as disagreements, both
+    sides, pending a decision; IP-29 was the decision. This keeps the file
+    from growing a new pin by habit: a disagreement found from now on is a
+    bug to fix, or a deliberate exam choice to write down in
+    `EXAM_NOT_ENGINE` below with its reason -- not a number to freeze."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    assert "DISAGREEMENTS" + " = [" not in source
+    assert "def test_a_known_" + "disagreement" not in source
 
 
 @pytest.mark.parametrize("scene", sorted(set(registry.rubrics()) - {sh.SCENE}))
-def test_the_pot_starts_where_the_model_has_always_started_it(scene):
-    """One more disagreement, the same in every templated scene: the engine's
-    pot starts at the template's `setpoint`, and the model's at 0 until the
-    exam turns it, a fraction of a second in. Pinned for the same reason."""
+def test_the_pot_starts_where_the_template_sets_it(scene):
+    """`ButtonPanel.cs` publishes the template's `setpoint`, clamped to its
+    plate, from the first tick. The model used to start every pot at 0 until
+    the exam turned it -- a pot no student ever sees."""
     model = registry.rubrics()[scene]["build"](1).tags.value("panel.setpoint")
     panel = _t(scene).part("panel", "ButtonPanel")
-    assert model == 0.0
-    assert panel.number("setpoint") != 0.0
+    low, high = panel.number("setpoint_min"), panel.number("setpoint_max")
+    expected = min(max(panel.number("setpoint"), low), high)
+    assert model == pytest.approx(expected)
+    assert expected != 0.0, "the check cannot tell this apart from the old model"
 
+
+#: What the exam does that the engine's plant would not do by itself, each on
+#: purpose. These are the examiner's hand, not the machine's, and the list is
+#: what docs/GRADING.md's "The feed patterns are shuffled" section describes.
+EXAM_NOT_ENGINE = {
+    "light-curtain-sorting": "feeds eight carton heights, shuffled; the "
+                             "template's emitter alternates two, which "
+                             "`everyother` would pass",
+    "roller-line-weighing": "feeds the four mass classes shuffled in blocks; "
+                            "the template's emitter makes every third steel and "
+                            "alternates heights, which need not produce the "
+                            "carton the two instruments disagree about",
+}
+
+
+def test_the_exam_choices_are_written_down():
+    doc = (ROOT / "docs" / "GRADING.md").read_text(encoding="utf-8")
+    for scene in EXAM_NOT_ENGINE:
+        assert scene in doc
+    assert "shuffled" in doc
+
+
+# --- behaviour the engine has and the model used to lack (IP-29) ---------
+#
+# Each is stepped here on the model alone, no bus, and each fails if the model
+# goes back to what it did before.
+
+def _step(sim, seconds: float, writes: dict | None = None, dt: float = 0.01) -> None:
+    for _ in range(int(round(seconds / dt))):
+        for tag_id, value in (writes or {}).items():
+            sim.tags.set(tag_id, value)
+        sim.tick(dt)
+
+
+def test_the_dosing_tank_fills_through_its_own_valve():
+    """`LevelTank.cs` adds `fill_rate` %/s at a full fill valve to whatever the
+    pump offers. The model used to ignore `tank.fill`, so a program that
+    opened it filled the engine's tank and not the grader's."""
+    sim = bd.BatchDosingScene(1)
+    _step(sim, 2.0, {"tank.fill": 50.0})
+    assert sim.level == pytest.approx(bd.BD_TANK_FILL_RATE * 0.5 * 2.0, rel=1e-6)
+    # The pump moved nothing, and the dose is marked on the pump's litres.
+    assert sim.delivered == 0.0
+    assert sim.fill_valve_open_s == pytest.approx(2.0)
+
+
+def test_past_the_blade_a_carton_rides_the_outfeed():
+    """The outfeed is its own belt: its own speed, and only while
+    `outfeed.rotate`. The model used to carry every carton at the buffer
+    drive's speed, the outfeed's command ignored."""
+    sim = ab.AccumulationScene(1)
+    sim.script = plant.Script([])
+    carton = plant.Item(position=ab.AB_BUFFER_TO + 0.3, id=99)
+    sim.items.append(carton)
+    buffer = {"buffer.run": True, "buffer.speed": 100.0}
+    _step(sim, 3.0, {**buffer, "outfeed.rotate": False})
+    assert carton.position == pytest.approx(ab.AB_BUFFER_TO + 0.3)
+    assert sim.drive.actual > 90.0, "the buffer drive did not run -- no test"
+    start = carton.position
+    _step(sim, 0.5, {**buffer, "outfeed.rotate": True})
+    assert carton.position - start == pytest.approx(ab.AB_OUTFEED_SPEED * 0.5, rel=1e-6)
+
+
+def test_the_exam_slows_the_buffer_below_the_outfeed():
+    """Why the accumulation exam halves the drive rather than doubling it: the
+    outfeed has to be able to take whatever a release lets out, or a correct
+    release measured in pulses comes out short at the faster speed."""
+    assert ab.AB_SPEED_THEN < ab.AB_SPEED_FIRST <= ab.AB_OUTFEED_SPEED
+
+
+def _guarded_until(seconds: float, lock: bool) -> gc.GuardedCellScene:
+    sim = gc.GuardedCellScene(1)
+    _step(sim, seconds, {"guard_a.lock": lock, "guard_b.lock": lock})
+    return sim
+
+
+def test_a_locked_guard_does_not_open_for_the_examiner():
+    """`SafetyGate.Toggle` refuses the handle while the solenoid holds the leaf
+    shut. The model used to report the lock and open the gate through it at
+    22 s whatever the program asked for."""
+    sim = _guarded_until(22.0 + gc.GC_ACCESS_PATIENCE + 1.0, lock=True)
+    assert all(leaf.closed for leaf in sim.leaves.values())
+    assert sim.tags.value("guard_a.locked") and sim.tags.value("guard_b.locked")
+    access = sim.access
+    assert access["refused"] == ["guard_a", "guard_b"]
+    assert access["stop_pressed_at"] == pytest.approx(22.0, abs=0.02)
+    assert access["opened_at"] is None and access["gave_up_at"] is not None
+    assert [t for t, what in sim.panel.presses if what == "stop"] == [
+        pytest.approx(22.0, abs=0.02)]
+
+
+def test_an_unlocked_guard_opens_on_the_first_pull():
+    """...and the exam every program written to the brief sits is unchanged:
+    no lock, the gate opens at 22 s, and nobody presses Stop."""
+    sim = _guarded_until(23.0, lock=False)
+    assert not any(leaf.closed for leaf in sim.leaves.values())
+    assert sim.access["refused"] == [] and sim.access["stop_pressed_at"] is None
+    assert sim.access["opened_at"] == pytest.approx(22.0, abs=0.02)
+
+
+def test_a_gate_leaf_slides():
+    """`SafetyGate.Step`: a leaf takes `travel / slide_speed` to slide, and
+    reads shut while it is within 2 % of shut. The model used to flip the
+    contact the moment the examiner pulled the handle."""
+    travel = gc.GC_GATE_TRAVEL_TIME["guard_a"]
+    leaf = gc.GateLeaf(travel)
+    assert leaf.toggle()
+    opening = 0
+    while leaf.opening < 1.0:
+        leaf.step(0.01)
+        opening += 1
+    assert opening * 0.01 == pytest.approx(travel, abs=0.011)
+    assert leaf.toggle()
+    shutting = 0
+    while not leaf.closed:
+        leaf.step(0.01)
+        shutting += 1
+    assert shutting * 0.01 == pytest.approx(travel * (1 - gc.GC_GATE_CLOSED_BELOW), abs=0.011)
+    assert shutting > 50, "a leaf that shuts in under half a second is not sliding"
+
+
+def test_the_cylinder_valve_remembers_where_it_was_sent():
+    """`PneumaticCylinder.Step` is a 5/2 double-solenoid valve: drop the coil
+    and the rod goes on to the end the spool points at. The model used to
+    stop the rod where it was."""
+    sim = gc.GuardedCellScene(1)
+    sim.script = plant.Script([])
+    _step(sim, 0.05, {"cylinder.extend": True})
+    assert 0.0 < sim.extension < gc.GC_STROKE
+    _step(sim, gc.GC_ROD_TIME, {"cylinder.extend": False})
+    assert sim.tags.value("cylinder.extended")
+
+
+def test_a_scanner_code_is_what_the_carton_is():
+    """`BarcodeScanner.cs` reads 101, 102 or 201 off the carton itself, and the
+    template's emitter makes them short, tall, short, tall with every
+    `metal_every`-th steel -- the host's alternation starts short
+    (`SceneEditor.NextAlternate`). The model used to deal codes out shuffled."""
+    metal_every = int(_t("pick-and-place-cell").part("emitter", "Emitter")
+                      .number("metal_every"))
+    assert metal_every > 0
+    expected = [201 if n % metal_every == 0 else (102 if n % 2 == 0 else 101)
+                for n in range(1, 13)]
+    sim = pp.PickPlaceScene(3)
+    sim.script = plant.Script([])
+    codes = []
+    for _ in range(12):
+        _step(sim, 0.02, {"emitter.emit": True})
+        _step(sim, 0.02, {"emitter.emit": False})
+        codes.append(int(sim.items[-1].measured))
+    assert codes == expected
+    assert codes == [pp.pp_code(i) for i in sim.items]
 
 def test_the_pot_range_holds_every_setpoint_the_exam_turns_it_to():
     """A real pot stops at its end stops. An exam that turned it past one
