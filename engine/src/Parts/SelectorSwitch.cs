@@ -294,4 +294,14 @@ public partial class SelectorSwitch : Node3D, IPart
     public PartOperation? Operation => new("selector", "position");
 
     public void Operate(PartOperate op) => Advance();
+
+    /// <summary>IP-07. A selector has no outputs; a hand moves it. One click
+    /// has to step it round a detent, and `position` has to follow.</summary>
+    public PartProbe? Probe => new(
+        "`position` moved off the detent it rested in",
+        r => (int)r.Number("position") != (int)r.AtStart("position"))
+    {
+        Operate = new[] { "" },
+        WithinTicks = 10,
+    };
 }

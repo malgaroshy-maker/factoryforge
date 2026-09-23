@@ -625,4 +625,16 @@ public partial class StarDeltaStarter : Node3D, IPart
     /// <c>breaker</c> true by hand would paper over a trip the starter still
     /// believes in.</summary>
     public void Operate(PartOperate op) => ResetBreaker();
+
+    /// <summary>IP-07. The star start, which is what a program does first:
+    /// main and star in, delta left out -- driving all three would be the
+    /// short circuit this part exists to punish. Both aux contacts have to make
+    /// and the motor has to turn.</summary>
+    public PartProbe? Probe => new(
+        "`mainaux` and `staraux` made and `speed` above 1 %",
+        r => r.Bit("mainaux") && r.Bit("staraux") && r.Number("speed") > r.AtStart("speed") + 1.0)
+    {
+        Drive = PartProbe.Drives(("main", true), ("star", true)),
+        WithinTicks = 120,
+    };
 }

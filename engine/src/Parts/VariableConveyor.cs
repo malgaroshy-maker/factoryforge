@@ -241,4 +241,13 @@ public partial class VariableConveyor : ConveyorBelt
     public override PartOperation? Operation => new("VFD conveyor", "run");
 
     public override void Operate(PartOperate op) => op.ToggleBit("run");
+
+    /// <summary>IP-07. Both halves of a drive: the reported `actual` ramps up,
+    /// and the deck it reports on really moves.</summary>
+    public override PartProbe? Probe => new(
+        "`actual` ramping above 5 % and a moving deck surface",
+        r => r.Number("actual") > 5.0 && ConstantLinearVelocity.Length() > 0.01f)
+    {
+        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+    };
 }

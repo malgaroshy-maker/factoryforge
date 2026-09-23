@@ -172,4 +172,16 @@ public partial class WeighingConveyor : ConveyorBelt
     }
 
     public override PartOperation? Operation => new("weigh conveyor", "rotate");
+
+    /// <summary>IP-07. The load cell is what this part adds to a belt, so a
+    /// carton is parked on the deck and its weight has to reach the tag; the
+    /// deck has to move as well, or the belt half could be dead unnoticed.
+    /// </summary>
+    public override PartProbe? Probe => new(
+        "the parked carton's weight on `weight`, and a moving deck surface",
+        r => r.Number("weight") > r.AtStart("weight") && ConstantLinearVelocity.Length() > 0.01f)
+    {
+        Drive = PartProbe.Drives(("rotate", true)),
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface + 0.01f, 0)),
+    };
 }

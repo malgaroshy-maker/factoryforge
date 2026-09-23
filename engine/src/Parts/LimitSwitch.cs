@@ -372,4 +372,17 @@ public partial class LimitSwitch : Node3D, IPart
         reset.Write("no", false);
         reset.Write("nc", true);
     }
+
+    /// <summary>IP-07. Nothing drives a limit switch but the thing it touches,
+    /// so a carton is parked with its near face 0.12 m in front of the shaft --
+    /// inside the default 0.20 m lever's reach, which swings it about 60
+    /// degrees, well past the trip angle. A carton is 0.24 m across the lane, so
+    /// its centre sits a further 0.12 m in. The contacts have to change over:
+    /// NO made and NC broken.</summary>
+    public PartProbe? Probe => new(
+        "the lever pushed past its trip angle: `no` made, `nc` broken",
+        r => r.Bit("no") && !r.Bit("nc"))
+    {
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface, ShaftZ - 0.12f - 0.24f / 2.0f)),
+    };
 }

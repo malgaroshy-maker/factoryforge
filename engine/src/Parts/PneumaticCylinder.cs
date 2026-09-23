@@ -325,4 +325,14 @@ public partial class PneumaticCylinder : Node3D, IPart
     public PartOperation? Operation => new("cylinder", "extend");
 
     public void Operate(PartOperate op) => op.ToggleBit("extend");
+
+    /// <summary>IP-07. The extend coil has to move the rod the whole stroke:
+    /// the extended reed makes and the retracted one it left breaks.</summary>
+    public PartProbe? Probe => new(
+        "the rod at full stroke: `extended` made, `retracted` broken",
+        r => r.Bit("extended") && !r.Bit("retracted"))
+    {
+        Drive = PartProbe.Drives(("extend", true)),
+        WithinTicks = 90,
+    };
 }

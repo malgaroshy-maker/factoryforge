@@ -600,4 +600,15 @@ public partial class VerticalLift : Node3D, IPart
 
     public void Operate(PartOperate op) =>
         op.Force("target", (TargetLevel + 1) % EffectiveLevels);
+
+    /// <summary>IP-07. Called to level 1, the carriage has to get there and say
+    /// so: `level` reads 1 and `atlevel` is made again at the new height.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`level` reading 1 with `atlevel` made, `height` above where it rested",
+        r => (int)r.Number("level") == 1 && r.Bit("atlevel") && r.Number("height") > r.AtStart("height"))
+    {
+        Drive = PartProbe.Drives(("target", 1)),
+        WithinTicks = 240,
+    };
 }

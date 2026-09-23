@@ -403,4 +403,13 @@ public partial class CoolingFan : Node3D, IPart
         op.Force("run", on);
         op.Force("speed", on ? 100.0 : 0.0);
     }
+
+    /// <summary>IP-07. Run at full reference, the fan has to spin up and
+    /// report the airflow it actually makes.</summary>
+    public PartProbe? Probe => new(
+        "`airflow` above 10 %",
+        r => r.Number("airflow") > 10.0)
+    {
+        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+    };
 }

@@ -550,4 +550,14 @@ public partial class PalletStation : Node3D, IPart
     public PartOperation? Operation => new("pallet station", "index");
 
     public void Operate(PartOperate op) => op.PulseBit("index");
+
+    /// <summary>IP-07. A rising edge on `index` counts a carton onto the
+    /// pallet, and the station has to say so on `count`.</summary>
+    public PartProbe? Probe => new(
+        "`count` up by one carton",
+        r => r.Number("count") > r.AtStart("count"))
+    {
+        Drive = PartProbe.Drives(("index", true)),
+        WithinTicks = 30,
+    };
 }

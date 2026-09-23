@@ -359,4 +359,13 @@ public partial class HeatingStation : Node3D, IPart
     public PartOperation? Operation => new("heater", "heater");
 
     public void Operate(PartOperate op) => op.ToggleAnalog("heater");
+
+    /// <summary>IP-07. Full power has to heat the plate: `temperature` a
+    /// degree above where it rested.</summary>
+    public PartProbe? Probe => new(
+        "`temperature` a degree above where it rested",
+        r => r.Number("temperature") > r.AtStart("temperature") + 1.0)
+    {
+        Drive = PartProbe.Drives(("heater", 100.0)),
+    };
 }

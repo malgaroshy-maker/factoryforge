@@ -445,4 +445,15 @@ public partial class PickPlaceArm : Node3D, IPart
     public PartOperation? Operation => new("gantry", "lower");
 
     public void Operate(PartOperate op) => op.ToggleBit("lower");
+
+    /// <summary>IP-07. Two of the gantry's three motions at once: the axis
+    /// travels towards 100 % and the column comes down to its bottom limit.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`position` 10 % along the rail and `lowered` made",
+        r => r.Number("position") > r.AtStart("position") + 10.0 && r.Bit("lowered"))
+    {
+        Drive = PartProbe.Drives(("target", 100.0), ("lower", true)),
+        WithinTicks = 120,
+    };
 }

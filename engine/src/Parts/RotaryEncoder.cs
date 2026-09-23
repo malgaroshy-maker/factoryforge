@@ -364,4 +364,16 @@ public partial class RotaryEncoder : Node3D, IPart
         reset.Write("count", 0);
         reset.Write("rate", 0.0);
     }
+
+    /// <summary>IP-07. The wheel measures a belt, so it is given one: a
+    /// conveyor under it, running. Its own `reset` stays low, which is the
+    /// counting state. `count` has to climb and `rate` has to read the belt.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`count` climbing and `rate` above zero off the running belt beneath",
+        r => r.Number("count") > r.AtStart("count") && r.Number("rate") > 0.0)
+    {
+        Companion = new ProbeCompanion("ConveyorBelt", Vector3.Zero, PartProbe.Drives(("rotate", true))),
+        WithinTicks = 120,
+    };
 }

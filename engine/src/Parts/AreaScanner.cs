@@ -362,4 +362,14 @@ public partial class AreaScanner : Node3D, IPart
     public PartOperation? Operation => new("area scanner", "mute");
 
     public void Operate(PartOperate op) => op.ToggleBit("mute");
+
+    /// <summary>IP-07. The one thing a controller writes is the mute request;
+    /// the scanner has to grant it and report `muted`.</summary>
+    public PartProbe? Probe => new(
+        "`muted` made",
+        r => r.Bit("muted"))
+    {
+        Drive = PartProbe.Drives(("mute", true)),
+        WithinTicks = 30,
+    };
 }

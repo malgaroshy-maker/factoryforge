@@ -317,4 +317,16 @@ public partial class TurnTable : Node3D, IPart
     public PartOperation? Operation => new("turntable", "index");
 
     public void Operate(PartOperate op) => op.ToggleBit("index");
+
+    /// <summary>IP-07. Index is a travel, so the deck has to arrive: `atindex`
+    /// made and `athome` broken, a full index angle from where it rested.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`atindex` made and `athome` broken",
+        r => r.Bit("atindex") && !r.Bit("athome"))
+    {
+        Drive = PartProbe.Drives(("index", true)),
+        // 90 degrees at 55 deg/s is about 100 ticks.
+        WithinTicks = 180,
+    };
 }

@@ -258,4 +258,14 @@ public partial class AlarmBeacon : Node3D, IPart
     public PartOperation? Operation => new("beacon", "beacon");
 
     public void Operate(PartOperate op) => op.ToggleBit("beacon");
+
+    /// <summary>IP-07. Visual and audible, so both are asserted as rendered:
+    /// the sweeping light energised and the horn's diaphragm glowing.</summary>
+    public PartProbe? Probe => new(
+        "the beacon's sweep light energised and the horn lit",
+        _ => _sweep?.LightEnergy > 0.0f && _hornMat is { EmissionEnabled: true })
+    {
+        Drive = PartProbe.Drives(("beacon", true), ("horn", true)),
+        WithinTicks = 10,
+    };
 }

@@ -342,4 +342,15 @@ public partial class ConveyorBelt : StaticBody3D, IPart
     public virtual PartOperation? Operation => new("conveyor", "rotate");
 
     public virtual void Operate(PartOperate op) => op.ToggleBit("rotate");
+
+    /// <summary>IP-07. What carries a carton is the surface velocity the belt
+    /// hands the solver, so that is what is asserted — not
+    /// <see cref="IsRunning"/>, which a belt could report while carrying
+    /// nothing.</summary>
+    public virtual PartProbe? Probe => new(
+        "a moving deck surface (ConstantLinearVelocity above zero)",
+        _ => ConstantLinearVelocity.Length() > 0.01f)
+    {
+        Drive = PartProbe.Drives(("rotate", true)),
+    };
 }

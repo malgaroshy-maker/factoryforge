@@ -340,4 +340,14 @@ public partial class SafetyRelay : Node3D, IPart
     /// latch: the relay takes the edge, and a click that left the input high
     /// would be the automatic restart this part exists to refuse.</summary>
     public void Operate(PartOperate op) => op.PulseBit("reset");
+
+    /// <summary>IP-07. Both channels healthy (the default wiring), a rising
+    /// edge on `reset` has to energise the relay: K1 and K2 both made.</summary>
+    public PartProbe? Probe => new(
+        "`k1` and `k2` made",
+        r => r.Bit("k1") && r.Bit("k2"))
+    {
+        Drive = PartProbe.Drives(("reset", true)),
+        WithinTicks = 30,
+    };
 }

@@ -245,4 +245,14 @@ public partial class PusherMechanism : Node3D, IPart
     public PartOperation? Operation => new("pusher", "extend");
 
     public void Operate(PartOperate op) => op.ToggleBit("extend");
+
+    /// <summary>IP-07. Out to full stroke, and the limit switches say so.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "full stroke: `extended` made, `retracted` broken",
+        r => r.Bit("extended") && !r.Bit("retracted"))
+    {
+        Drive = PartProbe.Drives(("extend", true)),
+        WithinTicks = 90,
+    };
 }

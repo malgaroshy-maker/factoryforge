@@ -164,4 +164,15 @@ public partial class DigitalDisplay : Node3D, IPart
     {
         if (tick.Has("value")) Value = tick.Whole("value");
     }
+
+    /// <summary>IP-07. A display reports nothing; it shows. The number written
+    /// has to be the number on its face -- the label's text, which at rest
+    /// reads 000.</summary>
+    public PartProbe? Probe => new(
+        "1234 on the display's face",
+        _ => _label3D is not null && _label3D.Text.StartsWith("1234", System.StringComparison.Ordinal))
+    {
+        Drive = PartProbe.Drives(("value", 1234)),
+        WithinTicks = 10,
+    };
 }

@@ -282,4 +282,14 @@ public partial class StopGate : Node3D, IPart
     public PartOperation? Operation => new("blade stop", "raise");
 
     public void Operate(PartOperate op) => op.ToggleBit("raise");
+
+    /// <summary>IP-07. The blade has to rise through the lane: `up` made,
+    /// `down` broken.</summary>
+    public PartProbe? Probe => new(
+        "the blade raised: `up` made, `down` broken",
+        r => r.Bit("up") && !r.Bit("down"))
+    {
+        Drive = PartProbe.Drives(("raise", true)),
+        WithinTicks = 90,
+    };
 }

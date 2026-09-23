@@ -293,4 +293,15 @@ public partial class BarcodeScanner : Node3D, IPart
     public PartOperation? Operation => new("scanner", "enable");
 
     public void Operate(PartOperate op) => op.ToggleBit("enable");
+
+    /// <summary>IP-07. An armed head over a tall carton has to report it
+    /// present and read it as what it is -- the code, not only a presence bit.
+    /// </summary>
+    public PartProbe? Probe => new(
+        $"`present` made and `code` reading {CodeTallCarton} (a tall carton)",
+        r => r.Bit("present") && (int)r.Number("code") == CodeTallCarton)
+    {
+        Drive = PartProbe.Drives(("enable", true)),
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface + 0.01f, 0)),
+    };
 }

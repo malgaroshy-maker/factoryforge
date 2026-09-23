@@ -223,4 +223,14 @@ public partial class PivotDiverter : Node3D, IPart
     public PartOperation? Operation => new("diverter", "divert");
 
     public void Operate(PartOperate op) => op.ToggleBit("divert");
+
+    /// <summary>IP-07. The blade has to swing all the way across: `diverted`
+    /// made, `home` broken.</summary>
+    public PartProbe? Probe => new(
+        "the blade across the lane: `diverted` made, `home` broken",
+        r => r.Bit("diverted") && !r.Bit("home"))
+    {
+        Drive = PartProbe.Drives(("divert", true)),
+        WithinTicks = 90,
+    };
 }

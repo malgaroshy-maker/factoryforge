@@ -744,4 +744,16 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
     public string DialTagSuffix => "setpoint";
 
     public void TurnDial(float pixelsUp) => DragSetpoint(pixelsUp);
+
+    /// <summary>IP-07. The panel's only outputs are its two lamps, and what a
+    /// lamp does is light: both lenses have to glow. The buttons are the
+    /// operator's, driven through the click path that <c>--self-test=buttons</c>
+    /// and <c>--self-test=click</c> cover.</summary>
+    public PartProbe? Probe => new(
+        "the green and red lenses lit (emission on)",
+        _ => _greenMat is { EmissionEnabled: true } && _redMat is { EmissionEnabled: true })
+    {
+        Drive = PartProbe.Drives(("green", true), ("red", true)),
+        WithinTicks = 10,
+    };
 }

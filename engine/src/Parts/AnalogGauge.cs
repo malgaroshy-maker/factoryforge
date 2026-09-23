@@ -317,4 +317,15 @@ public partial class AnalogGauge : Node3D, IPart
                   value => ConfigureScale(ScaleMin, ScaleMax, value, Unit));
         ui.Text("Unit", Unit, 8, text => ConfigureScale(ScaleMin, ScaleMax, AlarmAt, text));
     }
+
+    /// <summary>IP-07. A gauge shows; it reports nothing. Driven to mid-scale,
+    /// the needle has to point straight up -- the pivot's real rotation, which
+    /// at rest (scale minimum) is half the sweep away.</summary>
+    public PartProbe? Probe => new(
+        "the needle straight up at mid-scale (pivot within a degree of 0)",
+        _ => Mathf.Abs(RotationOfNeedleDegrees) < 1.0f)
+    {
+        Drive = PartProbe.Drives(("value", (double)((ScaleMin + ScaleMax) / 2.0f))),
+        WithinTicks = 10,
+    };
 }

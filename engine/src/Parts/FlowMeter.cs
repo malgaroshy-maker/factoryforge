@@ -241,4 +241,16 @@ public partial class FlowMeter : Node3D, IPart
         RateSignal.Reset(reset, 0.0);
         reset.Write("total", 0);
     }
+
+    /// <summary>IP-07. A meter measures a pump, so it is given one, running,
+    /// inside its reach. Its own `reset` stays low, which is the counting
+    /// state. The rate has to read the pump's flow.</summary>
+    public PartProbe? Probe => new(
+        "`rate` above 1 L/min off the pump alongside",
+        r => r.Number("rate") > 1.0)
+    {
+        Companion = new ProbeCompanion("DosingPump", new Vector3(0.6f, 0, 0),
+                                       PartProbe.Drives(("run", true), ("speed", 100.0))),
+        WithinTicks = 120,
+    };
 }

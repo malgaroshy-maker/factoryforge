@@ -249,4 +249,14 @@ public partial class SafetyGate : Node3D, IPart
     public PartOperation? Operation => new("guard door", "closed");
 
     public void Operate(PartOperate op) => Toggle();
+
+    /// <summary>IP-07. The door powers up shut; the lock has to hold it and
+    /// say so on `locked`.</summary>
+    public PartProbe? Probe => new(
+        "`locked` made with the door shut",
+        r => r.Bit("locked") && r.Bit("closed"))
+    {
+        Drive = PartProbe.Drives(("lock", true)),
+        WithinTicks = 30,
+    };
 }

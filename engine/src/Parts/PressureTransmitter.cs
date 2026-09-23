@@ -337,4 +337,14 @@ public partial class PressureTransmitter : Node3D, IPart
         SupplyOpen = false;
         PressureSignal.Reset(reset, 0.0);
     }
+
+    /// <summary>IP-07. The supply valve open has to charge the receiver, and
+    /// the transmitter has to report it rising -- in whatever units its signal
+    /// mode publishes, counts by default.</summary>
+    public PartProbe? Probe => new(
+        "`pressure` rising above where it rested",
+        r => r.Number("pressure") > r.AtStart("pressure"))
+    {
+        Drive = PartProbe.Drives(("supply", true)),
+    };
 }

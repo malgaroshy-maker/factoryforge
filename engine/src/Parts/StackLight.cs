@@ -228,4 +228,17 @@ public partial class StackLight : Node3D, IPart
     public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
 
     public void Operate(PartOperate op) => op.ToggleBit(op.Region);
+
+    /// <summary>IP-07. A stack light reports nothing to a PLC; what it does is
+    /// throw light. All three lamps driven, all three lights have to be
+    /// energised -- the state the renderer draws, not a flag beside it.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "all three lamps giving light (LightEnergy above zero)",
+        _ => _greenLight?.LightEnergy > 0.0f && _yellowLight?.LightEnergy > 0.0f
+             && _redLight?.LightEnergy > 0.0f)
+    {
+        Drive = PartProbe.Drives(("green", true), ("yellow", true), ("red", true)),
+        WithinTicks = 10,
+    };
 }

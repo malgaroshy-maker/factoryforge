@@ -323,4 +323,13 @@ public partial class DosingPump : Node3D, IPart
         op.Force("run", on);
         op.Force("speed", on ? 100.0 : 0.0);
     }
+
+    /// <summary>IP-07. Run at full reference, the pump has to deliver: `flow`
+    /// is the measurement, not the command.</summary>
+    public PartProbe? Probe => new(
+        "`flow` above 1 L/min",
+        r => r.Number("flow") > 1.0)
+    {
+        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+    };
 }

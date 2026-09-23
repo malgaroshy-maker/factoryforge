@@ -668,4 +668,15 @@ public partial class ArticulatedArm : Node3D, IPart
     public PartOperation? Operation => new("arm", "grip");
 
     public void Operate(PartOperate op) => op.ToggleBit("grip");
+
+    /// <summary>IP-07. Commanded to 45 degrees of waist, the joint has to get
+    /// there and report it on `atwaist` -- the feedback, not the command.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`atwaist` within a degree of the commanded 45",
+        r => System.Math.Abs(r.Number("atwaist") - 45.0) < 1.0)
+    {
+        Drive = PartProbe.Drives(("waist", 45.0)),
+        WithinTicks = 120,
+    };
 }

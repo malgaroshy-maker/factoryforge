@@ -438,4 +438,15 @@ public partial class ServoAxis : Node3D, IPart
         reset.Write("position", 0.0);
         reset.Write("inposition", false);
     }
+
+    /// <summary>IP-07. Enabled and sent to 100 mm, the drive has to come
+    /// ready, move, and report the carriage there: `ready`, `inposition`, and
+    /// `position` within half a millimetre of the target.</summary>
+    public PartProbe? Probe => new(
+        "`ready`, `inposition`, and `position` at the commanded 100 mm",
+        r => r.Bit("ready") && r.Bit("inposition") && System.Math.Abs(r.Number("position") - 100.0) < 0.5)
+    {
+        Drive = PartProbe.Drives(("enable", true), ("target", 100.0), ("velocity", 200.0)),
+        WithinTicks = 120,
+    };
 }

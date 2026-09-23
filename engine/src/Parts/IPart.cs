@@ -98,6 +98,13 @@ public interface IPart
     /// <see cref="HitTestRegion"/> returned, or the empty string for a
     /// whole-body part.</summary>
     void Operate(PartOperate op) { }
+
+    /// <summary>How to tell this part works: drive it like this, and this is
+    /// what it reports (IP-07). <c>--self-test=scene</c> probes every catalog
+    /// part with it and fails a part that has none, unless the test's own
+    /// exemption list names it with a reason. See <see cref="PartProbe"/>.
+    /// </summary>
+    PartProbe? Probe => null;
 }
 
 /// <summary>

@@ -335,4 +335,14 @@ public partial class TwoHandControl : Node3D, IPart
     /// two hands arrived together, and publishes the permissive on the next
     /// tick.</summary>
     public void Operate(PartOperate op) => Press(op.Region);
+
+    /// <summary>IP-07. No outputs; two palms drive it. Both pressed in the
+    /// same instant, the station has to give its permissive.</summary>
+    public PartProbe? Probe => new(
+        "`left` and `right` held and `valid` made",
+        r => r.Bit("left") && r.Bit("right") && r.Bit("valid"))
+    {
+        Operate = new[] { "left", "right" },
+        WithinTicks = 10,
+    };
 }

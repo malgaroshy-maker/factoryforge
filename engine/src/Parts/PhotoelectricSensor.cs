@@ -232,4 +232,15 @@ public partial class PhotoelectricSensor : Node3D, IPart
         ui.Slider("Beam Height (m)", HeightAboveBelt, 0.01f, 0.6f, 0.01f,
                   value => { HeightAboveBelt = value; Rebuild(); });
     }
+
+    /// <summary>IP-07. A sensor has nothing to drive; what moves it is an
+    /// object in the beam. A tall carton is parked halfway along it -- in
+    /// metal for an inductive head, which ignores cardboard by design.</summary>
+    public PartProbe? Probe => new(
+        "`detect` made by a carton in the beam",
+        r => r.Bit("detect"))
+    {
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface, -Range / 2.0f),
+                                 Metal: Mode == SensingMode.Inductive),
+    };
 }

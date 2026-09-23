@@ -209,4 +209,14 @@ public partial class LightArray : Node3D, IPart
         ui.Slider("Beams", BeamCount, 2, 24, 1,
                   value => { BeamCount = (int)value; Rebuild(); });
     }
+
+    /// <summary>IP-07. A tall carton (0.30 m) parked in the curtain has to
+    /// block it and be measured as tall: `height` above 0.2 m, which a curtain
+    /// that only reported "something" could not produce.</summary>
+    public PartProbe? Probe => new(
+        "`blocked` made and `height` above 0.2 m for a 0.30 m carton",
+        r => r.Bit("blocked") && r.Number("height") > 0.2)
+    {
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface, -Range / 2.0f)),
+    };
 }

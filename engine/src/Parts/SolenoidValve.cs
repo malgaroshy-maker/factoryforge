@@ -378,4 +378,15 @@ public partial class SolenoidValve : Node3D, IPart
     public PartOperation? Operation => new("valve", "open");
 
     public void Operate(PartOperate op) => op.ToggleBit("open");
+
+    /// <summary>IP-07. Energised, the valve has to travel open and its
+    /// feedback has to follow: `opened` made, `closed` broken. Travel is two
+    /// seconds by default, so the budget is three.</summary>
+    public PartProbe? Probe => new(
+        "the valve open: `opened` made, `closed` broken",
+        r => r.Bit("opened") && !r.Bit("closed"))
+    {
+        Drive = PartProbe.Drives(("open", true)),
+        WithinTicks = 180,
+    };
 }

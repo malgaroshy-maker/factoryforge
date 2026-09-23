@@ -409,4 +409,13 @@ public partial class LevelTank : Node3D, IPart
     public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
 
     public void Operate(PartOperate op) => op.ToggleAnalog(op.Region);
+
+    /// <summary>IP-07. The fill valve wide open has to raise the level.
+    /// </summary>
+    public PartProbe? Probe => new(
+        "`level` up by more than 1 %",
+        r => r.Number("level") > r.AtStart("level") + 1.0)
+    {
+        Drive = PartProbe.Drives(("fill", 100.0)),
+    };
 }

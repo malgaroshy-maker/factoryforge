@@ -444,4 +444,14 @@ public partial class MotorStarter : Node3D, IPart
     /// paper over a trip the starter still believes in, and the contactor would
     /// stay out with the tag saying it was healthy.</summary>
     public void Operate(PartOperate op) => ResetOverload();
+
+    /// <summary>IP-07. The coil pulls the contactor in: the auxiliary contact
+    /// makes and the motor draws current.</summary>
+    public PartProbe? Probe => new(
+        "`aux` made and `current` above where it rested",
+        r => r.Bit("aux") && r.Number("current") > r.AtStart("current"))
+    {
+        Drive = PartProbe.Drives(("coil", true)),
+        WithinTicks = 30,
+    };
 }

@@ -187,4 +187,30 @@ public partial class Emitter : Node3D, IPart
     /// <summary>A pulse, not a latch: the tick above only spawns on the rising
     /// edge, so a click that left the tag high would look broken.</summary>
     public void Operate(PartOperate op) => op.PulseBit("emit");
+
+    /// <summary>IP-07. A rising edge on `emit` has to put a real carton into
+    /// the world under the gantry -- a body the physics scene owns, not a count
+    /// the emitter keeps of what it meant to do.</summary>
+    public PartProbe? Probe => new(
+        "a carton in the world, under the feed gantry",
+        _ => CartonUnderGantry())
+    {
+        Drive = PartProbe.Drives(("emit", true)),
+        WithinTicks = 30,
+    };
+
+    /// <summary>For the probe: is there a carton beside this emitter, directly
+    /// below it? Anything a spawn produced starts there and falls straight
+    /// down.</summary>
+    private bool CartonUnderGantry()
+    {
+        if (GetParent() is not { } parent) return false;
+        foreach (var child in parent.GetChildren())
+        {
+            if (child is not BoxPhysics box || !IsInstanceValid(box)) continue;
+            var offset = box.GlobalPosition - GlobalPosition;
+            if (new Vector2(offset.X, offset.Z).Length() < 0.3f) return true;
+        }
+        return false;
+    }
 }

@@ -134,4 +134,14 @@ public partial class Remover : Area3D, IPart
         ResetCount();
         reset.WriteTo(CountTagOr(reset.InstanceId), 0);
     }
+
+    /// <summary>IP-07. A carton parked in the zone has to be counted. The
+    /// probe reads the remover's own `count`, which is where an empty
+    /// <see cref="CountTag"/> -- the default -- counts.</summary>
+    public PartProbe? Probe => new(
+        "`count` up by the carton parked in the zone",
+        r => r.Number("count") > r.AtStart("count"))
+    {
+        Carton = new ProbeCarton(new Vector3(0, PartLayout.BeltSurface, 0)),
+    };
 }
