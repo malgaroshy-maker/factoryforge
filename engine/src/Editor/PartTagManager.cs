@@ -150,9 +150,11 @@ public static class PartTagManager
     /// <returns>The instance id, and whether this call actually created the tags.
     /// It did not when they already existed, which means the part is a view of
     /// tags something else owns (the default scene's belt and sensors), and the
-    /// caller must not delete them with the part.</returns>
-    public static (string Id, bool Owns) RegisterPartTags(Node3D partNode, string partType,
-                                                          TagTable tags, string? preferredId = null)
+    /// caller must not delete them with the part. And the index the tag names
+    /// were built with, so a later <see cref="RedeclarePartTags"/> builds the
+    /// same ones.</returns>
+    public static (string Id, bool Owns, int Index) RegisterPartTags(Node3D partNode, string partType,
+                                                                     TagTable tags, string? preferredId = null)
     {
         if (!TypeCounters.ContainsKey(partType))
             TypeCounters[partType] = 0;
@@ -193,7 +195,7 @@ public static class PartTagManager
         // Tags already under this prefix belong to whoever created them first —
         // the simulation, for the default scene's belt and sensors. Adopt them
         // rather than re-adding (TagTable.Add throws on a duplicate id).
-        if (HasTagsFor(instanceId, tags)) return (instanceId, false);
+        if (HasTagsFor(instanceId, tags)) return (instanceId, false, TypeCounters[partType]);
 
         // The part declares its own I/O (HP-34). This used to be a
         // switch on the type name, three hundred lines long, in a file that
@@ -207,6 +209,59 @@ public static class PartTagManager
         if (partNode is Parts.IPart part)
             part.DeclareTags(new Parts.PartTagBuilder(tags, instanceId, TypeCounters[partType]));
 
-        return (instanceId, true);
+        return (instanceId, true, TypeCounters[partType]);
+    }
+
+    /// <summary>
+    /// Bring a placed part's tags back into line with what it declares
+    /// <em>now</em>. Returns true if anything changed.
+    ///
+    /// A part's I/O can depend on its settings (IP-16: an analog input switched
+    /// to raw counts turns from a <c>float</c> into an <c>int</c>, and at 4-20
+    /// mA gains a wire-break contact), so "register once at placement" is not
+    /// enough on its own. This is the second half: ask the part again and
+    /// apply the difference.
+    ///
+    /// A tag survives only if its type, kind <em>and name</em> are unchanged.
+    /// The name is the human statement of what the number means, units
+    /// included, so a tag whose name changed is a different measurement even
+    /// when its type did not -- a weighing conveyor's grams and its raw counts
+    /// are both <c>int</c>, and a force of 2000 g carried across as 2000 counts
+    /// would be a pin nobody set. Everything that survives keeps its value and
+    /// its force; everything replaced starts at the value the part declared.
+    /// </summary>
+    public static bool RedeclarePartTags(Node3D partNode, string instanceId, int index, TagTable tags)
+    {
+        if (partNode is not Parts.IPart part) return false;
+
+        var probe = new Parts.PartTagBuilder(null, instanceId, index);
+        part.DeclareTags(probe);
+
+        string prefix = instanceId + ".";
+        var wanted = new Dictionary<string, Parts.PartTagDeclaration>();
+        foreach (var declared in probe.Declarations) wanted[prefix + declared.Suffix] = declared;
+
+        var doomed = new List<string>();
+        foreach (var tag in tags)
+        {
+            if (!tag.Id.StartsWith(prefix, System.StringComparison.Ordinal)) continue;
+            if (wanted.TryGetValue(tag.Id, out var declared)
+                && declared.Type == tag.Type && declared.Kind == tag.Kind && declared.Name == tag.Name)
+                continue;
+            doomed.Add(tag.Id);
+        }
+        foreach (var id in doomed) tags.Remove(id);
+
+        bool added = false;
+        foreach (var declared in probe.Declarations)
+        {
+            string id = prefix + declared.Suffix;
+            if (tags.Contains(id)) continue;
+            tags.Add(new Tag(id, declared.Name, declared.Type, declared.Kind));
+            if (declared.Initial is not null) tags.Set(id, declared.Initial);
+            added = true;
+        }
+
+        return doomed.Count > 0 || added;
     }
 }

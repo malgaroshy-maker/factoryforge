@@ -94,6 +94,28 @@ the engine answers with a `status` of level `warn` and code `bad_value` naming t
 refused. A whole frame the engine cannot read at all draws `bad_message`. Neither is ever a
 reason to close the connection.
 
+### A tag's type belongs to a `describe`, not to its id
+
+A tag's `type` can change between two `describe`s while its `id` stays the same.
+The case that does it today is an analog input switched between engineering
+units and raw card counts in the property inspector (IP-16): `tank.level` is a
+`float` percentage by default and an `int` count in S7 raw or 4–20 mA mode, and
+at 4–20 mA the part also gains a `tank.wirebreak` bit. The engine announces the
+change the way it announces any other edit to the tag set — a fresh `describe`
+with a new `epoch` — so a driver that rebuilds its map from every `describe`, as
+the epoch rules above already require, handles it with nothing extra. A driver
+that cached types by id across epochs does not.
+
+A raw analog value is an ordinary `int` tag. It carries a 16-bit card's codes
+inside the 32-bit range: 0 … 27648 across the measuring range, up to 32511 of
+overrange and down to -4864 of underrange, 32767 (7FFFh) for overflow and for a
+broken 4–20 mA wire, and -32768 (8000h) for underflow. Like every `int`, it is a
+JSON integer on every channel — `describe`, `update`, `observe` — and never
+`27648.0`; `engine/fixtures/server_cases.json` checks that on both engines. The
+OPC UA client writes `int` tags as Int32, so the PLC-side variable for a raw
+count is a `DInt`, not the `Int` a real AI channel's `%IW` would be; `NORM_X`
+accepts either.
+
 ### `kind` is from the controller's point of view
 
 This trips people up constantly, so it is stated once, loudly, and never varies:

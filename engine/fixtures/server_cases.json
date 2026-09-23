@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared SERVER-behaviour cases for the tag bus. Read by tools/check_protocol.py, which drives one running engine over the wire; tests/test_tag_parity.py points it at harness/engine_stub.py and `python tools/check_protocol.py` points it at the C# engine. The point is HP-19: engine/fixtures/tag_cases.json already pins the two Tag *models* together, but nothing pinned the two *servers* together, and all three divergences HP-18 closed lived in the server rather than the model. Cases name tags by role -- '@bit_output' and friends, resolved from the engine's own describe -- so the same file runs against any scene. A case whose roles the scene does not declare is skipped and reported as skipped, never silently passed: the sorting scene has no float tag at all, so float coverage means running this against a scene that does (res://templates/tank_level_control.json declares all six roles).",
+  "_comment": "Shared SERVER-behaviour cases for the tag bus. Read by tools/check_protocol.py, which drives one running engine over the wire; tests/test_tag_parity.py points it at harness/engine_stub.py and `python tools/check_protocol.py` points it at the C# engine. The point is HP-19: engine/fixtures/tag_cases.json already pins the two Tag *models* together, but nothing pinned the two *servers* together, and all three divergences HP-18 closed lived in the server rather than the model. Cases name tags by role -- '@bit_output' and friends, resolved from the engine's own describe -- so the same file runs against any scene. A case whose roles the scene does not declare is skipped and reported as skipped, never silently passed: the sorting scene has no float output, so float-output coverage means running this against a scene that does. res://templates/tank_level_control.json declares five of the six roles -- every one but int_input, which the sorting scene has -- so the analog_int case prefers int_input and falls back to int_output rather than skipping there.",
 
   "_roles": "<type>_<kind>, e.g. bit_output, int_input, float_output. The first tag of each combination in the describe wins.",
 
@@ -238,6 +238,13 @@
       "scenario": "stale_epoch",
       "frame": "force",
       "needs": ["bit_output"]
+    },
+    {
+      "name": "a raw analog count crosses the wire as an integer, wire-break and underflow codes included",
+      "why": "IP-16. An analog input in S7 raw or 4-20 mA mode publishes an int carrying a 16-bit card's codes: 27648 full scale, 32767 overflow and 4-20 mA wire break, -4864 at the bottom of the underrange, -32768 underflow. Each must arrive as a JSON integer -- not 27648.0 -- on observe, on update and in describe, on both engines. Prefers an int input, because update is the path a count takes to a PLC; a scene with no int input (the tank template's only int is an output) falls back to an int output, which covers describe and observe and can never cover update.",
+      "scenario": "analog_int",
+      "needs_any": ["int_input", "int_output"],
+      "values": [27648, 32767, -4864, -32768, 0]
     }
   ]
 }

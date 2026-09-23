@@ -131,9 +131,10 @@ public partial class SceneEditor
         GetParent()?.AddChild(panelNode);
         if (Tags is not null)
         {
-            var (panelId, panelOwns) = PartTagManager.RegisterPartTags(panelNode, "ButtonPanel", Tags, "panel");
+            var (panelId, panelOwns, panelIndex) =
+                PartTagManager.RegisterPartTags(panelNode, "ButtonPanel", Tags, "panel");
             _placedParts.Add(new PlacedPart(panelNode, panelId, "ButtonPanel", panelOwns,
-                                            NextPartKey()));
+                                            NextPartKey(), panelIndex));
         }
 
         // Only the rigid-body scene needs these: the deterministic scene creates

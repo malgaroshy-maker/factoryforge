@@ -126,10 +126,11 @@ public partial class CustomPart : Node3D, IPart
 Four things about that code are not obvious:
 
 **`DeclareTags` must not depend on `_Ready`.** The catalog builds one throwaway
-instance and asks it what I/O it has, to fill the palette tooltip and to build
-the dispatch's id cache. A declaration that reads geometry `_Ready` has not
-built yet will be wrong there and right everywhere else, which is the worst
-possible combination.
+instance and asks it what I/O it has, to fill the palette tooltip. A declaration
+that reads geometry `_Ready` has not built yet will be wrong there and right
+everywhere else, which is the worst possible combination. It *may* depend on
+settings — `ApplySettings` runs first — and Step 8 shows what the editor does
+when such a setting changes.
 
 **A value you *compute* every tick is not a setting.** Saving it stores a sample
 and restores it as configuration. `VariableConveyor` is the worked example: the
@@ -369,3 +370,105 @@ short stalk, dark until it lights.
 is a `CylinderMesh`"* to mean "a roller", so a fault beacon mounted on a
 cylindrical stalk became the first cylinder and the test started measuring a lamp
 post for rotation. Name the meshes that matter, and look them up by name.
+
+---
+
+### Step 8: Analog inputs a PLC reads as raw counts (optional)
+
+A real PLC never sees "42.5 %". An analog input card hands the program an
+integer, and turning that integer back into a level or a temperature
+(`NORM_X` then `SCALE_X` on an S7) is one of the first things a PLC student has
+to learn. Any part that *measures* something can offer that, through one shared
+helper, `engine/src/Parts/AnalogSignal.cs` (IP-16). `LevelTank` is the worked
+example; the heating station, the flow meter, the motor starter's ammeter and
+the weighing conveyor's load cell all use it.
+
+**Opting in is one field and five one-line calls**, one in each `IPart` member
+you already have:
+
+```csharp
+// The measurement's suffix, the default measuring range (engineering value at
+// 0 and at 27648 counts), and the inspector's bounds and step for that range.
+public AnalogSignal LevelSignal { get; } = new("level", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
+
+public void DeclareTags(PartTagBuilder tags) => tags
+    .Float("fill", $"Tank {tags.Index} Fill Valve (%)", TagKind.Output)
+    // Name without its unit, then the unit. In engineering mode this declares
+    // exactly .Float("level", "Tank 1 Level (%)", TagKind.Input).
+    .Analog(LevelSignal, $"Tank {tags.Index} Level", "%");
+
+public void CaptureSettings(PartSettings s) { /* yours */ LevelSignal.Capture(s); }
+public void ApplySettings(PartSettings s)   { /* yours */ LevelSignal.Apply(s); }
+public void DescribeControls(IPartInspector ui) { /* yours */ LevelSignal.Describe(ui); }
+
+public void StepPart(PartTick tick)   { /* ... */ LevelSignal.Write(tick, Level); }
+public void ResetPart(PartReset reset) { /* ... */ LevelSignal.Reset(reset, 0.0); }
+```
+
+Route **every** write of the measurement through the helper, the reset included.
+In a raw mode the tag is an `int`, and a reset still writing `0.0` would throw:
+`PartReset` writes through `TagTable.Set`, which refuses a float on an int tag.
+A measurement that was always an `int` in engineering units (the load cell's
+grams) passes `engineeringIsInt: true`, so its default stays exactly what it was.
+
+**What the `signal` setting publishes:**
+
+| `signal` | Tag | Value |
+|---|---|---|
+| `engineering` (default) | `float` (or `int`, see above) | the measurement, as it always was |
+| `s7_raw` | `int` | 0 at range min, 27648 at range max — an S7 0–10 V / 0–20 mA channel |
+| `ma_4_20` | `int`, plus `<id>.wirebreak` | the same counts (0 = 4 mA, 27648 = 20 mA), and 32767 while the wire is broken |
+
+Outside the nominal range the S7-1500 representation applies: overrange up to
+32511 (117.589 %), then 32767 (7FFFh, overflow); underrange down to -4864
+(-17.593 %), then -32768 (8000h, underflow). Counts are rounded to the nearest
+step, as a card quantises. The motor starter shows why this matters: its 36 A
+starting inrush on the default 0–20 A span reads 32767 for about a quarter of a
+second, the
+same code a broken 4–20 mA wire reads, and a program has to tell the two apart.
+
+**The wire break is a fault input, exactly like `.fault`.** `<id>.wirebreak` is
+declared `TagKind.Input`: nothing in the simulation computes it, an instructor
+or a test raises it by forcing it, and the controller can read it, the way an
+S7-1500 program can read a channel's value status. The honest detection is still
+the value, 32767. Only 4–20 mA has one: a broken 0–20 mA wire reads 0, which is a
+perfectly valid empty tank, and that is the whole reason the live zero exists.
+
+**Your I/O now depends on a setting, and that is allowed.** `DeclareTags` must
+not depend on `_Ready`, but it may depend on settings: `ApplySettings` runs
+before the part is registered, so a part loaded as `ma_4_20` is declared as one.
+When a setting changes *after* placement, the property panel calls
+`SceneEditor.PartSettingsChanged`, which asks your part what it would declare now
+and applies the difference: tags whose type, kind and name are unchanged keep
+their value and any force, the rest are replaced, and the change is announced
+through `TagsChanged`, so a connected driver gets a fresh `describe` and a new
+epoch. The per-tick id cache is built from the placed part rather than from the
+catalog's default-configured probe, which is what lets the tick find a
+`wirebreak` tag the type's default does not have. None of that is per-part
+code; it works for any setting that changes a declaration.
+
+Keep the raw tag names independent of the range. A name that moved with every
+drag of the Range slider would be a different tag on every step.
+
+**Pick a default range that covers the part's working range**, and inspector
+bounds that let someone span it the way a technician would. The defaults are
+in the table below; each is a setting (`range_min`, `range_max`), saved with the
+scene.
+
+| Part | Measurement | Default range |
+|---|---|---|
+| `LevelTank` | `level` | 0 – 100 % |
+| `HeatingStation` | `temperature` | 0 – 400 °C |
+| `FlowMeter` | `rate` | 0 – 50 L/min |
+| `MotorStarter` | `current` | 0 – 20 A |
+| `WeighingConveyor` | `weight` | 0 – 5000 g |
+
+**Then add your part to `--self-test=analog`** (`engine/src/Sim/AnalogSignalSelfTest.cs`):
+its `Channels` list, its `Reading` switch, and a way to drive your process to 0 %,
+50 % and 100 % of span. The test changes the mode through the property panel's
+own dropdown, checks the counts against its own arithmetic rather than the
+helper's constants, forces the wire break, and round-trips the setting through a
+save and a load.
+
+Analog *outputs* — valve openings, speed references — are not raw yet. That is a
+separate piece of work, and the same helper is the place for it.

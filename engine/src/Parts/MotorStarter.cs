@@ -80,6 +80,14 @@ public partial class MotorStarter : Node3D, IPart
     /// <summary>Motor current, amps. Zero with the contactor out.</summary>
     public float Current { get; private set; }
 
+    /// <summary>How the ammeter reaches the PLC (IP-16). A current transducer
+    /// spanned 0–20 A by default: the default 6 A motor runs at a quarter of
+    /// scale, and its 36 A starting inrush drives the card into overflow for
+    /// about a quarter-second -- which a real transducer does too, and which a
+    /// program comparing against 32767 has to learn to tell apart from a
+    /// broken wire.</summary>
+    public AnalogSignal CurrentSignal { get; } = new("current", 0.0f, 20.0f, -50.0f, 500.0f, 0.5f);
+
     /// <summary>How far through its trip curve the thermal element is, 0..1.
     /// Exposed because "it is about to trip" is invisible otherwise, and
     /// because a test that waits for a trip should be able to see it
@@ -369,7 +377,7 @@ public partial class MotorStarter : Node3D, IPart
         // Normally closed, like the E-stop and the guard switch: true while the
         // element is healthy, so a broken circuit reads as "not running".
         .Bit("overload", $"Starter {tags.Index} Overload OK (NC)", TagKind.Input, initial: true)
-        .Float("current", $"Starter {tags.Index} Motor Current (A)", TagKind.Input);
+        .Analog(CurrentSignal, $"Starter {tags.Index} Motor Current", "A");
 
     public void CaptureSettings(PartSettings settings)
     {
@@ -382,6 +390,7 @@ public partial class MotorStarter : Node3D, IPart
         // one, so a duplicate gets a starter wired to nothing rather than a
         // second starter fighting over one motor (HP-16).
         settings.PutExternal("load_tag", LoadTag);
+        CurrentSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -392,6 +401,7 @@ public partial class MotorStarter : Node3D, IPart
         if (settings.Number("trip_time") is { } tripTime) TripTime = tripTime;
         if (settings.Number("pull_in") is { } pullIn) PullInTime = pullIn;
         if (settings.Text("load_tag") is { } tag) LoadTag = tag;
+        CurrentSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -400,7 +410,7 @@ public partial class MotorStarter : Node3D, IPart
 
         tick.Write("aux", IsClosed);
         tick.Write("overload", !IsTripped);
-        tick.Write("current", (double)Current);
+        CurrentSignal.Write(tick, Current);
 
         DriveLoad(tick);
     }
@@ -413,6 +423,7 @@ public partial class MotorStarter : Node3D, IPart
         ui.Slider("Trip Class (s @6x)", TripTime, 0.5f, 60.0f, 0.5f, value => TripTime = value);
         ui.TagPicker("Powers", LoadTag, "", TagType.Bit, TagKind.Output,
                      chosen => LoadTag = chosen);
+        CurrentSignal.Describe(ui);
     }
 
     /// <summary>A rename moves the tags under this starter's own prefix. A load
@@ -433,7 +444,7 @@ public partial class MotorStarter : Node3D, IPart
         ResetOverload();
         reset.Write("aux", false);
         reset.Write("overload", true);
-        reset.Write("current", 0.0);
+        CurrentSignal.Reset(reset, 0.0);
     }
 
     public PartOperation? Operation => new("motor starter", "overload");

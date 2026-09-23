@@ -302,6 +302,11 @@ async def run_server_cases(url: str, timeout: float = 10.0,
 
     for case in cases:
         missing = [r for r in case.get("needs", []) if r not in roles]
+        # `needs_any`: one of these will do. For a case that prefers one role
+        # and can honestly fall back to another -- and says so in its `why`.
+        either = case.get("needs_any", [])
+        if either and not any(r in roles for r in either):
+            missing.append(" or ".join(either))
         if missing:
             skipped.append(f"{case['name']} (no {', '.join(missing)} in this scene)")
             continue
@@ -751,6 +756,93 @@ async def _stale_epoch(url: str, case: dict, roles, initial, timeout: float,
     return problems
 
 
+def _is_int(value) -> bool:
+    """A JSON integer, as Python's json module hands it back. `bool` is a
+    subclass of `int` and is not one; `27648.0` is a float and is not one."""
+    return type(value) is int
+
+
+async def _analog_int(url: str, case: dict, roles, initial, timeout: float,
+                      settle: float) -> list[str]:
+    """A raw analog count crosses the wire as an INT (IP-16).
+
+    An analog input switched to S7 raw or 4-20 mA publishes an `int` carrying
+    a 16-bit card's codes: 27648 for full scale, 32767 for overflow and for a
+    broken 4-20 mA wire, -32768 for underflow. Every one of those has to reach
+    the driver as a JSON integer on every channel the value can take --
+    `describe`, `observe` and, for an input, `update`, which is the path the
+    count actually takes to a PLC. A value that arrived as `27648.0` would be
+    written into an OPC UA Int32 node as a Double and refused.
+
+    Prefers an int *input* for exactly that reason. A scene with none -- the
+    tank template has none, its only int is the readout's output -- is checked
+    through an int output instead, which covers `describe` and `observe` and
+    cannot cover `update`, because `update` never carries an output. Forcing is
+    the only way to put an arbitrary value on a simulator-owned input over the
+    wire, so that is what this does, and it releases every force it made.
+    """
+    name = case["name"]
+    target = roles.get("int_input") or roles.get("int_output")
+    is_input = target == roles.get("int_input")
+    problems: list[str] = []
+    loop = asyncio.get_event_loop()
+
+    try:
+        async with websockets.connect(url, max_queue=64) as ws:
+            _, describe = await _greet(ws, timeout)
+            epoch = describe["epoch"]
+            for value in case["values"]:
+                await ws.send(json.dumps({"t": "force", "epoch": epoch,
+                                          "values": {target: value}}))
+                await ws.send(json.dumps({"t": "write", "epoch": epoch,
+                                          "values": {PROBE_ID: True}}))
+                seen_observe = seen_update = None
+                deadline = loop.time() + settle
+                while loop.time() < deadline:
+                    try:
+                        msg = json.loads(await asyncio.wait_for(
+                            ws.recv(), max(deadline - loop.time(), 0.01)))
+                    except asyncio.TimeoutError:
+                        break
+                    if msg.get("t") == "observe" and target in msg.get("forced", {}):
+                        seen_observe = msg["forced"][target]
+                    elif msg.get("t") == "update" and target in msg.get("values", {}):
+                        seen_update = msg["values"][target]
+                    if seen_observe is not None and (seen_update is not None or not is_input):
+                        break
+
+                if seen_observe is None:
+                    problems.append(f"{name}: forcing {target}={value} was never observed")
+                elif not (_is_int(seen_observe) and seen_observe == value):
+                    problems.append(f"{name}: observe carried {target}={seen_observe!r} "
+                                    f"({type(seen_observe).__name__}), not the integer {value}")
+                if is_input:
+                    if seen_update is None:
+                        problems.append(f"{name}: {target}={value} never arrived on `update`, "
+                                        f"the channel a raw count takes to the PLC")
+                    elif not (_is_int(seen_update) and seen_update == value):
+                        problems.append(f"{name}: update carried {target}={seen_update!r} "
+                                        f"({type(seen_update).__name__}), not the integer {value}")
+
+        # And the table's own account of it, which is what a reconnecting
+        # driver is handed. After the first connection has closed: a second
+        # one while it is open is a second sidecar, and is refused.
+        last = case["values"][-1]
+        _, _, table = await _read_table(url, timeout)
+        got = table.get(target, {}).get("value", _MISSING)
+        if not (_is_int(got) and got == last):
+            problems.append(f"{name}: describe carries {target}={got!r} "
+                            f"({type(got).__name__}), not the integer {last}")
+        if table.get(target, {}).get("type") != "int":
+            problems.append(f"{name}: describe types {target} as "
+                            f"{table.get(target, {}).get('type')!r}, not 'int'")
+    except (OSError, asyncio.TimeoutError, websockets.exceptions.WebSocketException) as exc:
+        problems.append(f"{name}: the connection failed: {exc}")
+    finally:
+        await _restore(url, timeout, {}, [target])
+    return problems
+
+
 #: `scenario` in the fixture -> the runner for it. A case without one is the
 #: ordinary declarative kind and goes to `_run_case`.
 _SCENARIOS = {
@@ -759,6 +851,7 @@ _SCENARIOS = {
     "abrupt_reconnect": _abrupt_reconnect,
     "reconnect": _reconnect,
     "stale_epoch": _stale_epoch,
+    "analog_int": _analog_int,
 }
 
 

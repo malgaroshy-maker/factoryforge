@@ -39,6 +39,12 @@ public partial class FlowMeter : Node3D, IPart
     /// <summary>Litres since the last reset.</summary>
     public float Total { get; private set; }
 
+    /// <summary>How the rate reaches the PLC (IP-16). Spanned 0–50 L/min by
+    /// default, which covers one pump at its default 40 L/min rating with
+    /// headroom. The totaliser is a counter, not an analog signal, and stays
+    /// an Int in every mode.</summary>
+    public AnalogSignal RateSignal { get; } = new("rate", 0.0f, 50.0f, -50.0f, 1000.0f, 1.0f);
+
     private float _rescanTimer;
     private readonly List<DosingPump> _pumps = new();
     private Label3D _readout = null!;
@@ -197,7 +203,7 @@ public partial class FlowMeter : Node3D, IPart
         // A Float because it is a measurement, and an Int total because that is
         // what a batch counter hands a program -- the same split the measuring
         // encoder's `rate` and `count` make.
-        .Float("rate", $"Flow Meter {tags.Index} Rate (L/min)", TagKind.Input)
+        .Analog(RateSignal, $"Flow Meter {tags.Index} Rate", "L/min")
         .Int("total", $"Flow Meter {tags.Index} Total (L)", TagKind.Input)
         .Bit("reset", $"Flow Meter {tags.Index} Totaliser Reset", TagKind.Output);
 
@@ -205,18 +211,20 @@ public partial class FlowMeter : Node3D, IPart
     {
         settings.Put("reach", Reach);
         settings.Put("damping", Damping);
+        RateSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
     {
         if (settings.Number("reach") is { } reach) Reach = reach;
         if (settings.Number("damping") is { } damping) Damping = damping;
+        RateSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
         Step(tick.Bit("reset"), tick.Dt);
-        tick.Write("rate", (double)Rate);
+        RateSignal.Write(tick, Rate);
         tick.Write("total", (int)Total);
     }
 
@@ -224,12 +232,13 @@ public partial class FlowMeter : Node3D, IPart
     {
         ui.Slider("Reach (m)", Reach, 0.2f, 5.0f, 0.1f, value => Reach = value);
         ui.Slider("Damping (s)", Damping, 0.0f, 5.0f, 0.05f, value => Damping = value);
+        RateSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
     {
         ResetTotal();
-        reset.Write("rate", 0.0);
+        RateSignal.Reset(reset, 0.0);
         reset.Write("total", 0);
     }
 }

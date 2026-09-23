@@ -332,9 +332,9 @@ public partial class SceneEditor
         PartProperties.Apply(node, p.Properties);
         GetParent()?.AddChild(node);
 
-        var (instanceId, owns) = PartTagManager.RegisterPartTags(node, p.Type, Tags, p.Id);
+        var (instanceId, owns, tagIndex) = PartTagManager.RegisterPartTags(node, p.Type, Tags, p.Id);
         var placed = new PlacedPart(node, instanceId, p.Type, owns,
-                                    reviveKey != 0 ? reviveKey : NextPartKey());
+                                    reviveKey != 0 ? reviveKey : NextPartKey(), tagIndex);
         _placedParts.Add(placed);
         // The name goes on here rather than in a pass afterwards, so a scene
         // loaded with names already on comes up labelled instead of needing

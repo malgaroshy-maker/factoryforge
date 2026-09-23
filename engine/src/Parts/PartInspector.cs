@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FactoryForge.TagBus;
 
 namespace FactoryForge.Parts;
@@ -28,6 +29,21 @@ public interface IPartInspector
     /// <summary>A short free-text setting — a caption, a unit, a list of
     /// labels. There is no sensible slider for "g".</summary>
     void Text(string label, string value, int maxLength, Action<string> onChanged);
+
+    /// <summary>
+    /// One of a few named settings — an analog channel's signal type, say
+    /// (IP-16). A slider with a step of one would do the arithmetic and hide
+    /// the meaning.
+    ///
+    /// A choice can change what the part <em>is</em> on the bus: the analog
+    /// signal type turns a <c>float</c> tag into an <c>int</c> one and adds a
+    /// wire-break contact. The panel therefore rebuilds itself after a choice,
+    /// so rows that only apply to one option appear and disappear, and the
+    /// editor re-declares the part's tags if its declaration no longer matches
+    /// the table.
+    /// </summary>
+    /// <param name="selected">Index into <paramref name="options"/>.</param>
+    void Choice(string label, IReadOnlyList<string> options, int selected, Action<int> onChanged);
 
     /// <summary>
     /// A dropdown of the tags in the scene that a setting could legitimately

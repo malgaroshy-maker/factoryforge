@@ -83,6 +83,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
     public void InspectNode(Node3D? node, string instanceId, string partType)
     {
         _selectedNode = node;
+        _inspectedPartType = partType;
         _liveRefreshers.Clear();
         foreach (var child in _contentContainer.GetChildren())
         {
@@ -348,7 +349,15 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
         }
         if (tag.Type == TagType.Int)
         {
-            var spin = new SpinBox { MinValue = 0, MaxValue = 9999, Step = 1, CustomMinimumSize = new Vector2(90, 0) };
+            // The tag's whole range, not a counter's 0-9999: a raw analog input
+            // (IP-16) reads 0-27648, 32767 on a broken 4-20 mA wire and below
+            // zero in the underrange, and an override that cannot reach those
+            // values cannot ask "what does my program do at full scale?".
+            var spin = new SpinBox
+            {
+                MinValue = Tag.IntMin, MaxValue = Tag.IntMax, Step = 1,
+                CustomMinimumSize = new Vector2(90, 0),
+            };
             _initializing = true;
             spin.Value = Convert.ToDouble(tags.Visible(tag.Id));
             _initializing = false;
@@ -499,7 +508,71 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
     /// one of its own tags can build the id.</summary>
     private string _inspectedInstanceId = "";
 
+    /// <summary>The part type being described, so the panel can rebuild itself
+    /// for the same part after a choice (<see cref="RefreshInspected"/>).</summary>
+    private string _inspectedPartType = "";
+
     string IPartInspector.InstanceId => _inspectedInstanceId;
+
+    /// <summary>
+    /// After any settings row changes: mark the scene dirty, and let the editor
+    /// re-declare the part's I/O if the setting changed it (IP-16). If it did,
+    /// rebuild the panel too, or the I/O rows below go on showing a float
+    /// slider for a tag that is now an <c>int</c> -- or a tag that no longer
+    /// exists.
+    /// </summary>
+    private void SettingChanged(bool rebuild = false)
+    {
+        Editor?.MarkDirty();
+        bool redeclared = _selectedNode is not null && Editor is not null
+                          && Editor.PartSettingsChanged(_selectedNode);
+        if (redeclared || rebuild) CallDeferred(nameof(RefreshInspected));
+    }
+
+    /// <summary>
+    /// Rebuild the rows for whatever is being inspected <em>when this runs</em>,
+    /// not whatever was being inspected when it was asked for. Deferred, because
+    /// it is asked for from inside a control's own signal, and it frees that
+    /// control -- and by the time it runs the selection may have moved on, in
+    /// which case the new selection's rows are already the right ones.
+    /// </summary>
+    private void RefreshInspected()
+    {
+        if (_selectedNode is null || !IsInstanceValid(_selectedNode)) return;
+        InspectNode(_selectedNode, _inspectedInstanceId, _inspectedPartType);
+    }
+
+    /// <summary>
+    /// A dropdown of named options. Sized like the tag picker below, and for
+    /// the same reason: an <c>OptionButton</c> otherwise takes the width of its
+    /// longest item and pushes this fixed-width panel off the screen.
+    ///
+    /// Always rebuilds the panel afterwards. A choice can decide which other
+    /// rows make sense at all -- an analog channel's range means nothing while
+    /// it publishes engineering units -- and can change the part's tag types.
+    /// </summary>
+    void IPartInspector.Choice(string label, IReadOnlyList<string> options, int selected,
+                               Action<int> onChanged)
+    {
+        var row = new HBoxContainer();
+        _contentContainer.AddChild(row);
+        row.AddChild(new Label { Text = label, CustomMinimumSize = new Vector2(100, 0) });
+
+        var picker = new OptionButton
+        {
+            CustomMinimumSize = new Vector2(150, 0),
+            FitToLongestItem = false,
+            ClipText = true,
+        };
+        for (int i = 0; i < options.Count; i++) picker.AddItem(options[i], i);
+        if (selected >= 0 && selected < options.Count) picker.Selected = selected;
+        picker.ItemSelected += index =>
+        {
+            onChanged((int)index);
+            SettingChanged(rebuild: true);
+        };
+        row.AddChild(picker);
+    }
 
     void IPartInspector.Slider(string label, float value, float min, float max, float step,
                                Action<float> onChanged) =>
@@ -560,7 +633,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
         picker.ItemSelected += index =>
         {
             onChanged(options[(int)index]);
-            Editor?.MarkDirty();
+            SettingChanged();
         };
         row.AddChild(picker);
     }
@@ -586,7 +659,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
             // way the tag dropdown did (LE-04).
             ExpandToTextLength = false,
         };
-        field.TextChanged += (text) => { onChanged(text); Editor?.MarkDirty(); };
+        field.TextChanged += (text) => { onChanged(text); SettingChanged(); };
         row.AddChild(field);
     }
 
@@ -606,7 +679,7 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
             Value = initialValue,
             CustomMinimumSize = new Vector2(90, 0),
         };
-        spin.ValueChanged += (val) => { onChanged((float)val); Editor?.MarkDirty(); };
+        spin.ValueChanged += (val) => { onChanged((float)val); SettingChanged(); };
         row.AddChild(spin);
     }
 }

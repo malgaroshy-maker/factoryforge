@@ -41,6 +41,11 @@ public partial class LevelTank : Node3D, IPart
     /// <summary>Level as a percentage, 0–100. This is the measured variable.</summary>
     public float Level { get; private set; }
 
+    /// <summary>How the level transmitter reaches the PLC (IP-16): percent as
+    /// a float by default, or a raw card count. Spanned 0–100 % by default,
+    /// which is a transmitter calibrated to the tank it is fitted to.</summary>
+    public AnalogSignal LevelSignal { get; } = new("level", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
+
     /// <summary>True when the tank has run dry or brimmed over — the states an
     /// interlock is supposed to prevent.</summary>
     /// <summary>True while the valves are seized. Nothing here computes it —
@@ -352,7 +357,7 @@ public partial class LevelTank : Node3D, IPart
     public void DeclareTags(PartTagBuilder tags) => tags
         .Float("fill", $"Tank {tags.Index} Fill Valve (%)", TagKind.Output)
         .Float("drain", $"Tank {tags.Index} Drain Valve (%)", TagKind.Output)
-        .Float("level", $"Tank {tags.Index} Level (%)", TagKind.Input)
+        .Analog(LevelSignal, $"Tank {tags.Index} Level", "%")
         // A seized valve holds its opening (FI-01) -- the analog failure, and a
         // nastier one to diagnose than a stopped drive.
         .Bit("fault", $"Tank {tags.Index} Valve Fault", TagKind.Input);
@@ -362,6 +367,7 @@ public partial class LevelTank : Node3D, IPart
         settings.Put("fill_rate", FillRate);
         settings.Put("drain_rate", DrainRate);
         settings.Put("capacity", CapacityLitres);
+        LevelSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -369,6 +375,7 @@ public partial class LevelTank : Node3D, IPart
         if (settings.Number("fill_rate") is { } fill) FillRate = fill;
         if (settings.Number("drain_rate") is { } drain) DrainRate = drain;
         if (settings.Number("capacity") is { } capacity) CapacityLitres = capacity;
+        LevelSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -380,19 +387,20 @@ public partial class LevelTank : Node3D, IPart
         // dt is scaled simulation time, so the tank obeys pause and the
         // time-scale control like everything else.
         Step(tick.Number("fill"), tick.Number("drain"), tick.Dt);
-        tick.Write("level", (double)Level);
+        LevelSignal.Write(tick, Level);
     }
 
     public void DescribeControls(IPartInspector ui)
     {
         ui.Slider("Fill Rate (%/s)", FillRate, 1.0f, 60.0f, 1.0f, value => FillRate = value);
         ui.Slider("Drain Rate (%/s)", DrainRate, 1.0f, 60.0f, 1.0f, value => DrainRate = value);
+        LevelSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
     {
         ResetLevel();
-        reset.Write("level", 0.0);
+        LevelSignal.Reset(reset, 0.0);
     }
 
     /// <summary>Precise: the two valves are separately clickable.</summary>

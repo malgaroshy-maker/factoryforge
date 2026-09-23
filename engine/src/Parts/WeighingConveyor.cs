@@ -17,6 +17,13 @@ public partial class WeighingConveyor : ConveyorBelt
     /// <summary>Grams on the deck right now.</summary>
     public float MeasuredWeight { get; private set; }
 
+    /// <summary>How the load cell reaches the PLC (IP-16). Grams as an Int
+    /// by default -- what it always published -- or a raw card count across a
+    /// 0–5000 g checkweigher range, which holds two of the default cartons at
+    /// once.</summary>
+    public AnalogSignal WeightSignal { get; } =
+        new("weight", 0.0f, 5000.0f, -1000.0f, 100000.0f, 50.0f, engineeringIsInt: true);
+
     /// <summary>How many cartons the load cell is carrying. A checkweigher
     /// holding two at once reads the sum, which is neither carton's weight, so
     /// this is worth being able to check rather than assume.</summary>
@@ -126,7 +133,7 @@ public partial class WeighingConveyor : ConveyorBelt
 
     public override void DeclareTags(PartTagBuilder tags) => tags
         .Bit("rotate", $"WeighConveyor {tags.Index} Rotate", TagKind.Output)
-        .Int("weight", $"WeighConveyor {tags.Index} Weight", TagKind.Input)
+        .Analog(WeightSignal, $"WeighConveyor {tags.Index} Weight", null)
         .Bit("fault", $"WeighConveyor {tags.Index} Drive Fault", TagKind.Input);
 
     /// <summary>
@@ -143,7 +150,25 @@ public partial class WeighingConveyor : ConveyorBelt
     {
         if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
         if (tick.TryBit("rotate", out bool rotate)) SetRunning(rotate);
-        tick.Write("weight", (int)MeasuredWeight);
+        WeightSignal.Write(tick, MeasuredWeight);
+    }
+
+    public override void CaptureSettings(PartSettings settings)
+    {
+        base.CaptureSettings(settings);
+        WeightSignal.Capture(settings);
+    }
+
+    public override void ApplySettings(PartSettings settings)
+    {
+        base.ApplySettings(settings);
+        WeightSignal.Apply(settings);
+    }
+
+    public override void DescribeControls(IPartInspector ui)
+    {
+        base.DescribeControls(ui);
+        WeightSignal.Describe(ui);
     }
 
     public override PartOperation? Operation => new("weigh conveyor", "rotate");

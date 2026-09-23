@@ -58,6 +58,12 @@ public partial class HeatingStation : Node3D, IPart
     /// <summary>Process temperature, °C. This is the measured variable.</summary>
     public float Temperature { get; private set; } = 20.0f;
 
+    /// <summary>How the temperature transmitter reaches the PLC (IP-16).
+    /// Spanned 0–400 °C by default: the plant tops out near 320 °C and the
+    /// target slider reaches 400, so the whole working range is on
+    /// scale.</summary>
+    public AnalogSignal TemperatureSignal { get; } = new("temperature", 0.0f, 400.0f, -50.0f, 1000.0f, 5.0f);
+
     /// <summary>Heater power last commanded, 0–100 %. Kept so a faulted station
     /// can show a live command next to a falling temperature, which is the
     /// whole diagnosis.</summary>
@@ -285,7 +291,7 @@ public partial class HeatingStation : Node3D, IPart
 
     public void DeclareTags(PartTagBuilder tags) => tags
         .Float("heater", $"Heater {tags.Index} Power (%)", TagKind.Output)
-        .Float("temperature", $"Heater {tags.Index} Temperature (C)", TagKind.Input)
+        .Analog(TemperatureSignal, $"Heater {tags.Index} Temperature", "C")
         .Bit("attemp", $"Heater {tags.Index} At Temperature", TagKind.Input)
         // A failed element still accepts and reports its command; only the
         // measurement gives it away (CP-07).
@@ -299,6 +305,7 @@ public partial class HeatingStation : Node3D, IPart
         settings.Put("ambient", Ambient);
         settings.Put("target_temp", TargetTemp);
         settings.Put("tolerance", Tolerance);
+        TemperatureSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -309,6 +316,7 @@ public partial class HeatingStation : Node3D, IPart
         if (settings.Number("ambient") is { } ambient) Ambient = ambient;
         if (settings.Number("target_temp") is { } target) TargetTemp = target;
         if (settings.Number("tolerance") is { } band) Tolerance = band;
+        TemperatureSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -321,7 +329,7 @@ public partial class HeatingStation : Node3D, IPart
         // scale — the same rule the tank follows, and it matters more here
         // because the time constant is a minute rather than seconds.
         Step(tick.Number("heater"), tick.Dt);
-        tick.Write("temperature", (double)Temperature);
+        TemperatureSignal.Write(tick, Temperature);
         tick.Write("attemp", AtTemperature);
     }
 
@@ -332,6 +340,7 @@ public partial class HeatingStation : Node3D, IPart
         ui.Slider("Loss Rate (/s/degC)", LossRate, 0.02f, 2.0f, 0.02f, value => LossRate = value);
         ui.Slider("Target (degC)", TargetTemp, 20.0f, 400.0f, 1.0f, value => TargetTemp = value);
         ui.Slider("Tolerance (degC)", Tolerance, 0.5f, 30.0f, 0.5f, value => Tolerance = value);
+        TemperatureSignal.Describe(ui);
     }
 
     /// <summary>A run's accumulated heat, not a machine somebody built (LP-12).
@@ -341,7 +350,7 @@ public partial class HeatingStation : Node3D, IPart
     public void ResetPart(PartReset reset)
     {
         ResetTemperature();
-        reset.Write("temperature", (double)Temperature);
+        TemperatureSignal.Reset(reset, Temperature);
         reset.Write("attemp", AtTemperature);
     }
 

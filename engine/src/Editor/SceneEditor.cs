@@ -89,9 +89,14 @@ public partial class SceneEditor : Node3D, IPartHost
     /// is concerned — see <see cref="NextPartKey"/>. It is deliberately not the
     /// node, not the instance id and not the type-and-position pair the commands
     /// each used to pick for themselves.
+    ///
+    /// <paramref name="TagIndex"/> is the number the part's tag names were
+    /// built with ("Tank 3 Level"). Kept so a re-declaration after a setting
+    /// changes (<see cref="PartSettingsChanged"/>) builds the same names rather
+    /// than renaming every tag the part has.
     /// </summary>
     private sealed record PlacedPart(Node3D Node, string InstanceId, string PartType,
-                                     bool OwnsTags, long Key)
+                                     bool OwnsTags, long Key, int TagIndex = 0)
     {
         private Dictionary<string, string>? _tagIds;
 
@@ -107,18 +112,35 @@ public partial class SceneEditor : Node3D, IPartHost
         /// else, so without that a renamed part would keep dispatching
         /// against its old ids.
         /// </summary>
-        public Dictionary<string, string> TagIds => _tagIds ??= BuildTagIdCache(InstanceId, PartType);
+        public Dictionary<string, string> TagIds => _tagIds ??= BuildTagIdCache(InstanceId, Node, PartType);
 
         public void InvalidateTagIds() => _tagIds = null;
 
-        private static Dictionary<string, string> BuildTagIdCache(string instanceId,
+        private static Dictionary<string, string> BuildTagIdCache(string instanceId, Node3D node,
                                                                   string partType)
         {
-            // Asked of the part, through the catalog, rather than read from a
-            // hand-kept table here (HP-34). That table was a second copy of the
-            // registration switch, and a part whose tags changed in one and not
-            // the other dispatched against ids nothing owned.
-            var suffixes = PartCatalog.TagSuffixes(partType);
+            // Asked of the part rather than read from a hand-kept table here
+            // (HP-34). That table was a second copy of the registration switch,
+            // and a part whose tags changed in one and not the other dispatched
+            // against ids nothing owned.
+            //
+            // Asked of *this* part, not of the catalog's default-configured
+            // probe of its type (IP-16). A part's I/O can depend on its
+            // settings -- a 4-20 mA analog channel declares a wire-break
+            // contact that the default engineering-unit channel does not -- and
+            // a cache built from the type's defaults would hand the tick no id
+            // for a tag this part really has.
+            IReadOnlyList<string> suffixes;
+            if (node is IPart part)
+            {
+                var probe = new PartTagBuilder(null, instanceId, 0);
+                part.DeclareTags(probe);
+                suffixes = probe.Suffixes;
+            }
+            else
+            {
+                suffixes = PartCatalog.TagSuffixes(partType);
+            }
             var cache = new Dictionary<string, string>(suffixes.Count);
             foreach (string suffix in suffixes) cache[suffix] = $"{instanceId}.{suffix}";
             return cache;
@@ -246,6 +268,46 @@ public partial class SceneEditor : Node3D, IPartHost
     public bool IsDirty { get; private set; }
 
     public void MarkDirty() => IsDirty = true;
+
+    /// <summary>
+    /// A setting on a placed part has just changed (the property panel calls
+    /// this after every settings row). Returns true when that changed the
+    /// part's I/O and the new tag set has been announced.
+    ///
+    /// Most settings are numbers a part reads, and this does nothing for them.
+    /// Some change what the part <em>is</em> on the bus: an analog input
+    /// switched to raw counts is an <c>int</c> where it was a <c>float</c>, and
+    /// at 4-20 mA it gains a wire-break contact (IP-16). A driver is working
+    /// from the tag list it was handed in the last <c>describe</c>, so a type
+    /// that changed underneath it has to be announced exactly as a placed or
+    /// deleted part is -- through <see cref="TagsChanged"/>, which Main answers
+    /// with a fresh <c>describe</c> and a new epoch.
+    ///
+    /// Asks the part what it would declare now and brings the table into line
+    /// (<see cref="PartTagManager.RedeclarePartTags"/>): tags that still mean
+    /// the same thing keep their value and any force, and only the ones that
+    /// changed are replaced. Nothing here knows which parts can do this; the
+    /// comparison is the whole of the knowledge.
+    /// </summary>
+    public bool PartSettingsChanged(Node3D node)
+    {
+        if (Tags is null) return false;
+        int index = _placedParts.FindIndex(p => p.Node == node);
+        if (index < 0) return false;
+
+        var entry = _placedParts[index];
+        // A view of tags the simulation owns declares nothing of its own, and
+        // re-declaring would take them away from their owner.
+        if (!entry.OwnsTags) return false;
+        if (!PartTagManager.RedeclarePartTags(entry.Node, entry.InstanceId, entry.TagIndex, Tags))
+            return false;
+
+        entry.InvalidateTagIds();
+        MarkDirty();
+        NotifyTagsChanged();
+        GD.Print($"'{entry.InstanceId}' re-declared its I/O after a settings change");
+        return true;
+    }
 
     private void NotifyTagsChanged()
     {
