@@ -12,6 +12,7 @@ import asyncio
 import json
 import random
 import sys
+import textwrap
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -161,10 +162,14 @@ class GradedEngine(EngineStub):
         #: rather than about the plant, so it cannot be inferred from the
         #: cartons. Nothing else uses it as a criterion.
         self.written_tags: set[str] = set()
-        self.arrived = asyncio.Event()
+        #: Set the first time a controller has been sent its `describe`: the
+        #: end of the handshake, and the moment the graded window opens. See
+        #: `send_describe` for why this event and not an earlier or later one.
+        self.described = asyncio.Event()
         #: Set when a reference controller is stepped in lockstep with this
         #: plant rather than racing it on the wall clock. See `Lockstep`.
         self.lockstep: Lockstep | None = None
+        self._session: dict | None = None
         self._t0 = time.perf_counter()
 
     @property
@@ -181,14 +186,40 @@ class GradedEngine(EngineStub):
         accepted = self._client is None
         session = None
         if accepted:
-            session = {"connected_at": self.elapsed, "disconnected_at": None}
+            session = {"connected_at": self.elapsed, "described_at": None,
+                       "disconnected_at": None}
             self.sessions.append(session)
-            self.arrived.set()
+            self._session = session
         try:
             await super()._handle(ws)
         finally:
             if session is not None:
                 session["disconnected_at"] = self.elapsed
+                if self._session is session:
+                    self._session = None
+
+    async def send_describe(self) -> None:
+        """The last step of the handshake, and the event the window opens on.
+
+        `EngineStub._handle` greets a session with `hello` and then this, and
+        the protocol has nothing after it: a sidecar does not acknowledge a
+        describe. So "the controller has connected and been described to" is
+        the latest moment the engine can know a controller is there without
+        waiting on something the controller chooses to do. Waiting for its
+        first write instead would hand a program the start of its own exam,
+        and never start one for a program that writes nothing -- which is a
+        program that has to be graded, as a FAIL. The socket being accepted,
+        a line earlier, is before the controller has a tag list to scan with.
+
+        What this cannot see is the sidecar's own driver. `factoryforge_sidecar
+        connect` starts its driver after the describe arrives, so a driver
+        that takes seconds to reach its PLC spends them inside the window.
+        """
+        await super().send_describe()
+        session = self._session
+        if session is not None and session["described_at"] is None:
+            session["described_at"] = self.elapsed
+            self.described.set()
 
     async def _on_message(self, msg: dict) -> None:
         kind = msg.get("t")
@@ -342,7 +373,11 @@ async def start_reference(kind: str, url: str, scene: str,
 
 # --- the run -----------------------------------------------------------
 
-async def run_grading(args) -> Report:
+async def run_grading(args, on_listening=None) -> Report:
+    """Grade one run. `on_listening`, if given, is called with the engine once
+    its tag bus is bound, for a caller that connects a controller of its own
+    rather than through `--reference` -- which is how the tests connect one
+    late."""
     rubric = registry.rubrics()[args.scene]
     seed = args.seed if args.seed is not None else random.randrange(1, 2 ** 31)
     report = Report(scene=args.scene)
@@ -359,26 +394,59 @@ async def run_grading(args) -> Report:
     await engine.start()
 
     _announce(args, engine, rubric, seed)
+    if on_listening is not None:
+        on_listening(engine)
 
-    ticker = (asyncio.create_task(engine._tick_loop()) if lockstep is None
-              else None)
+    ticker = None
     reference = None
     try:
         if args.reference:
             reference = await start_reference(args.reference, engine.url,
                                               args.scene, lockstep)
 
+        # The plant does not move until a controller is there to drive it
+        # (IP-25). It used to start with the engine, so the window was
+        # measured from when the grader started listening: a controller that
+        # connected 8 s into a 20 s batch-dosing window was graded on 12 s,
+        # missed the examiner pressing Start at 1 s, and scored 0.0 L on its
+        # first batch -- with nothing in the report to say why. `--wait` is
+        # still the ceiling on nobody connecting at all.
         try:
-            await asyncio.wait_for(engine.arrived.wait(), timeout=args.wait)
+            await asyncio.wait_for(engine.described.wait(), timeout=args.wait)
         except asyncio.TimeoutError:
             report.verdict = ERROR
             report.headline = (f"no controller connected within {args.wait:g}s")
-            report.evidence["sessions"] = []
+            report.evidence["sessions"] = engine.sessions
             return report
 
+        if lockstep is None:
+            ticker = asyncio.create_task(engine._tick_loop())
+        # Wall seconds since the grader started listening. The window and the
+        # plant open together, so a student's plant time 0 is the moment their
+        # controller had its tag list -- and the report says when that was.
+        #
+        # It opens once. A controller that drops and reconnects finds the
+        # plant still running, as a real line would be, and fails
+        # `controller.stayed_connected`; pausing the plant for it instead would
+        # let a program stop the exam's clock by hanging up.
+        first = next(s for s in engine.sessions if s["described_at"] is not None)
+        report.evidence["window"] = {
+            "opened_on": ("controller described" if lockstep is None
+                          else "controller described; stepped in lockstep"),
+            "controller_connected_at": first["connected_at"],
+            "controller_described_at": first["described_at"],
+            "opened_at": engine.elapsed,
+            # Plant seconds that had already passed when the window opened.
+            # Zero by construction; recorded so a report can show it rather
+            # than ask to be believed.
+            "plant_seconds_before": round(watched.sim_time, 3),
+        }
+
         if not args.quiet:
-            print(f"controller connected after {engine.sessions[0]['connected_at']:.1f}s; "
-                  f"grading for {args.duration:g}s\n", flush=True)
+            print(f"controller connected after "
+                  f"{first['described_at']:.1f}s; "
+                  f"the plant starts now and is graded for {args.duration:g}s\n",
+                  flush=True)
 
         # The PLANT's clock, not the wall's and not a tick count.
         #
@@ -485,10 +553,19 @@ def print_summary(report: Report, args) -> None:
     print(f"{report.verdict}{who}   {report.headline}")
     print("=" * 68)
 
+    evidence = report.evidence
+    window = evidence.get("window")
+    if window:
+        print(textwrap.fill(
+            f"The controller connected {window['controller_described_at']:.1f}s "
+            f"after the grader started listening; the plant and the "
+            f"{args.duration:g}s window started then.",
+            width=76, initial_indent="  ", subsequent_indent="  "))
+        print()
+
     for check in report.checks:
         print(f"  [{'ok' if check.ok else 'XX'}] {check.id:<30} {check.detail}")
 
-    evidence = report.evidence
     summary = registry.rubrics().get(report.scene, {}).get("summary")
     # Only once the run reached a verdict about the plant. A disqualified or
     # aborted run has no plant evidence to print, and a summary that assumed
@@ -515,7 +592,6 @@ def print_summary(report: Report, args) -> None:
 
 
 def _wrap(text: str, width: int = 76) -> str:
-    import textwrap
     return textwrap.fill(text, width=width, subsequent_indent="    ")
 
 

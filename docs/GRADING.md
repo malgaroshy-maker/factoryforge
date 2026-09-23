@@ -75,6 +75,51 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 | `--reference` | grade a built-in controller instead of waiting — see below |
 | `--lockstep` | with `--reference` only: step the plant and the built-in controller together on the plant's clock — see below |
 
+### When the window opens
+
+The plant does not move until a controller is there to drive it. The window
+opens, and the plant starts, when a controller has connected **and** has been
+sent the scene's tag list (`describe`), which is the end of the tag-bus
+handshake. Until then the plant is frozen at time 0, however long the student
+takes to type the connect command. `--wait` still limits that: if nobody
+connects in time, the result is `ERROR` (exit 2).
+
+This was not always true. Until IP-25 the plant started with the grader, and
+the window was measured from then. In IP-06's experiment, a controller that
+connected 8 s into a 20 s batch-dosing window was graded on 12 s. It missed
+the examiner pressing Start at 1 s and scored 0.0 L on its first batch. The
+report said nothing about why. The same run now scores 22.1 L and passes.
+
+The report says when the window opened. The JSON has `evidence.window`, with
+`controller_described_at` and `opened_at` in wall seconds since the grader
+started listening, and `plant_seconds_before`, which is always 0. The printed
+report has a line under the verdict:
+
+```
+  The controller connected 8.1s after the grader started listening; the
+  plant and the 24s window started then.
+```
+
+Why the describe and not some other moment: the protocol ends with it,
+because a sidecar does not acknowledge a describe, so it is the latest moment
+the grader can know a controller is present. Waiting for the controller's
+first write instead would let a program choose when its own exam starts. It
+would also never start the exam for a program that writes nothing, and that
+program still has to be graded, as a FAIL.
+
+**What it cannot see is the student's driver.** `factoryforge_sidecar connect`
+starts its driver after the describe arrives. So the time an OPC UA or S7
+driver takes to reach the PLC is spent inside the window, as the plant's first
+seconds. In eight of the ten scenes the examiner presses Start 1.0 s in, and
+a press lasts 0.15 s (`Panel.PRESS` in `grading/plant.py`). A driver that
+needs more than a second to connect can therefore miss the first Start press.
+This has not been measured against a real PLC.
+
+The window opens only once. A controller that drops and reconnects finds the
+plant still running, as a real line would be, and fails
+`controller.stayed_connected`. Pausing the plant would let a program stop the
+exam's clock by hanging up.
+
 ### Exit codes
 
 | | | |
@@ -333,7 +378,10 @@ It is refused without `--reference` (exit 2). A student's program is always
 graded on the wall clock, exactly as before, because there is no way to make
 their PLC wait. For the same reason, lockstep proves less than a wall-clock
 run about the real-time path. The test suite keeps `idle` and `forcer` on the
-wall clock for that reason: their verdicts do not depend on timing.
+wall clock for that reason: their verdicts do not depend on timing. It also
+keeps one `good` run there, a sorting controller that connects 8 s late,
+because when the window opens is a wall-clock question and lockstep never had
+the problem. That run passes with 11 cartons sorted against the 8 needed.
 
 ---
 

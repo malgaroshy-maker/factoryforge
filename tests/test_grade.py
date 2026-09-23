@@ -19,6 +19,7 @@ The few that do not are marked, and say why.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import asyncio
 import json
@@ -235,6 +236,16 @@ def test_the_report_is_machine_readable_and_agrees_with_the_exit_code(good_run):
         assert entry["lane"] in ("chute", "far-end")
 
 
+def test_a_lockstep_window_also_opens_on_the_controller(good_run):
+    """IP-25 did not have to change lockstep, which already waited for the
+    reference controller before stepping anything. The report says so in the
+    same words as a wall-clock run, so a reader never has to know which."""
+    window = good_run["report"]["evidence"]["window"]
+    assert window["plant_seconds_before"] == 0.0
+    assert window["opened_on"] == "controller described; stepped in lockstep"
+    assert window["opened_at"] >= window["controller_described_at"]
+
+
 def test_a_timer_instead_of_the_sensor_fails_on_misrouted_cartons(tmp_path):
     """The failure the shuffled feed exists to catch: a pusher on a fixed
     period sorts nothing, however tidy the code looks."""
@@ -289,6 +300,76 @@ def test_forcing_the_counters_is_disqualified_not_failed(tmp_path):
     assert report["evidence"]["forces"], "the force messages themselves were not recorded"
     # And no sorting verdict was reached at all: a disqualified run is not marked.
     assert not any(c["id"].startswith("sort.") for c in report["checks"])
+
+
+#: How late the controller below connects. IP-06's experiment used 8 s, and it
+#: is also comfortably more than the 4 s of margin a 24 s sorting window has:
+#: `good` sorts 11 cartons in 24 s and 6 in 16 s, against 8 needed.
+LATE_BY = 8.0
+
+
+async def test_a_controller_that_connects_late_is_graded_from_when_it_connected(capsys):
+    """IP-25. A real student starts the grader and then types the connect
+    command, so their controller arrives seconds after the tag bus opens. The
+    plant and the window have to start then, not when the grader did: a
+    controller that connected 8 s into a 20 s batch-dosing window used to be
+    graded on 12 s, missed the examiner pressing Start, and scored 0.0 L with
+    nothing in the report to say why.
+
+    Wall clock, on purpose: this is the path a real student's sidecar takes,
+    and lockstep never had the problem, because it has no clock of its own to
+    start early."""
+    from factoryforge_sidecar.grading import core
+
+    args = argparse.Namespace(
+        scene="sorting-by-height", seed=11, duration=PASS_WINDOW, wait=30,
+        quiet=True, reference=None, lockstep=False, bus_port=0, student=None,
+        json_path=None)
+    listening = asyncio.get_running_loop().create_future()
+    grading = asyncio.create_task(
+        core.run_grading(args, on_listening=listening.set_result))
+    shutdown = None
+    try:
+        # Bounded, and on either outcome: a grader that died before binding
+        # never resolves `listening`, and must not leave this test waiting.
+        done, _ = await asyncio.wait({listening, grading}, timeout=15,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if grading in done:
+            grading.result()                       # re-raise why it ended
+        assert listening in done, "the grader never bound its tag bus"
+        engine = listening.result()
+
+        await asyncio.sleep(LATE_BY)               # the student, still typing
+        moved_while_nobody_was_there = engine.scene.sim_time
+        shutdown = await core.start_reference("good", engine.url, args.scene)
+        report = await asyncio.wait_for(grading, timeout=PASS_WINDOW * 4 + 60)
+    finally:
+        if shutdown is not None:
+            await shutdown()
+        if not grading.done():
+            grading.cancel()
+
+    window = report.evidence["window"]
+    assert report.verdict == "PASS", (report.headline, window,
+                                      [c for c in report.checks if not c.ok])
+    # Gotcha 16: a PASS has to be cartons, not a clock that ran out kindly.
+    assert report.evidence["sorted"] >= grade.MIN_SORTED
+    assert report.evidence["sim_seconds"] >= PASS_WINDOW
+
+    # The plant stood still for the whole wait, and the report says when the
+    # window opened, and that it opened on this controller.
+    assert moved_while_nobody_was_there == 0.0
+    assert window["plant_seconds_before"] == 0.0
+    assert window["opened_on"] == "controller described"
+    assert window["controller_described_at"] >= LATE_BY * 0.9, window
+    assert window["opened_at"] >= window["controller_described_at"]
+    assert report.evidence["sessions"][0]["described_at"] == window["controller_described_at"]
+
+    core.print_summary(report, args)
+    out = " ".join(capsys.readouterr().out.split())      # the line is wrapped
+    assert (f"The controller connected {window['controller_described_at']:.1f}s "
+            f"after the grader started listening; the plant and the "
+            f"{PASS_WINDOW:g}s window started then.") in out
 
 
 # --- the other scenes, end to end -------------------------------------
@@ -765,8 +846,8 @@ async def test_every_built_in_controller_but_idle_scans_on_the_plants_clock():
 
 
 #: Evidence fields stamped with the wall clock rather than the plant's. They
-#: label a session; nothing is marked on them.
-WALL_CLOCK_LABELS = {"sessions"}
+#: label a session and say when its window opened; nothing is marked on them.
+WALL_CLOCK_LABELS = {"sessions", "window"}
 
 
 def test_a_lockstep_mark_does_not_move_when_the_machine_is_busy(tmp_path, monkeypatch):
