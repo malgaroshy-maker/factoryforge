@@ -10,7 +10,7 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script, declare_stack_light, fault_input
+from ..plant import PlantScene, Script, declare_stack_light, fault_input, pot_start
 from ..templates import template
 
 
@@ -49,13 +49,15 @@ BD_RAMP = _PUMP.number("ramp_rate")
 BD_METER_DAMPING = _METER.number("damping")
 BD_CAPACITY = _TANK.number("capacity")
 BD_TANK_DRAIN_RATE = _TANK.number("drain_rate")
+BD_TANK_FILL_RATE = _TANK.number("fill_rate")
+BD_POT_START = pot_start(_PLANT)
 
 
 class BatchDosingScene(PlantScene):
     name = "batch-dosing"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=BD_POT_START)
         self._declare(
             Tag("pump.run", "Dosing Pump (Run)", "bit", "output"),
             Tag("pump.speed", "Dosing Pump Speed (%)", "float", "output"),
@@ -82,6 +84,8 @@ class BatchDosingScene(PlantScene):
         self.level = 0.0
         #: Ground truth: litres the pump has actually moved, ever.
         self.delivered = 0.0
+        #: Seconds the tank's own fill valve was open at all.
+        self.fill_valve_open_s = 0.0
         #: One entry per batch the examiner asked for.
         self.batches: list[dict] = []
 
@@ -137,12 +141,17 @@ class BatchDosingScene(PlantScene):
             self.meter_total += self.meter_rate / 60.0 * dt
 
         drain = min(max(self.num("tank.drain"), 0.0), 100.0)
-        # IP-19 finding, left as it was pending a decision: the template gives
-        # the tank a fill valve of its own (`fill_rate` 6 %/s), which
-        # `LevelTank.cs` adds to what the pump delivers. This model has never
-        # read `tank.fill`, so a program that opens it raises the engine's
-        # tank and not this one.
-        rise = self.flow / 60.0 / BD_CAPACITY * 100.0
+        # `LevelTank.cs` (`Step`): the tank's own fill valve adds its
+        # `fill_rate` percent per second at full opening, on top of whatever
+        # the pump offers. Until IP-29 this model never read `tank.fill`, so a
+        # program that opened it raised the engine's tank and not this one.
+        # The litres that valve lets in are not the pump's, and `delivered`,
+        # which the dose is marked on, does not count them; the tank does.
+        fill = min(max(self.num("tank.fill"), 0.0), 100.0)
+        if fill > 0.0:
+            self.fill_valve_open_s += dt
+        rise = (self.flow / 60.0 / BD_CAPACITY * 100.0
+                + BD_TANK_FILL_RATE * fill / 100.0)
         fall = (BD_TANK_DRAIN_RATE * drain / 100.0
                 * (max(self.level, 0.0) / 100.0) ** 0.5)
         self.level = min(max(self.level + (rise - fall) * dt, 0.0), 100.0)
@@ -179,6 +188,7 @@ def grade_batch_dosing(watched: Watched, engine: GradedEngine, report: Report,
         "meter_total_L": round(sim.meter_total, 2),
         "delivered_outside_a_batch_L": round(tail, 2),
         "pump_commanded_fraction": round(watched.held_true("pump.run"), 3),
+        "tank_fill_valve_open_s": round(sim.fill_valve_open_s, 2),
     })
 
     first = batches[0].get("delivered", 0.0) if batches else 0.0
@@ -240,6 +250,13 @@ def _batch_feedback(report, watched, sim, batches, target, tail) -> None:
                 f"takes time to stop and the meter is damped, so cutting at the "
                 f"number arrives late -- taper the rate over the last few litres "
                 f"so the cut-off does not carry you past it.")
+
+    if sim.fill_valve_open_s > 0.0:
+        say(f"The tank's own fill valve, `tank.fill`, was open for "
+            f"{sim.fill_valve_open_s:.1f}s. That is a second inlet, and every "
+            f"litre it lets in is one the pump did not dose and the flow meter "
+            f"never saw -- so the tank reads more than the batch. A dose goes "
+            f"in through the pump; leave `tank.fill` at zero.")
 
     if tail > 1.0:
         say(f"{tail:.1f} L went through the pump outside a batch. When the batch "
