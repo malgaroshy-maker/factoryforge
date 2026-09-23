@@ -103,7 +103,7 @@ t=1240    belt=2 tall=3 short=3 | rotate=1 emit=0 extend=0 green=1
 | Trial/licence errors from the CPU | The OPC UA server runtime licence. The unlicensed trial allows 100 variables; this DB uses 10, so it should not bite. |
 | **Far fewer boxes appear than the emit interval implies** | OPC UA subscriptions *sample* — they do not catch every transition, and **an S7-1500 forces a 1000 ms publishing interval no matter what you request**. Anything held for less than a second can vanish. The driver therefore polls by default (`mode="poll"`), and `Sorting.scl` holds the emit level for 1.5 s. If you write your own logic, hold anything the simulator must see for well over a second, or rely on polling. |
 | Boxes emitted but nothing is ever diverted | The pusher pulse is too short to survive the transport. Use `--driver opcua-client` with default polling (not `-o mode subscribe`), and consider raising `PUSH_HOLD` to `T#1S500MS`. |
-| Occasional tall box slips through | Timing margin. The catch window is only 0.6 s wide. Raise `PUSH_HOLD`, or lower `BELT_SPEED` in `harness/scene.py`. |
+| Occasional tall box slips through | Timing margin. The catch window is only 0.6 s wide. Raise `PUSH_HOLD`, or lower `BELT_SPEED` in `sidecar/factoryforge_sidecar/sorting_scene.py` (the Python `demo` scene; `harness/scene.py` is now only an alias of it, so editing that file changes nothing). |
 
 ## No PLCSIM Advanced licence?
 
