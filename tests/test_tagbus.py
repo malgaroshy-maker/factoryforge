@@ -383,11 +383,24 @@ async def test_updates_coalesce_behind_a_slow_push(engine, bus, mock):
 
     # Two more input changes, on two separate engine ticks, while the hook is
     # wedged. Waiting on the *cache* is what puts a tick between them: it is
-    # filled on the receive loop, so it moving proves the frame landed.
-    engine.scene.tags.force("sensor_low.detect", True)
+    # filled on the receive loop in the same step that queues the frame for
+    # the hooks, so it moving proves the `update` frame landed.
+    #
+    # Only for a tag nobody is forcing (IP-26). A force reaches the cache
+    # first on the `observe` frame, which the engine sends *before* the
+    # `update` for the same tick, so for a forced tag the cache moving proves
+    # only that the observe landed. Driven by force, this released the wedge
+    # in the gap between the two frames -- 3 runs in 450 on an idle Windows
+    # machine, 6 in 300 with every core busy -- and the hook was handed
+    # {"sensor_low.detect": True} with counter.tall trailing a frame behind --
+    # a failure of the test's timing, not of the coalescing. The scene moves
+    # these two on its own, so they reach the sidecar on `update` alone.
+    from scene import SENSOR_LOW_POS, SHORT_HEIGHT, TALL_HEIGHT, Box
+
+    engine.scene.boxes.append(Box(height=SHORT_HEIGHT, position=SENSOR_LOW_POS))
     await _until(lambda: bus.read("sensor_low.detect") is True,
                  what="the first frame landing past the stalled driver")
-    engine.scene.tags.force("counter.tall", 7)
+    engine.scene.sorted_tall.extend(Box(height=TALL_HEIGHT) for _ in range(7))
     await _until(lambda: bus.read("counter.tall") == 7,
                  what="the second frame landing past the stalled driver")
 
@@ -397,6 +410,7 @@ async def test_updates_coalesce_behind_a_slow_push(engine, bus, mock):
         "two frames behind a busy hook must arrive as one merged delta")
 
     # And nothing is trailing them: the queue holds current state, not history.
+    # A force is safe here: what this waits on is the hook itself.
     engine.scene.tags.force("counter.short", 3)
     await _until(lambda: len(seen) >= 3, what="a later update reaching the hook")
     assert seen[2] == {"counter.short": 3}
