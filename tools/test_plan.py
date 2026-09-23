@@ -385,6 +385,7 @@ def section_a() -> None:
     # must agree with docs/tag-bus.md and with each other. See FF-29. The
     # Python side of the parity fixture runs as part of B1 (tests/test_tag_parity.py);
     # this is the C# side plus the wire-level conformance check.
+    _SELF_TESTS_RUN.add("parity")   # so section C does not run it a second time
     code, out = engine(["--self-test=parity", "--duration=20"], timeout=90)
     fails = [line.strip() for line in out.splitlines() if "FAIL" in line]
     passed = code == 0 and "self-test parity: PASS" in out
@@ -556,8 +557,16 @@ def section_b(marker: str | None = None, targets: list[str] | None = None) -> No
 
 # --- C/D. engine self-tests -------------------------------------------------
 
-def _self_test(ident: str, name: str, which: str, headless: bool = True) -> None:
-    code, out = engine([f"--self-test={which}", "--duration=40"], headless=headless, timeout=180)
+#: Every self-test section C has run, so it can tell what the release gate
+#: holds that no line here names.
+_SELF_TESTS_RUN: set[str] = set()
+
+
+def _self_test(ident: str, name: str, which: str, headless: bool = True,
+               duration: int = 40) -> None:
+    _SELF_TESTS_RUN.add(which)
+    code, out = engine([f"--self-test={which}", f"--duration={duration}"],
+                       headless=headless, timeout=180)
     fails = [line.strip() for line in out.splitlines() if "FAIL" in line]
     passed = code == 0 and f"self-test {which}: PASS" in out
     record(ident, name, passed, "; ".join(fails[:3]) if fails else ("no PASS line" if not passed else ""))
@@ -700,6 +709,25 @@ def section_c() -> None:
     # while the carriage is there to catch a carton.
     _self_test("C32", "the arm, the pallet station and the lift do what their geometry claims",
                "handlingparts")
+
+    # The release gate keeps its own list (check_release.SELF_TESTS), and a
+    # self-test added only there ran at release time and never in CI:
+    # --self-test=analog (IP-16) was exactly that when it landed. Run whatever
+    # the gate holds that no line above names, at the gate's own duration, so
+    # the two lists cannot drift apart silently. A self-test that deserves a
+    # sentence of its own should still get a named line above.
+    for n, which in enumerate(_release_gate_self_tests_not_run(), start=33):
+        _self_test(f"C{n}", f"release-gate self-test '{which}' (named only in check_release.py)",
+                   which, duration=90)
+
+
+def _release_gate_self_tests_not_run() -> list[str]:
+    import importlib.util
+    path = ROOT / "tools" / "packaging" / "check_release.py"
+    spec = importlib.util.spec_from_file_location("_check_release", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return [name for name in module.SELF_TESTS if name not in _SELF_TESTS_RUN]
 
 
 def section_d(enabled: bool) -> None:
