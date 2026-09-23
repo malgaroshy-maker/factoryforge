@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-26 and IP-27 done; IP-29 in progress; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-26 and IP-27 done, IP-17's parts done; IP-29 in progress; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -557,7 +557,7 @@ engines.
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | open |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | open |
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |
-| IP-17 | Five industrial parts | 3 | XL |  | open |
+| IP-17 | Five industrial parts | 3 | XL |  | parts **done** 07fe152..67fc1f0; placing them in scenes is with IP-14 |
 | IP-18 | `grade.py` becomes a package | 4 | L |  | **done** 8d4c395, 38660a3, 48f2691 |
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | **done** 02be83a, 568aaa0; its findings are IP-29 |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | open |
