@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-10, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -572,7 +572,7 @@ to one tick fails them.
 | IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | open |
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
-| IP-08 | Ship the grader in the release | 2 | M | ● | open |
+| IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
 | IP-09 | A no-licence first hour | 2 | M | ● | open |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |

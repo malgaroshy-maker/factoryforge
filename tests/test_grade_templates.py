@@ -664,3 +664,33 @@ def test_the_pot_range_holds_every_setpoint_the_exam_turns_it_to():
             if outside:
                 problems.append(f"{scene} seed {seed}: {outside} outside {low:g}..{high:g}")
     assert not problems, "\n".join(problems[:20])
+
+
+# --- a frozen grader (IP-08's follow-ups) ------------------------------
+
+def test_a_frozen_grader_looks_only_in_its_bundle(monkeypatch, tmp_path):
+    # In a PyInstaller build __file__ sits in the bundle's temporary
+    # directory, so the checkout fallback would resolve to somewhere under
+    # %TEMP% and mark against whatever engine/templates happened to be there.
+    monkeypatch.delenv(templates.TEMPLATES_ENV, raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    where = [name for name, _ in templates._candidates()]
+    assert where == ["the frozen bundle"], where
+
+
+def test_a_frozen_grader_tells_the_student_a_command_the_release_has(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from factoryforge_sidecar.grading import core
+    args = SimpleNamespace(quiet=False, duration=60, wait=120)
+    engine = SimpleNamespace(url="ws://127.0.0.1:1/tagbus", actual_port=1)
+    rubric = {"title": "t", "task": "t", "tags": "t"}
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    core._announce(args, engine, rubric, seed=1)
+    frozen = capsys.readouterr().out
+    assert "factoryforge-sidecar connect" in frozen and "python -m" not in frozen
+
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    core._announce(args, engine, rubric, seed=1)
+    assert "python -m factoryforge_sidecar connect" in capsys.readouterr().out

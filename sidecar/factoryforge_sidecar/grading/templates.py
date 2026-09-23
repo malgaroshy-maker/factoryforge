@@ -92,6 +92,11 @@ def _candidates() -> list[tuple[str, Path]]:
     bundle = getattr(sys, "_MEIPASS", None)
     if getattr(sys, "frozen", False) and bundle:
         found.append(("the frozen bundle", Path(bundle) / _RELATIVE))
+        # No checkout fallback when frozen: __file__ lives in the bundle's
+        # temporary directory, so "three levels up" is somewhere under %TEMP%
+        # (found in IP-08), and a stray engine/templates there would be
+        # marked against silently.
+        return found
     # grading/ -> factoryforge_sidecar/ -> sidecar/ -> the repository root.
     found.append(("the checkout", Path(__file__).resolve().parents[3] / _RELATIVE))
     return found

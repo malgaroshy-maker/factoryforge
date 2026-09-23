@@ -58,6 +58,9 @@ prints the line the student needs:
     python -m factoryforge_sidecar connect --driver <yours> --port 61812 -o <options>
 ```
 
+(From the release download the line reads `factoryforge-sidecar connect ...`,
+because there is no Python there to run `-m` with.)
+
 The port is chosen at runtime. It is not 7411, it is not configurable to a
 default, and that is deliberate: a fixed port means two graded runs cannot
 share a machine, which HP-53 removed project-wide for exactly that reason.
@@ -80,6 +83,35 @@ A student starting from scratch can use the starter for the scene
 exactly the tags the engine registers, so a starter's Modbus addresses and OPC
 UA mapping work unchanged against `tools/grade.py`: add `--port <the port it
 prints>` to the same `factoryforge-sidecar connect` command.
+
+### Grading from the download
+
+The release zip carries the grader inside `factoryforge-sidecar`, so marking
+needs neither Python nor a checkout. From the folder the zip extracts to:
+
+    factoryforge-sidecar grade --list
+    factoryforge-sidecar grade --scene sorting-by-height --student a.patel --json a.patel.json
+
+(`./factoryforge-sidecar` on Linux.) It is the same grader as
+`python tools/grade.py`: the same flags, the same report, the same JSON and the
+same exit codes (0 PASS, 1 FAIL, 2 ERROR, 3 DISQUALIFIED), because both run
+the one `factoryforge_sidecar.grading`. The student connects exactly as before,
+with their own `factoryforge-sidecar connect --driver … --port <the port it
+prints>`.
+
+To check the grader itself on a machine you have just unpacked it on:
+
+    factoryforge-sidecar grade --scene sorting-by-height --reference good --lockstep
+    factoryforge-sidecar grade --scene sorting-by-height --reference blind --lockstep
+
+The first must PASS (exit 0) and the second FAIL (exit 1). The release gate runs
+exactly this against every build before it ships.
+
+Each scene's plant is read from the engine's templates, and the release keeps a
+copy of them inside `factoryforge-sidecar`, taken from the same build as the
+engine. To mark against a template you have changed, point
+`FACTORYFORGE_TEMPLATES` at a directory holding `manifest.json` and the
+templates. When it is set, it is the only place the grader looks.
 
 ### When the window opens
 

@@ -521,7 +521,12 @@ def _announce(args, engine: GradedEngine, rubric: dict, seed: int) -> None:
     print(f"  exam seed {seed}   window {args.duration:g}s")
     print()
     print("  Connect your controller with:")
-    print(f"    python -m factoryforge_sidecar connect --driver <yours> "
+    # The release has no Python: its sidecar is one frozen program, and
+    # telling a student to type `python -m ...` there hands them a command
+    # that cannot run (found in IP-08).
+    launcher = ("factoryforge-sidecar" if getattr(sys, "frozen", False)
+                else "python -m factoryforge_sidecar")
+    print(f"    {launcher} connect --driver <yours> "
           f"--port {engine.actual_port} -o <options>")
     print()
     print(f"  Waiting up to {args.wait:g}s ...", flush=True)
