@@ -62,6 +62,83 @@ TALL_HEIGHT = 0.30
 CARDBOARD_DENSITY = 150.0
 STEEL_DENSITY = 900.0
 
+#: `engine/src/Parts/PartLayout.cs`: every part's origin sits on the work
+#: plane, and a belt deck is this thick, centred on it -- so a carton rests on
+#: the deck at WORK_PLANE_Y + BELT_THICKNESS / 2. No template sets either.
+WORK_PLANE_Y = 0.5
+BELT_THICKNESS = 0.12
+BELT_SURFACE_Y = WORK_PLANE_Y + BELT_THICKNESS / 2
+
+
+def pot_start(plant, panel_id: str = "panel") -> float:
+    """Where the template's pot sits when the scene opens (IP-29).
+
+    `ButtonPanel.cs` applies the template's `setpoint` through `ApplySetpoint`,
+    which clamps it to the plate's `setpoint_min` .. `setpoint_max`, and
+    publishes it from the first tick. The models used to start every pot at 0
+    until the exam turned it -- a pot the engine never shows.
+    """
+    panel = plant.part(panel_id, "ButtonPanel")
+    low, high = panel.number("setpoint_min"), panel.number("setpoint_max")
+    value = panel.number("setpoint")
+    return min(max(value, low), high) if high > low else low
+
+
+def remover_catch(remover, deck_end: float) -> float:
+    """Where along the line a `Remover` takes a carton travelling along +X.
+
+    `Remover.cs` is an `Area3D`: it takes a carton on `BodyEntered`, the moment
+    the two colliders first overlap. When the zone reaches up past the deck's
+    carrying surface -- as every graded template's end-of-line remover does,
+    0.0 to 0.6 m high against a deck at 0.56 m -- the carton is taken while it
+    is still riding the belt, as its leading face crosses the zone's near
+    face: centre at `near face - CARTON_LENGTH / 2`, a tenth of a metre before
+    the belt ends. The models used to retire a carton at the belt's end, or
+    further on.
+
+    A zone wholly below the deck catches what falls off its end instead, and
+    this model has no fall: it says so by taking the carton at `deck_end`.
+    """
+    near = remover.x - remover.number("zone_x") / 2
+    top = remover.position[1] + remover.number("zone_y") / 2
+    if top > BELT_SURFACE_Y:
+        return near - CARTON_LENGTH / 2
+    return max(deck_end, near - CARTON_LENGTH / 2)
+
+
+class EngineFeed:
+    """What the engine's `Emitter` makes, carton by carton (IP-29).
+
+    `Emitter.cs`: every `metal_every`-th carton is steel (0 = never), and with
+    `tall_every` at its default of -1 the height comes from the host's shared
+    alternation -- `SceneEditor.NextAlternate`, which starts short after a
+    reset -- so the stream is short, tall, short, tall. A template can set
+    `tall_every` N instead: every Nth is tall, 0 never, 1 always.
+
+    Two scenes deliberately do not use this: the light curtain and the
+    checkweigher feed a shuffled mix, because their exams are about the mix
+    (docs/GRADING.md, "The feed patterns are shuffled").
+    """
+
+    def __init__(self, emitter) -> None:
+        self.metal_every = int(emitter.number("metal_every"))
+        tall_every = emitter.properties.get("tall_every")
+        self.tall_every = -1 if tall_every is None else int(float(tall_every))
+        self._emitted = 0
+        self._shaped = 0
+        self._alternate = False
+
+    def next(self) -> tuple[float, bool]:
+        """`(height, metal)` of the next carton."""
+        self._emitted += 1
+        metal = self.metal_every > 0 and self._emitted % self.metal_every == 0
+        if self.tall_every < 0:
+            tall, self._alternate = self._alternate, not self._alternate
+        else:
+            self._shaped += 1
+            tall = self.tall_every > 0 and self._shaped % self.tall_every == 0
+        return (TALL_HEIGHT if tall else SHORT_HEIGHT), metal
+
 
 @dataclass
 class Item:
@@ -103,6 +180,14 @@ class Script:
         self._steps = sorted(steps, key=lambda s: s[0])
         self._next = 0
         self.done: list[tuple[float, str]] = []
+
+    def at(self, when: float, what) -> None:
+        """Add a step during the run, for an exam whose next move waits on
+        what the plant did -- a guard the program keeps locked opens when it
+        opens, not when the sheet said. A step already due runs on the next
+        tick; the order among steps still to come is by time."""
+        pending = self._steps[self._next:] + [(when, what)]
+        self._steps = self._steps[:self._next] + sorted(pending, key=lambda s: s[0])
 
     def run(self, now: float) -> None:
         while self._next < len(self._steps) and now >= self._steps[self._next][0]:
@@ -209,12 +294,15 @@ class PlantScene:
 
     name = "unnamed"
 
-    def __init__(self, seed: int) -> None:
+    def __init__(self, seed: int, setpoint: float = 0.0) -> None:
+        """`setpoint` is where the pot sits before the exam touches it: a
+        templated scene passes `pot_start(template)`, which is what the
+        engine's panel shows from its first tick."""
         self.rng = random.Random(seed)
         self.seed = seed
         self.t = 0.0
         self.tags = TagTable([])
-        self.panel = Panel(self.tags)
+        self.panel = Panel(self.tags, setpoint=setpoint)
         self.panel.declare(self.tags)
         self.script = Script([])
         self.notes: dict = {}
@@ -254,6 +342,39 @@ class PlantScene:
         """
         half = window / 2
         return any(abs(item.position - position) <= half for item in items)
+
+
+#: `VariableConveyor.cs` (`DeadBand`): below this actual speed, in percent,
+#: the drive counts as stopped and the belt does not move. No template sets it.
+VFD_DEAD_BAND = 0.5
+
+
+class Vfd:
+    """A belt behind a variable-frequency drive, as `VariableConveyor.cs`
+    (`StepDrive`) runs it: the actual speed chases the reference at the
+    template's `accel_rate`, in both directions, and dropping `run` aims the
+    ramp at zero rather than cutting the speed -- the belt coasts down. The
+    models used to stop the belt dead the tick `run` fell (IP-29)."""
+
+    def __init__(self, max_speed: float, accel_rate: float) -> None:
+        self.max_speed = max_speed
+        self.accel_rate = accel_rate
+        self.actual = 0.0
+        self.reference = 0.0
+
+    def step(self, run: bool, reference: float, dt: float,
+             faulted: bool = False) -> float:
+        """One tick; returns the belt's surface speed in m/s."""
+        self.reference = min(max(reference, 0.0), 100.0)
+        target = 0.0 if faulted or not run else self.reference
+        step = self.accel_rate * dt
+        self.actual += max(min(target - self.actual, step), -step)
+        return self.speed
+
+    @property
+    def speed(self) -> float:
+        return (self.max_speed * self.actual / 100.0
+                if self.actual > VFD_DEAD_BAND else 0.0)
 
 
 #: A shuffled, seeded feed, the same argument as `feed_pattern` makes for the

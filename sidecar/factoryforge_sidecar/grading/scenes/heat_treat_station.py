@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script, declare_stack_light
+from ..plant import Script, declare_stack_light, pot_start
 from ..templates import template
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
@@ -36,7 +36,10 @@ SCENE = "heat-treat-station"
 # 0.30 per degC above a 20 degC room, a thermal mass of 6 -- a first-order lag
 # with a 20-second time constant. The worked numbers in the comment above and
 # in `grade_oven` are for those values.
-_OVEN = template(SCENE).part("oven", "HeatingStation").engineering_units()
+_PLANT = template(SCENE)
+_OVEN = _PLANT.part("oven", "HeatingStation").engineering_units()
+#: Where the pot sits before the exam turns it (IP-29).
+OVEN_POT_START = pot_start(_PLANT)
 OVEN_POWER = _OVEN.number("heater_power")
 OVEN_LOSS = _OVEN.number("loss_rate")
 OVEN_MASS = _OVEN.number("thermal_mass")
@@ -53,7 +56,7 @@ class OvenScene(Regulator):
     unit = "C"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=OVEN_POT_START)
         self._declare(
             Tag("oven.heater", "Heating Station Heater (%)", "float", "output"),
             Tag("temp_gauge.value", "Temperature Gauge", "float", "output"),

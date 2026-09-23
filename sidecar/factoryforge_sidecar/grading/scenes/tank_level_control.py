@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script, declare_stack_light
+from ..plant import Script, declare_stack_light, pot_start
 from ..templates import template
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
@@ -35,7 +35,10 @@ SCENE = "tank-level-control"
 # The equation is `engine/src/Parts/LevelTank.cs`'s; the rates are the
 # template's, read from it (IP-19): percent per second at a fully open fill
 # valve, and draining a full tank.
-_TANK = template(SCENE).part("tank", "LevelTank").engineering_units()
+_PLANT = template(SCENE)
+_TANK = _PLANT.part("tank", "LevelTank").engineering_units()
+#: Where the pot sits before the exam turns it (IP-29).
+TANK_POT_START = pot_start(_PLANT)
 TANK_FILL_RATE = _TANK.number("fill_rate")
 TANK_DRAIN_RATE = _TANK.number("drain_rate")
 
@@ -46,7 +49,7 @@ class TankScene(Regulator):
     unit = "%"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=TANK_POT_START)
         self._declare(
             Tag("tank.fill", "Tank Fill Valve (%)", "float", "output"),
             Tag("tank.drain", "Tank Drain Valve (%)", "float", "output"),

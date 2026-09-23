@@ -46,8 +46,8 @@ class Regulator(PlantScene):
     measured = "the measurement"
     unit = ""
 
-    def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+    def __init__(self, seed: int, setpoint: float = 0.0) -> None:
+        super().__init__(seed, setpoint=setpoint)
         #: (sim time, measurement) every tick. Ground truth: no bus message
         #: reaches the trace, only the samples the controller happened to poll.
         self.trace: list[tuple[float, float]] = []
