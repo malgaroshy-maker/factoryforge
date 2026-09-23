@@ -53,7 +53,7 @@ sys.path.insert(0, str(ROOT / "sidecar"))
 
 from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E402
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
-    accumulation_buffer as ab, batch_dosing as bd, guarded_cell as gc,
+    accumulation_buffer as ab, batch_dosing as bd, cooling_tunnel as ct, guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
     roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
@@ -255,6 +255,9 @@ CSHARP_MIRRORS = [
     (sd.SD_PULL_OUT_SPEED, "Parts/StarDeltaStarter.cs", r"PullOutSpeed = ([\d.]+)f"),
     (sd.SD_FRICTION_TORQUE, "Parts/StarDeltaStarter.cs", r"FrictionTorque = ([\d.]+)f"),
     (sd.SD_CLASS_MULTIPLE, "Parts/ThermalOverload.cs", r"ClassMultiple = ([\d.]+)f"),
+    (ct.CT_COOLING_CEILING, "Parts/HeatingStation.cs",
+     r"_offeredCooling \+ extraLossRate, ([\d.]+)f\)"),
+    (ct.CT_AIRFLOW_FLOOR, "Parts/CoolingFan.cs", r"if \(Airflow > ([\d.]+)f\)"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
@@ -705,6 +708,27 @@ def test_a_star_run_up_is_slower_on_a_loaded_machine_and_in_proportion_to_inerti
     light, loaded = run_up(), run_up(max(sd.SD_LOADS_THEN))
     assert light < 3.5 and loaded > 1.6 * light
     assert sd.SD_INERTIA == _t("star-delta-start").part("motor", "StarDeltaStarter").number("inertia")
+
+
+def test_the_fan_cools_the_plate_through_the_same_loss_term():
+    """`HeatingStation.Step` (:213) with `CoolingFan.Step` (:282): full
+    airflow adds `cooling_rate` to the plate's loss coefficient, so with the
+    heater at a fixed power the plate settles at ambient plus
+    heat / (loss + cooling) -- and the fan ramps at `spin_up_rate` to get
+    there. Also: the template's fan is within its reach of the plate."""
+    assert ct.CT_DISTANCE <= ct.CT_REACH
+    sim = _quiet(ct.CoolingTunnelScene(1))
+    _step(sim, 120.0, {"oven.heater": 50.0})
+    alone = ct.CT_AMBIENT + ct.CT_POWER * 0.5 / ct.CT_LOSS
+    assert sim.temperature == pytest.approx(alone, abs=0.5)
+    _step(sim, 0.5, {"oven.heater": 50.0, "fan.run": True, "fan.speed": 100.0})
+    assert sim.airflow == pytest.approx(ct.CT_SPIN_UP * 0.5, abs=0.6)
+    _step(sim, 120.0, {"oven.heater": 50.0, "fan.run": True, "fan.speed": 100.0})
+    cooled = ct.CT_AMBIENT + ct.CT_POWER * 0.5 / (ct.CT_LOSS + ct.CT_COOLING)
+    assert sim.temperature == pytest.approx(cooled, abs=0.5)
+    _step(sim, 1.0, {"oven.heater": 50.0, "fan.run": True, "fan.speed": 100.0,
+                     "fan.fault": True})
+    assert sim.airflow < 100.0 - ct.CT_SPIN_UP * 0.9
 
 
 def test_a_servo_error_latches_and_clears_only_on_an_edge_after_its_cause():

@@ -227,6 +227,7 @@ reads and the fake it shuts.
 | `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's; and whether a program that locks the gate lets the operator in once the cell has stopped |
 | `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
 | `star-delta-start` | the motor's speed at the instant the delta contacts closed, and whether star and delta ever conducted at the same instant | a changeover on a timer — the run loads the machine between its two starts, so the star run-up takes about twice as long |
+| `cooling-tunnel` | the temperature trace, the seconds the product took to reach a dropped setpoint, and the overlap of heater power and delivered airflow | holding every setpoint on the heater alone, or with the fan left running under it — the recipe drops 60 C or more, which the room alone takes 15 s and more to take away |
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 
 Every scene also carries `controller.stayed_connected`,
@@ -463,6 +464,8 @@ scene's own 60 s window. Neither is thirteen.
 | | `timed` | changes over at 66.6 % speed and draws 98.6 A on the loaded machine, against a pot of 85 % |
 | `servo-positioning` | `autoack` | acknowledges at 22.01 s, as the fault clears, and the carriage moves 369 mm before the Reset at 25.0 s |
 | | `noack` | never acknowledges, so the first fault stops the axis for good |
+| `cooling-tunnel` | `heatonly` | never runs the fan, so the drop from 170 C to 80 C takes 19.6 s where 10 s is allowed |
+| | `fight` | leaves the fan at a floor under the heater: both on together for 70.6 s |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released

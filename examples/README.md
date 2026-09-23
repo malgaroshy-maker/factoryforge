@@ -14,6 +14,7 @@ here; the reference controllers the grader checks itself with stay Python.
 |---|---|---|---|
 | Accumulation buffer | `accumulation-buffer` | [openplc/accumulation-buffer/](openplc/accumulation-buffer/) | [tia/accumulation-buffer/](tia/accumulation-buffer/) |
 | Batch dosing | `batch-dosing` | [openplc/batch-dosing/](openplc/batch-dosing/) | [tia/batch-dosing/](tia/batch-dosing/) |
+| Cooling tunnel | `cooling-tunnel` | [openplc/cooling-tunnel/](openplc/cooling-tunnel/) | [tia/cooling-tunnel/](tia/cooling-tunnel/) |
 | Guarded cell | `guarded-cell` | [openplc/guarded-cell/](openplc/guarded-cell/) | [tia/guarded-cell/](tia/guarded-cell/) |
 | Heat treat station | `heat-treat-station` | [openplc/heat-treat-station/](openplc/heat-treat-station/) | [tia/heat-treat-station/](tia/heat-treat-station/) |
 | Light curtain sorting | `light-curtain-sorting` | [openplc/light-curtain-sorting/](openplc/light-curtain-sorting/) | [tia/light-curtain-sorting/](tia/light-curtain-sorting/) |

@@ -154,5 +154,17 @@
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · axis.enable · axis.ready · axis.target · axis.velocity · axis.position · axis.inposition · axis.error · axis.ack · axis.fault · position_display.value · tower.green · tower.yellow · tower.red",
       "done": "The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to."
     }
+  },
+  {
+    "id": "cooling-tunnel",
+    "title": "Cooling tunnel",
+    "blurb": "The heat treat plate with a fan blowing on it: one plant, two actuators pulling opposite ways. Split-range control, and the first deadband here that exists for a reason.",
+    "path": "res://templates/cooling_tunnel.json",
+    "scene": "cooling-tunnel",
+    "brief": {
+      "task": "Hold the product at the temperature on the panel's pot. The heater can only push the temperature up and the room takes heat away slowly, so the fan is how it comes down fast: split one controller's output, heater above zero and fan below it, with a deadband between them. Never run both at once. fan.speed is a reference -- the fan ramps, and fan.airflow is what it is really delivering.",
+      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · oven.heater · oven.temperature · oven.attemp · oven.fault · fan.run · fan.speed · fan.airflow · fan.fault · temp_gauge.value · tower.green · tower.yellow · tower.red",
+      "done": "The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses."
+    }
   }
 ]

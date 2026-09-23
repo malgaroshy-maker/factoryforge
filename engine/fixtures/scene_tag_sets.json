@@ -1616,6 +1616,103 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "cooling-tunnel": [
+      {
+        "id": "fan.airflow",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "fan.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "fan.run",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "fan.speed",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "oven.attemp",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "oven.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "oven.heater",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "oven.temperature",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "temp_gauge.value",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

@@ -1,0 +1,44 @@
+{
+  "name": "cooling-tunnel",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "fan",
+      "type": "CoolingFan",
+      "position": [1.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "reach": "1.2", "cooling_rate": "0.6", "spin_up_rate": "45" }
+    },
+    {
+      "id": "oven",
+      "type": "HeatingStation",
+      "position": [1.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "heater_power": "90", "loss_rate": "0.3", "thermal_mass": "6",
+        "ambient": "20", "target_temp": "150", "tolerance": "3"
+      }
+    },
+    {
+      "id": "temp_gauge",
+      "type": "AnalogGauge",
+      "position": [2.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "scale_min": "0", "scale_max": "250", "alarm_at": "200", "unit": "C" }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [2.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [-0.5, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "40", "setpoint_max": "200", "setpoint_unit": "C", "setpoint": "150" }
+    }
+  ]
+}

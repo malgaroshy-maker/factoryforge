@@ -785,6 +785,34 @@ def test_a_servo_error_nobody_acknowledges_stops_the_axis_for_good(tmp_path):
     assert failed_ids(report) == {"error.recovered"}
 
 
+def test_the_cooling_tunnel_passes_split_range_with_a_deadband(tmp_path):
+    code, report = graded(tmp_path, "cooling-tunnel", "good", 80, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: both actuators really worked -- the heater held the hot
+    # phases and the fan brought the recipe's drop down.
+    assert evidence["heater_on_s"] > 30.0 and evidence["fan_on_s"] > 2.0
+    assert evidence["both_on_s"] == 0.0
+    assert len(evidence["phases"]) == 3
+
+
+def test_a_tunnel_that_never_runs_its_fan_is_late_to_every_drop(tmp_path):
+    code, report = graded(tmp_path, "cooling-tunnel", "heatonly", 80, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "cool.arrived_in_time" in failed_ids(report)
+    assert "split.no_fighting" not in failed_ids(report)
+    assert report["evidence"]["arrived_after_the_drop_s"] > 1.5 * 10.0
+    assert any("The fan never ran" in line for line in report["feedback"])
+
+
+def test_a_fan_that_never_stops_fights_the_heater(tmp_path):
+    """Holds every setpoint and meets every recipe change -- the one thing it
+    gets wrong is the one thing split range is about."""
+    code, report = graded(tmp_path, "cooling-tunnel", "fight", 80, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"split.no_fighting"}
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1068,6 +1096,10 @@ TABLE_NUMBERS = {
     ("servo-positioning", "autoack"): lambda e: [
         f"{e['fault']['acknowledged_at']:.2f}", f"{e['fault']['moved_before_reset_mm']:.0f}",
         f"{e['fault']['reset_at']:.1f}"],
+    ("cooling-tunnel", "heatonly"): lambda e: [
+        f"{e['arrived_after_the_drop_s']:.1f}", f"{e['recipe'][0]:g}", f"{e['recipe'][1]:g}",
+        f"{e['arrive_within_s']:g}"],
+    ("cooling-tunnel", "fight"): lambda e: [f"{e['both_on_s']:.1f}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of
