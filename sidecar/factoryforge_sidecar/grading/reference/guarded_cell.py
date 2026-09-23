@@ -9,16 +9,29 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
+from ..plant import CARTON_LENGTH
+from ..scenes.guarded_cell import (GC_BELT_SPEED, GC_CONTACT_EXTENSION,
+                                   GC_PUSH_EYE_POS, GC_ROD_SPEED, GC_STATION_POS)
 from ._shared import Scanner
 
 
 SCENE = "guarded-cell"
 
+#: From the push eye breaking to commanding the cylinder out, so the plate
+#: meets the carton centred on it: the carton's nose breaks the beam, its
+#: centre has the rest of the way to the cylinder's axis to go, and the rod
+#: needs `GC_CONTACT_EXTENSION` of its stroke before the plate touches it.
+#: Worked out from the cell rather than written down -- it was a hand-set
+#: 0.8 s when the model had its own layout, 0.4 m from eye to cylinder; the
+#: template's is 0.5 m, which makes it about 0.96 s.
+GC_PUSH_DELAY = ((GC_STATION_POS - (GC_PUSH_EYE_POS - CARTON_LENGTH / 2)) / GC_BELT_SPEED
+                 - GC_CONTACT_EXTENSION / GC_ROD_SPEED)
+
 
 # --- guarded cell references ----------------------------------------------
 
 async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
-                   mute_window: float) -> None:
+                   mute_window: float | None, lock: str = "never") -> None:
     """One implementation, four behaviours.
 
     `latch_the_trip` is the one that matters. With it, a safety trip holds the
@@ -26,13 +39,17 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
     back is a permissive and not a command. Without it, the coil follows "the
     cell should be running" and the machine restarts itself the moment the
     relay closes, which is the failure the whole cell exists to prevent.
+
+    `mute_window` None reads the pot, which the brief says is how long to
+    bridge the scanner for. `lock` is what the program does with the gate's
+    solenoid locks, which the brief never mentions: "never" (every program
+    written to the brief), "running" (guard locking done properly: held while
+    the contactor is in, released once it is out) or "always".
     """
     scanner = Scanner(bus)
     state = {"safety_trip": True, "mute_until": 0.0, "eye": False,
              "push": False, "transfer": "idle", "wait": 0.0,
              "feed": 0.0, "emit": False, "now": 0.0}
-    #: Push eye to the transfer station: 0.4 m at 0.5 m/s.
-    PUSH_DELAY = 0.8
 
     async def body(dt: float) -> None:
         state["now"] += dt           # the scan clock; see `run_scan`
@@ -73,7 +90,8 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
         # suite's `contactor_fraction > 0.3` failed, while Linux CI passed.
         eye = scanner.bit("mute_eye.detect") and running
         if eye and not state["eye"]:
-            state["mute_until"] = now + mute_window
+            state["mute_until"] = now + (scanner.setpoint if mute_window is None
+                                         else mute_window)
         state["eye"] = eye
         mute = running and now < state["mute_until"]
 
@@ -94,7 +112,7 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
         else:
             if push and not state["push"] and state["transfer"] == "idle" and retracted:
                 state["transfer"] = "waiting"
-                state["wait"] = PUSH_DELAY
+                state["wait"] = GC_PUSH_DELAY
             if state["transfer"] == "waiting":
                 state["wait"] -= dt
                 if state["wait"] <= 0.0:
@@ -121,29 +139,34 @@ async def _gc_body(bus, stop, *, latch_the_trip: bool, write_the_motor: bool,
         }
         if write_the_motor:
             writes["belt.rotate"] = running
+        if lock != "never":
+            held = lock == "always" or motor or coil
+            writes["guard_a.lock"] = held
+            writes["guard_b.lock"] = held
         await bus.write_many(writes)
 
     await run_scan(bus, stop, body)
 
 
 async def _gc_good(bus, stop):
-    """Latches the trip, so a closing relay starts nothing."""
+    """Latches the trip, so a closing relay starts nothing, and bridges the
+    scanner for as long as the pot says."""
     await _gc_body(bus, stop, latch_the_trip=True, write_the_motor=False,
-                   mute_window=3.5)
+                   mute_window=None)
 
 
 async def _gc_autostart(bus, stop):
     """Holds the coil for as long as the cell *should* be running, so the motor
     restarts by itself the instant the relay closes. Nobody pressed anything."""
     await _gc_body(bus, stop, latch_the_trip=False, write_the_motor=False,
-                   mute_window=3.5)
+                   mute_window=None)
 
 
 async def _gc_writesbelt(bus, stop):
     """Right about the relay and wrong about who runs the motor: it drives
     belt.rotate itself, which is the one tag this exercise forbids."""
     await _gc_body(bus, stop, latch_the_trip=True, write_the_motor=True,
-                   mute_window=3.5)
+                   mute_window=None)
 
 
 async def _gc_tapedmute(bus, stop):
@@ -153,5 +176,23 @@ async def _gc_tapedmute(bus, stop):
                    mute_window=12.0)
 
 
+async def _gc_guardlock(bus, stop):
+    """`good`, plus guard locking done properly: the gate is locked while the
+    contactor is in or commanded, and released once the cell has stopped. The
+    examiner finds it locked, presses Stop, and is let in. Right, and a second
+    right answer: it shows the exam can be sat by a program that locks."""
+    await _gc_body(bus, stop, latch_the_trip=True, write_the_motor=False,
+                   mute_window=None, lock="running")
+
+
+async def _gc_lockedshut(bus, stop):
+    """`good`, with the gate locked from power-up and never released. Stop
+    stops it and the guard stays shut, so nobody can get in to clear the
+    cell -- and the gate test the rest of the exam is built on never runs."""
+    await _gc_body(bus, stop, latch_the_trip=True, write_the_motor=False,
+                   mute_window=None, lock="always")
+
+
 REFERENCES = {"good": _gc_good, "autostart": _gc_autostart,
-              "writesbelt": _gc_writesbelt, "tapedmute": _gc_tapedmute}
+              "writesbelt": _gc_writesbelt, "tapedmute": _gc_tapedmute,
+              "guardlock": _gc_guardlock, "lockedshut": _gc_lockedshut}
