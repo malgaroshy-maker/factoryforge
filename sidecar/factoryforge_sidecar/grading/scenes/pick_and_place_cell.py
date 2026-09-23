@@ -120,6 +120,13 @@ PP_PLACE_AT = (PP_OUTFEED_X - PP_RAIL_FROM) / PP_RAIL_LENGTH * 100.0
 #: codes out shuffled, independent of the carton.
 PP_CODES = (101, 102, 201)
 
+#: `BarcodeScanner.ReadHold` (IP-31): a read holds `scanner.read` high this
+#: long, then low at least as long before the next read's edge, so a polled
+#: link sees every read. Its default is `ButtonPanel.DefaultPressHold`; the
+#: template may set `read_hold`, and the model follows it when it does.
+PP_DEFAULT_READ_HOLD = 0.2
+PP_READ_HOLD = float(_SCANNER.properties.get("read_hold", PP_DEFAULT_READ_HOLD))
+
 
 def pp_rail_x(percent: float) -> float:
     """World X of the cup at a rail position."""
@@ -173,6 +180,12 @@ class PickPlaceScene(PlantScene):
         self.carried: Item | None = None
         self.items: list[Item] = []
         self._last_read: int | None = None
+        # The read output's state machine, as `BarcodeScanner.StepOutput`:
+        # reads wait in order, each is high for the hold and low for the
+        # hold, and the code register changes on the tick its edge rises.
+        self._unreported: list[int] = []
+        self._read_phase = "idle"
+        self._read_left = 0.0
         self._next_id = 1
         self._emit_edge = False
         self._feed = EngineFeed(_EMITTER)
@@ -223,7 +236,7 @@ class PickPlaceScene(PlantScene):
     def step(self, dt: float) -> None:
         self._step_infeed(dt)
         self._step_gantry(dt)
-        self._step_sensors()
+        self._step_sensors(dt)
 
     def _step_infeed(self, dt: float) -> None:
         emit = self.bit("emitter.emit")
@@ -349,7 +362,7 @@ class PickPlaceScene(PlantScene):
             item.lane = "floor"
             self.dropped.append({**record, "landed_x": round(low, 2)})
 
-    def _step_sensors(self) -> None:
+    def _step_sensors(self, dt: float) -> None:
         waiting = [i for i in self.items if i is not self.carried]
         # `BarcodeScanner.Scan`: armed by `scanner.enable`, it looks at the
         # first carton in its window, reads it once, and re-arms only when the
@@ -360,21 +373,36 @@ class PickPlaceScene(PlantScene):
         else:
             in_window = []
         self.tags.set("scanner.present", bool(in_window))
-        read = False
         if not in_window:
             self._last_read = None
         else:
             first = max(in_window, key=lambda i: i.position)
             if first.id != self._last_read:
                 self._last_read = first.id
-                self.tags.set("scanner.code", int(first.measured or 0))
-                read = True
-        # One tick wide, exactly like a panel button's pulse, which is why a
-        # program has to latch it rather than poll it.
-        self.tags.set("scanner.read", read)
+                self._unreported.append(int(first.measured or 0))
+        self._step_read_output(dt)
         self.tags.set("atstation.detect",
                       any(abs(i.position - PP_EYE_POS) <= CARTON_LENGTH / 2
                           for i in waiting))
+
+
+    def _step_read_output(self, dt: float) -> None:
+        # Was one tick wide, as a panel button's pulse was, which a polling
+        # driver misses most of the time (IP-31 measured 76 % at 50 ms). The
+        # engine now holds it; the grader marks the plant the engine runs.
+        if not self.bit("scanner.enable"):
+            self._unreported.clear()
+            if self._read_phase == "on":
+                self._read_phase, self._read_left = "off", PP_READ_HOLD
+        self._read_left -= dt
+        if self._read_phase == "on" and self._read_left <= 1e-9:
+            self._read_phase, self._read_left = "off", PP_READ_HOLD
+        elif self._read_phase == "off" and self._read_left <= 1e-9:
+            self._read_phase = "idle"
+        if self._read_phase == "idle" and self._unreported:
+            self.tags.set("scanner.code", self._unreported.pop(0))
+            self._read_phase, self._read_left = "on", PP_READ_HOLD
+        self.tags.set("scanner.read", self._read_phase == "on")
 
 
 def grade_pick_place(watched: Watched, engine: GradedEngine, report: Report,

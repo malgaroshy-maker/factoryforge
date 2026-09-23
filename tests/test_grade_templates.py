@@ -219,6 +219,7 @@ CSHARP_MIRRORS = [
     (pp.PP_CODES[0], "Parts/BarcodeScanner.cs", r"CodeShortCarton = (\d+);"),
     (pp.PP_CODES[1], "Parts/BarcodeScanner.cs", r"CodeTallCarton = (\d+);"),
     (pp.PP_CODES[2], "Parts/BarcodeScanner.cs", r"CodeMetal = (\d+);"),
+    (pp.PP_DEFAULT_READ_HOLD, "Parts/ButtonPanel.cs", r"DefaultPressHold = ([\d.]+)f;"),
     (sh.SORTING_PANEL_SETPOINT, "Editor/SceneEditor.DefaultScene.cs",
      r'ConfigureSetpoint\([\d.]+f, [\d.]+f, "s", ([\d.]+)f\)'),
     # IP-29: the numbers the positions and behaviours the models adopted rest on.
@@ -694,3 +695,29 @@ def test_a_frozen_grader_tells_the_student_a_command_the_release_has(monkeypatch
     monkeypatch.delattr(sys, "frozen", raising=False)
     core._announce(args, engine, rubric, seed=1)
     assert "python -m factoryforge_sidecar connect" in capsys.readouterr().out
+
+
+def test_a_scanner_read_is_held_the_way_the_engine_holds_it():
+    """`BarcodeScanner.StepOutput` (IP-31): one read is one rising edge, held
+    high for `ReadHold` and low at least as long, with the code register set
+    on the tick the edge rises. The model used to raise `scanner.read` for a
+    single tick, which the engine no longer does and a polling driver misses."""
+    sim = pp.PickPlaceScene(1)
+    sim.script = plant.Script([])
+    sim.items.append(plant.Item(position=pp.PP_SCANNER_POS, id=99))
+    sim.items[-1].measured = 102.0
+    dt, highs, edges, last = 0.01, 0, 0, False
+    for _ in range(100):
+        sim.tags.set("scanner.enable", True)
+        sim.tick(dt)
+        read = bool(sim.tags.get("scanner.read").value)
+        if read and not last:
+            edges += 1
+            assert sim.tags.get("scanner.code").value == 102
+        highs += read
+        last = read
+    assert edges == 1
+    # Against the engine's number, not the model's own constant: a check that
+    # compares the model with itself passes whatever the model says (it did,
+    # with the hold shrunk to one tick). CSHARP_MIRRORS pins 0.2 to the C#.
+    assert highs * dt == pytest.approx(0.2, abs=dt)
