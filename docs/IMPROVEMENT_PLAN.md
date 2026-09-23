@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-10, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -486,6 +486,29 @@ Start. Opening on `describe` makes that test fail. Parity passes on both
 engines.
 *Size:* M.
 
+**IP-31 — A click on a momentary button must outlive the slowest poll** · gate
+*Files:* `engine/src/Parts/ButtonPanel.cs`, `SceneEditor.StepPanelButtons`,
+possibly `BarcodeScanner.cs`, AGENTS.md ("Momentary means one scan").
+*Found by IP-10, from reading the code (ButtonPanel.cs, BarcodeScanner.cs,
+grading/plant.py), not from a run:* a Start/Stop/Reset click in the 3D engine
+raises the tag for exactly one physics tick, about 17 ms at 60 Hz. OpenPLC's
+Modbus master polls every 50 ms, and the OPC UA driver polls too (gotcha 1),
+so a click can come and go between two polls, and the PLC never sees it. The
+grader holds each press for 0.15 s and does not have this problem. So a
+program can pass the grader and still ignore a real click in the 3D scene.
+`scanner.read` has the same shape.
+*Done when:* a press stays high for at least a minimum hold. The value should
+be long enough for the slowest supported poll, for example 200 ms, and a
+panel setting. It must still give exactly one clean rising edge per click,
+however long the mouse is held or however fast it is clicked. AGENTS.md's
+"one scan, not one mouse-down" rule is restated as "one edge, held long
+enough to be seen".
+*Verify:* reproduce first. Drive the engine through the Modbus driver with a
+50 ms poller and count missed clicks before the fix. Then `--self-test=buttons`
+and `click` assert the hold and the single edge, and shortening the hold back
+to one tick fails them.
+*Size:* M.
+
 ---
 
 ## Sequencing
@@ -503,6 +526,7 @@ engines.
 | IP-22 | three self-tests have never met a binary |
 | IP-25 | a student who connects late is graded on a shorter run, and can score zero |
 | IP-29 | the grader marks a plant laid out differently from the one the student sees |
+| IP-31 | a student's Start click in the 3D engine can be lost before their PLC sees it |
 
 ### Order
 
@@ -550,7 +574,7 @@ engines.
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
 | IP-08 | Ship the grader in the release | 2 | M | ● | open |
 | IP-09 | A no-licence first hour | 2 | M | ● | open |
-| IP-10 | A starter program for every graded scene | 2 | L |  | open |
+| IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | open |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
@@ -571,6 +595,7 @@ engines.
 | IP-28 | Raw analog for outputs and the remaining inputs | 3 | M |  | open |
 | IP-29 | The grader marks the plant the engine runs | 4 | L | ● | **done** 326248e..c740af5 |
 | IP-30 | The window opens when the student's driver is up | 2 | M |  | open |
+| IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | open |
 
 ## Appendix B — where the findings came from
 

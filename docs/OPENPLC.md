@@ -345,6 +345,7 @@ better than OPC UA — it is a different flavour of the same sampling problem.
 | `tall` climbs, `short` stays 0 | The pusher is firing on every box: `SensorHigh` is wired to the low sensor. `%IX100.2` is the *high* one. |
 | Boxes emitted, nothing ever diverted | `PusherExtend` is not mapped, or `PUSH_DELAY` is wrong for your geometry. |
 | Occasional tall box slips through | Timing margin — see above. Lower the polling period or raise `PUSH_HOLD`. |
+| A REAL reads as a huge number, e.g. 1065353216.0 for 1.0 | `DWORD_TO_REAL` converts the number, not the bits. Rebuild it with `FF_WORDS_TO_REAL` from any starter in `examples/openplc/<scene>/`. |
 | Counters climb in jumps of 65536, or go negative | One half of an Int is being read as the whole thing, or the two halves are swapped. `3x0` is the **high** word of `counter.short` and `3x1` the low. |
 | The compile links but `openplc` exits immediately | Another instance is holding port 43628. The runtime binds it on startup and one is already yours if a previous run did not shut down. |
 

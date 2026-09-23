@@ -361,6 +361,18 @@ running past the end of the DB, not the optimized-access setting.
 
 ---
 
+## 📦 Starter programs for every graded scene
+
+Every graded scene has a starter for your own PLC IDE in `examples/`:
+`examples/openplc/<scene>/` (Structured Text plus `mbconfig.cfg`) and
+`examples/tia/<scene>/` (an SCL source with the global DB `FF_IO`, plus a
+mapping file for each Siemens driver). The I/O is declared and commented; the
+logic is yours. Open the scene first, then start the sidecar, and restart the
+sidecar if you change scene: Modbus addresses are handed out once, in tag-id
+order. The index with the connect commands is `examples/README.md`.
+
+---
+
 ## 🏭 Connecting a scene you built yourself
 
 The sorting demo ships with a mapping file. A line you build in the editor does

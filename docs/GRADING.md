@@ -75,6 +75,12 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 | `--reference` | grade a built-in controller instead of waiting — see below |
 | `--lockstep` | with `--reference` only: step the plant and the built-in controller together on the plant's clock — see below |
 
+A student starting from scratch can use the starter for the scene
+(`examples/openplc/<scene>/` or `examples/tia/<scene>/`). The grader offers
+exactly the tags the engine registers, so a starter's Modbus addresses and OPC
+UA mapping work unchanged against `tools/grade.py`: add `--port <the port it
+prints>` to the same `factoryforge-sidecar connect` command.
+
 ### When the window opens
 
 The plant does not move until a controller is there to drive it. The window
