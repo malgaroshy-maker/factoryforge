@@ -37,7 +37,7 @@ NON_RETAIN
       PanelStop : Bool;         // panel.stop (PLC reads) Stop button, momentary: a short pulse per press
       PickstationFault : Bool;  // pickstation.fault (PLC reads) drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told
       ScannerPresent : Bool;    // scanner.present (PLC reads) TRUE while a carton is under the reader
-      ScannerRead : Bool;       // scanner.read (PLC reads) one engine tick wide on each new read -- a polled link can miss it
+      ScannerRead : Bool;       // scanner.read (PLC reads) TRUE for 0.2 s on each new read, as `code` changes -- latch the code on the rising edge
    END_VAR
 
 

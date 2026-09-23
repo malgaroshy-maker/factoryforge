@@ -246,6 +246,9 @@ def main() -> int:
                         help="run the engine with a window (vsync-paced frames) instead of headless")
     parser.add_argument("--time-scale", type=float, default=1.0,
                         help="simulation rate (the toolbar's 0.25x-4x); pollers stay on wall clock")
+    parser.add_argument("--second-after", type=float, default=None, metavar="SECONDS",
+                        help="click twice: again this long after each click. Inside the "
+                             "panel's hold that is one press; outside it, two")
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--keep-logs", action="store_true")
     args = parser.parse_args()
@@ -258,7 +261,7 @@ def main() -> int:
     logs = Path(tempfile.mkdtemp(prefix="ff_ip31_"))
     bus_port = free_port()
     # Generous: the train takes clicks * 0.75 s on average, plus two settles.
-    bound = int(args.clicks * 1.0 + 40)
+    bound = int(args.clicks * (1.0 if args.second_after is None else 1.5) + 40)
 
     engine_log = logs / "engine.log"
     sidecar_log = logs / "sidecar.log"
@@ -266,7 +269,10 @@ def main() -> int:
         "--path", str(ENGINE), "--",
         "--self-test=buttons", f"--press-train={args.clicks}", f"--press-seed={args.seed}",
         f"--bus-port={bus_port}", f"--duration={bound}",
-    ] + ([f"--time-scale={args.time_scale:g}"] if args.time_scale != 1.0 else [])
+    ] + ([f"--time-scale={args.time_scale:g}"] if args.time_scale != 1.0 else []) + (
+        # Wider gaps, so a second click never lands in the next pair's hold.
+        [f"--press-second={args.second_after:g}", "--press-gap=1.0:1.4"]
+        if args.second_after is not None else [])
 
     procs: list[subprocess.Popen] = []
     watcher = None
@@ -328,12 +334,13 @@ def main() -> int:
             handle.close()
 
     text = read_text(engine_log)
-    summary = re.search(r"press-train: presses=(\d+) edges=(\d+) high_ticks=(\S+) physics_hz=(\d+)", text)
+    summary = re.search(r"press-train: presses=(\d+) expected=(\d+) edges=(\d+) hold_s=(\S+) "
+                        r"high_ticks=(\S+) physics_hz=(\d+)", text)
     if summary is None:
         print(f"ERROR the engine printed no press-train summary\n  logs: {logs}", file=sys.stderr)
         print(text[-2000:], file=sys.stderr)
         return 2
-    presses, engine_edges = int(summary.group(1)), int(summary.group(2))
+    presses, expected, engine_edges = (int(summary.group(i)) for i in (1, 2, 3))
 
     if watcher.error:
         print(f"ERROR the watcher failed: {watcher.error}\n  logs: {logs}", file=sys.stderr)
@@ -341,13 +348,22 @@ def main() -> int:
 
     seen = rising_edges(watcher.samples)
     missed = max(engine_edges - seen, 0)
-    print(f"engine:  {presses} clicks, {engine_edges} edges on {START_TAG}, "
-          f"high for {summary.group(3)} physics ticks at {summary.group(4)} Hz "
+    print(f"engine:  {presses} clicks, {engine_edges} edges on {START_TAG} (expected {expected}), "
+          f"hold {summary.group(4)} s = {summary.group(5)} physics ticks at {summary.group(6)} Hz "
           f"({'headless' if not args.gui else 'windowed'})")
     if len(watcher.times) > 1 and args.via == "modbus":
         gaps = [(b - a) * 1000 for a, b in zip(watcher.times, watcher.times[1:])]
         print(f"poller:  {len(watcher.samples)} reads, interval mean {statistics.mean(gaps):.1f} ms, "
               f"max {max(gaps):.1f} ms")
+        runs, run = [], 0
+        for value in watcher.samples:
+            if value:
+                run += 1
+            elif run:
+                runs.append(run)
+                run = 0
+        if runs:
+            print(f"         each press read high on {min(runs)}..{max(runs)} consecutive polls")
     else:
         print(f"watcher: {len(watcher.samples)} {START_TAG} values received")
     print(f"RESULT via={args.via} poll_ms={args.poll_ms} time_scale={args.time_scale:g} clicks={engine_edges} seen={seen} "
@@ -362,7 +378,7 @@ def main() -> int:
         for path in logs.iterdir():
             path.unlink()
         logs.rmdir()
-    return 0 if (engine_edges == presses and seen == engine_edges) else 1
+    return 0 if (engine_edges == expected and seen == engine_edges) else 1
 
 
 if __name__ == "__main__":

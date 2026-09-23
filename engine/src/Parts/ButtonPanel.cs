@@ -24,9 +24,11 @@ public enum PanelButton
 ///
 /// Two press behaviours, because real panels have both:
 ///
-/// * <b>Momentary</b> (Start, Stop, Reset) — the tag goes high for exactly one
-///   scan and drops again, whatever the mouse does. A held mouse button is not a
-///   held contact; anything else would let a slow click look like a stuck one.
+/// * <b>Momentary</b> (Start, Stop, Reset) — one click is one rising edge, held
+///   for <see cref="PressHold"/> and then dropped, whatever the mouse does. A
+///   held mouse button is not a held contact; anything else would let a slow
+///   click look like a stuck one. See <see cref="StepPart"/> for why the edge
+///   is held rather than one scan wide.
 /// * <b>Maintained</b> (Emergency Stop) — the mushroom latches in when struck
 ///   and stays in until it is twisted back out. Clicking it again releases it.
 ///
@@ -39,10 +41,34 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
 {
     [Signal] public delegate void ButtonPressedEventHandler(string name);
 
-    /// <summary>How long a momentary cap stays visibly depressed. Purely
-    /// cosmetic: the tag pulse is one physics tick regardless, and at 60 Hz that
-    /// is 17 ms, far too brief to see.</summary>
-    private const float PressDwell = 0.14f;
+    /// <summary>
+    /// How long a click holds a momentary contact closed, in seconds -- and,
+    /// after it opens, the least time it stays open before another click can
+    /// close it again (IP-31).
+    ///
+    /// Long enough for the slowest poll a supported driver makes. Polling is
+    /// the default everywhere (gotcha 1): OpenPLC's Modbus master polls every
+    /// 100 ms by default (50 ms in docs/OPENPLC.md), the Node-RED example
+    /// subscribes at 50 ms, and the Siemens drivers' own loops run at 50 ms.
+    /// 200 ms is twice the slowest of those and still reads as one press to
+    /// the hand -- a real one lasts about that long. A link that samples more
+    /// slowly needs this raised, which is why it is a setting: an OPC UA
+    /// <i>subscription</i> to an S7-1500 publishes at 1000 ms whatever it is
+    /// asked for, and only a hold over a second survives that.
+    ///
+    /// Counted in physics ticks, not in simulated seconds: Godot paces ticks by
+    /// the wall clock at every time scale and scales only their delta, and the
+    /// poller that has to see the edge is on the wall clock too. Simulated time
+    /// would shrink 200 ms to 50 ms at the toolbar's 4x.
+    /// </summary>
+    public float PressHold { get; set; } = DefaultPressHold;
+
+    public const float DefaultPressHold = 0.2f;
+
+    /// <summary><see cref="PressHold"/> in whole physics ticks, rounded up and
+    /// never less than one.</summary>
+    public int PressHoldTicks =>
+        System.Math.Max(1, (int)System.Math.Ceiling(PressHold * Engine.PhysicsTicksPerSecond - 1e-3));
 
     private const float CapTravel = 0.012f;
     private const float FaceZ = 0.06f;
@@ -114,15 +140,19 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         public float Radius;
         public bool Maintained;
         public MeshInstance3D Mesh = null!;
-        public float Dwell;             // seconds of visible depression left
+
+        // The momentary contact, stepped on the physics clock (StepPart).
+        public ContactPhase Phase;
+        public int TicksLeft;           // ticks left in High or Low after this one
+        public bool Requested;          // a click the next tick has not taken yet
     }
 
-    private readonly List<Cap> _caps = new();
+    /// <summary>Where a momentary contact is in its press. Idle: open and free
+    /// to close. High: closed, counting down the hold. Low: open again, and
+    /// counting down the same time before it may close.</summary>
+    private enum ContactPhase { Idle, High, Low }
 
-    /// <summary>Presses not yet handed to the tag dispatch. A click lands on the
-    /// frame clock and the tags are written on the physics clock, so presses
-    /// queue here rather than being lost between the two.</summary>
-    private readonly List<PanelButton> _pending = new();
+    private readonly List<Cap> _caps = new();
 
     public override void _Ready()
     {
@@ -478,9 +508,12 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
     }
 
     /// <summary>
-    /// Register a press. A momentary cap queues a single pulse no matter how
-    /// often it is clicked before the next tick reads it; the mushroom toggles
-    /// its latch, which is what "twist to release" amounts to.
+    /// Register a press. A momentary cap requests one edge no matter how often
+    /// it is clicked before the next tick reads it -- a click lands on the frame
+    /// clock and the tags are written on the physics clock, so the request is
+    /// held here rather than lost between the two. What happens to it then is
+    /// <see cref="StepPart"/>'s business. The mushroom toggles its latch, which
+    /// is what "twist to release" amounts to.
     /// </summary>
     public void Press(PanelButton which)
     {
@@ -495,9 +528,11 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
             }
             else
             {
-                cap.Dwell = PressDwell;
-                cap.Mesh.Position = cap.Centre - new Vector3(0, 0, CapTravel);
-                if (!_pending.Contains(which)) _pending.Add(which);
+                cap.Requested = true;
+                // Down at once, so the click is acknowledged in the frame it
+                // was made -- unless the contact is still re-opening from the
+                // last press, in which case it goes down when it really closes.
+                if (cap.Phase != ContactPhase.Low) ShowDepressed(cap, true);
             }
 
             EmitSignal(SignalName.ButtonPressed, which.ToString());
@@ -506,45 +541,51 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
     }
 
     /// <summary>
-    /// Take the presses queued since the last call. Draining rather than reading
-    /// is what keeps a pulse one tick long: the tick that finds a press is the
-    /// only tick that can.
+    /// Take the clicks no tick has acted on yet, and forget them. For a test
+    /// asking "did that click request a press?" -- the tag dispatch itself reads
+    /// the requests in <see cref="StepPart"/>.
     /// </summary>
     public IReadOnlyList<PanelButton> ConsumePresses()
     {
-        if (_pending.Count == 0) return System.Array.Empty<PanelButton>();
-        var taken = _pending.ToArray();
-        _pending.Clear();
+        var taken = new List<PanelButton>();
+        foreach (var cap in _caps)
+        {
+            if (!cap.Requested) continue;
+            cap.Requested = false;
+            taken.Add(cap.Which);
+            if (cap.Phase != ContactPhase.High) ShowDepressed(cap, false);
+        }
         return taken;
     }
 
-    /// <summary>Drop queued presses and pop the mushroom back out. Used by a
-    /// scene reset, so a run never starts holding a stale E-stop.</summary>
+    /// <summary>True while this momentary button's contact is closed -- what its
+    /// tag reports, and what the cap shows.</summary>
+    public bool IsHeld(PanelButton which)
+    {
+        foreach (var cap in _caps)
+        {
+            if (cap.Which == which && !cap.Maintained) return cap.Phase == ContactPhase.High;
+        }
+        return false;
+    }
+
+    /// <summary>Drop queued presses, open every contact and pop the mushroom
+    /// back out. Used by a scene reset, so a run never starts holding a stale
+    /// E-stop or half a press.</summary>
     public void ResetButtons()
     {
-        _pending.Clear();
         EmergencyStopEngaged = false;
         foreach (var cap in _caps)
         {
-            cap.Dwell = 0.0f;
+            cap.Requested = false;
+            cap.Phase = ContactPhase.Idle;
+            cap.TicksLeft = 0;
             cap.Mesh.Position = cap.Centre;
         }
     }
 
-    public override void _Process(double delta)
-    {
-        foreach (var cap in _caps)
-        {
-            if (cap.Dwell <= 0.0f) continue;
-
-            cap.Dwell -= (float)delta;
-            if (cap.Dwell <= 0.0f)
-            {
-                cap.Dwell = 0.0f;
-                cap.Mesh.Position = cap.Centre;
-            }
-        }
-    }
+    private static void ShowDepressed(Cap cap, bool down) =>
+        cap.Mesh.Position = cap.Centre - new Vector3(0, 0, down ? CapTravel : 0);
 
     public void SetGreenLamp(bool on)
     {
@@ -589,20 +630,6 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         return null;
     }
 
-    /// <summary>
-    /// Suffixes this panel drove high on the previous tick, so they can be
-    /// dropped on this one.
-    ///
-    /// State of the machine, so it lives on the machine. It used to be a
-    /// dictionary of full tag ids in the editor, keyed by instance id, which
-    /// had to be cleaned up by hand whenever a panel was deleted, renamed or
-    /// reset — and a pulse outliving its panel would clear a tag belonging to
-    /// whatever took the name next. Suffixes rather than ids, so a rename
-    /// carries the pending clear with it instead of stranding a pulse latched
-    /// high under the new name.
-    /// </summary>
-    private readonly List<string> _pulsedLastTick = new();
-
     public void DeclareTags(PartTagBuilder tags) => tags
         // The buttons are Inputs: the operator drives them and the controller
         // reads them, exactly like a sensor. `estop` is normally closed, so a
@@ -628,6 +655,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         settings.Put("setpoint_max", SetpointMax);
         settings.Put("setpoint_unit", SetpointUnit);
         settings.Put("setpoint", Setpoint);
+        settings.Put("press_hold", PressHold);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -635,6 +663,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         if (settings.Number("setpoint_min") is { } min) SetpointMin = min;
         if (settings.Number("setpoint_max") is { } max) SetpointMax = max;
         if (settings.Text("setpoint_unit") is { } unit) SetpointUnit = unit;
+        if (settings.Number("press_hold") is { } hold) PressHold = hold;
         // Last, so the clamp sees the range this template asked for rather than
         // the default 0-100 one.
         if (settings.Number("setpoint") is { } value) SetSetpoint(value);
@@ -643,12 +672,41 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
     /// <summary>
     /// One tick of the panel.
     ///
-    /// Momentary buttons are the delicate part. The click arrives on the frame
-    /// clock, the tags are written on the physics clock, and the two do not line
-    /// up — so the panel queues presses and this drains the queue. Dropping the
-    /// previous tick's pulse *before* raising this tick's is what bounds a press
-    /// to exactly one scan: a program polling the tag sees a clean edge whether
-    /// the mouse was tapped or held down for a second.
+    /// Momentary buttons are the delicate part: <b>one click, one edge, held
+    /// long enough to be seen.</b>
+    ///
+    /// The click arrives on the frame clock and the tags are written on the
+    /// physics clock, so a click only <i>requests</i> a press and this is where
+    /// the contact moves. It used to close for exactly one tick -- a clean edge
+    /// for a program scanning inside the engine, and it guarded a real
+    /// mistake: a held mouse button is not a held contact. But no controller
+    /// scans inside the engine. Every one reads the tag through a transport
+    /// that samples it, and a Modbus master polling every 50 ms saw 12 of 50
+    /// one-tick clicks and missed the other 38 (IP-31,
+    /// tools/click_poll_repro.py). The grader held its presses 150 ms, so a
+    /// program could pass the grader and still ignore the Start button.
+    ///
+    /// So a press is now a real contact with a minimum on-time and a minimum
+    /// off-time, both <see cref="PressHold"/>:
+    /// <list type="bullet">
+    /// <item>A click on an open contact closes it on the next tick, and it stays
+    /// closed for the hold however long the mouse is down -- still one edge
+    /// per click.</item>
+    /// <item>A click while it is closed is the same press: the button is
+    /// already down and cannot be pressed again. A double-click is one
+    /// press, not a Start and a phantom second Start, which matters to every
+    /// program that toggles on a button.</item>
+    /// <item>A click while it is re-opening is kept, and closes the contact
+    /// once it has been open for the hold. Two deliberate presses stay two
+    /// edges, each with a low gap on both sides a poller can see. Dropping
+    /// it would lose a press the cap was seen to take; raising it at once
+    /// would leave a gap one tick wide, and a poller reads that as one long
+    /// press.</item>
+    /// </list>
+    ///
+    /// Written every tick, so the tag is always what the contact is -- and a
+    /// rename carries a press in progress with it, because the state lives on
+    /// the cap and not on a tag id.
     ///
     /// The E-stop is level, not edge, and inverted: the contact is normally
     /// closed, so the tag is true while the circuit is healthy.
@@ -658,18 +716,12 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         if (tick.TryBit("green", out bool green)) SetGreenLamp(green);
         if (tick.TryBit("red", out bool red)) SetRedLamp(red);
 
-        foreach (string suffix in _pulsedLastTick) tick.Write(suffix, false);
-        _pulsedLastTick.Clear();
-
-        // Existence and "written" must stay two separate checks here — TrySet's
-        // return also folds in "already true" and "forced", and skipping the
-        // Add for either of those would leave a pulse never cleared next tick.
-        foreach (var which in ConsumePresses())
+        int hold = PressHoldTicks;
+        foreach (var cap in _caps)
         {
-            string suffix = TagSuffix(which);
-            if (tick.IdFor(suffix) is not { } id || !tick.Tags.Contains(id)) continue;
-            tick.Tags.Set(id, true);
-            _pulsedLastTick.Add(suffix);
+            if (cap.Maintained) continue;
+            StepContact(cap, hold);
+            tick.Write(TagSuffix(cap.Which), cap.Phase == ContactPhase.High);
         }
 
         tick.Write("estop", !EmergencyStopEngaged);
@@ -689,6 +741,34 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
             tick.Tags.Set(setpointId, (double)Setpoint);
     }
 
+    /// <summary>Move one momentary contact on by a tick. See
+    /// <see cref="StepPart"/> for the rules.</summary>
+    private static void StepContact(Cap cap, int hold)
+    {
+        switch (cap.Phase)
+        {
+            case ContactPhase.High:
+                // Already down: a click now is the press in progress.
+                cap.Requested = false;
+                if (cap.TicksLeft > 0) { cap.TicksLeft--; return; }
+                cap.Phase = ContactPhase.Low;
+                cap.TicksLeft = hold - 1;
+                ShowDepressed(cap, false);
+                return;
+
+            case ContactPhase.Low:
+                if (cap.TicksLeft > 0) { cap.TicksLeft--; return; }
+                cap.Phase = ContactPhase.Idle;
+                break;   // open long enough; a waiting click may close it now
+        }
+
+        if (!cap.Requested) return;
+        cap.Requested = false;
+        cap.Phase = ContactPhase.High;
+        cap.TicksLeft = hold - 1;
+        ShowDepressed(cap, true);
+    }
+
     public void DescribeControls(IPartInspector ui)
     {
         // The pot's scale plate. A panel dragged in from the palette used to get
@@ -705,6 +785,9 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         // Last, and clamped by the range above it: a setpoint typed outside the
         // plate is not a setpoint, it is a mislabelled instrument.
         ui.Slider("Setpoint", Setpoint, -10000.0f, 10000.0f, 0.01f, value => SetSetpoint(value));
+        // How long a click holds Start/Stop/Reset closed (IP-31). Raise it for
+        // a link that samples slower than 200 ms.
+        ui.Slider("Press Hold (s)", PressHold, 0.05f, 2.0f, 0.05f, value => PressHold = value);
     }
 
     public void ResetPart(PartReset reset)
@@ -712,7 +795,10 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         // A reset must not start the next run holding a struck E-stop, and must
         // not deliver a press queued before the reset.
         ResetButtons();
-        _pulsedLastTick.Clear();
+        foreach (var cap in _caps)
+        {
+            if (!cap.Maintained) reset.Write(TagSuffix(cap.Which), false);
+        }
         reset.Write("estop", true);
     }
 

@@ -93,7 +93,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `scanner.code` | PLC reads | int | 3x8 + 3x9 | `ScannerCodeHi` %IW108 + `ScannerCodeLo` %IW109 -> `ScannerCode` : DINT | last code read, held until the next: 101 short, 102 tall, 201 metal | yes |
 | `scanner.enable` | PLC writes | bit | 0x9 | `ScannerEnable` %QX101.1 | arm the reader; FALSE switches it off -- and an output you never write is FALSE | yes |
 | `scanner.present` | PLC reads | bit | 1x12 | `ScannerPresent` %IX101.4 | TRUE while a carton is under the reader | yes |
-| `scanner.read` | PLC reads | bit | 1x13 | `ScannerRead` %IX101.5 | one engine tick wide on each new read -- a polled link can miss it | yes |
+| `scanner.read` | PLC reads | bit | 1x13 | `ScannerRead` %IX101.5 | TRUE for 0.2 s on each new read, as `code` changes -- latch the code on the rising edge | yes |
 | `tower.green` | PLC writes | bit | 0x10 | `TowerGreen` %QX101.2 | tower lamp, green |  |
 | `tower.red` | PLC writes | bit | 0x11 | `TowerRed` %QX101.3 | tower lamp, red |  |
 | `tower.yellow` | PLC writes | bit | 0x12 | `TowerYellow` %QX101.4 | tower lamp, yellow |  |
@@ -110,9 +110,10 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
   [`../check_starters.sh`](../check_starters.sh) compiles the helpers with
   OpenPLC's own matiec and checks them against two million bit patterns.
 - **Anything polled can be missed if it is short.** OpenPLC's master reads
-  every 50 ms. A button press in the 3D scene is one physics tick (about 17 ms)
-  on the tag bus, so a click can fall between two polls; the grader holds each
-  press for 0.15 s. The same goes the other way: hold an output you want the
-  scene to see for well over one polling period.
+  every 50 ms. A button click in the 3D scene holds its tag for 0.2 s (the
+  panel's Press Hold setting) and then leaves it off for at least as long, so
+  every click is read several times: act on its rising edge, not its level.
+  The grader holds each press for 0.15 s. The same goes the other way: hold an
+  output you want the scene to see for well over one polling period.
 - **An output you never write is FALSE.** The master rewrites the whole coil
   block on every poll, including coils your program does not touch.

@@ -214,12 +214,22 @@ pedestal and both lamps, and would turn the whole station into one big Start
 button. Everything that reflects the mode (toolbar label, palette visibility)
 listens to `ModeChanged` rather than tracking it separately.
 
-**Momentary means one scan, not one mouse-down.** A click lands on the frame
-clock and tags are written on the physics clock, so `ButtonPanel` *queues*
-presses and `SceneEditor.StepPanelButtons` drains the queue, clearing the
-previous tick's pulse before raising this one's. Holding the mouse down, or
-clicking three times between two ticks, still yields exactly one clean edge.
-Note `panel.estop` is inverted on purpose: **normally closed**, true = healthy.
+**Momentary means one edge, held long enough to be seen.** A click lands on the
+frame clock and tags are written on the physics clock, so a click on
+`ButtonPanel` only *requests* a press and `ButtonPanel.StepPart` moves the
+contact. It closes for `PressHold` (200 ms, a panel setting) and then stays open
+at least as long; a click while it is closed is the same press (a double-click
+is one Start, not a phantom second one), and a click while it re-opens waits out
+the gap and then makes its own edge. Holding the mouse down still yields exactly
+one clean edge. The rule used to be *one scan, not one mouse-down*, and the pulse
+was one physics tick: correct against a program scanning inside the engine,
+which no controller does. A Modbus master polling every 50 ms saw 12 of 50 such
+clicks (IP-31, `tools/click_poll_repro.py`), and the grader, holding its presses
+0.15 s, could pass a program that ignored the real Start button. The hold is
+counted in physics ticks, not simulated seconds, because Godot paces ticks by
+the wall clock at every time scale and the poller is on the wall clock too.
+`scanner.read` follows the same rule (`BarcodeScanner.ReadHold`). Note
+`panel.estop` is inverted on purpose: **normally closed**, true = healthy.
 
 **The engine speaks the tag bus and nothing else.** Every PLC protocol lives in
 the Python sidecar, so "connect to a PLC" always means "start the sidecar

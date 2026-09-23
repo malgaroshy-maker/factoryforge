@@ -17,8 +17,8 @@ namespace FactoryForge.Sim;
 /// asserted here is the *effect*: that the drive's actual speed lags its
 /// reference rather than snapping to it, that the diverter's two limit switches
 /// are mutually exclusive mid-sweep, that the gantry reports a position it
-/// actually travelled to, that the scanner's read pulse is one scan wide and
-/// does not repeat for the same item, that the gauge's needle moves, that the
+/// actually travelled to, that the scanner's read pulse is one edge held long
+/// enough to be polled and does not repeat for the same item, that the gauge's needle moves, that the
 /// beacon lights, and that the heater has a real time constant and a fault that
 /// the command cannot reveal.
 /// </summary>
@@ -70,6 +70,10 @@ public partial class NewPartsSelfTest : Node
     /// </summary>
     private bool _sawReadPulse;
 
+    /// <summary>Ticks the read output was seen on during the real-tick
+    /// window, before CheckScanner takes over on the hand-turned clock.</summary>
+    private int _readHighTicks;
+
     public override void _PhysicsProcess(double delta)
     {
         // Two ticks of grace: parts build their geometry in _Ready, which does
@@ -83,7 +87,7 @@ public partial class NewPartsSelfTest : Node
             // the tree first), so this sees the previous tick's dispatch. A
             // sticky flag is the right shape for that; an equality check on one
             // chosen tick would not be.
-            if (Bit("barcodescanner.read")) _sawReadPulse = true;
+            if (Bit("barcodescanner.read")) { _sawReadPulse = true; _readHighTicks++; }
             return;
         }
         if (_step != 12 || _done) return;
@@ -91,10 +95,14 @@ public partial class NewPartsSelfTest : Node
 
         try
         {
+            // The scanner first: it measures how long the read output stayed
+            // on, counting on from the real ticks above, and every other check
+            // turns the editor's clock by hand -- which would run that hold
+            // down unobserved.
+            CheckScanner();
             CheckVariableDrive();
             CheckPivotDiverter();
             CheckGantry();
-            CheckScanner();
             CheckGauge();
             CheckBeacon();
             CheckHeater();
@@ -272,16 +280,28 @@ public partial class NewPartsSelfTest : Node
                $"a tall carton reads as {BarcodeScanner.CodeTallCarton} (got {(int)Num($"{id}.code")})");
         Expect(_sawReadPulse, "the scanner pulsed `read` when the carton arrived");
 
-        // The pulse is one scan wide and does not repeat for the same item —
-        // which is what forces a program to latch it rather than poll it.
-        int pulses = 0;
+        // One edge per item, held long enough for a polled link to see
+        // (IP-31) -- it used to be one scan wide, and a 50 ms Modbus poll saw
+        // about one read in three -- and never repeated for the same item,
+        // which is what forces a program to latch the code on the edge.
+        var scanner = Part<BarcodeScanner>(id);
+        bool prev = Bit($"{id}.read");
+        int high = _readHighTicks + (prev ? 1 : 0);
+        int edges = 0;
         for (int i = 0; i < 60; i++)
         {
             Editor._PhysicsProcess(Tick);
-            if (Bit($"{id}.read")) pulses++;
+            bool now = Bit($"{id}.read");
+            if (now) high++;
+            if (now && !prev) edges++;
+            prev = now;
         }
-        Expect(pulses == 0,
-               $"the read pulse does not repeat while the same item sits under the head (saw {pulses})");
+        Expect(edges == 0,
+               $"the read pulse does not repeat while the same item sits under the head (saw {edges} more edges)");
+        int minTicks = Mathf.CeilToInt(0.2f * Engine.PhysicsTicksPerSecond - 1e-3f);
+        Expect(high == scanner.ReadHoldTicks && high >= minTicks,
+               $"the read output stays on for its hold, at least 0.2 s = {minTicks} ticks (on for {high})");
+        Expect(!Bit($"{id}.read"), "and is off again once the hold has run out");
 
         _probeBox?.QueueFree();
         _probeBox = null;

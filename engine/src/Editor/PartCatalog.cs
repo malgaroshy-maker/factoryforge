@@ -93,7 +93,7 @@ public static class PartCatalog
             "Twelve beams reporting the height of the tallest blocked one — one part instead of a low/high sensor pair.",
             () => new LightArray()),
         new("BarcodeScanner", "Barcode Scanner", "SENSORS",
-            "Overhead reader. Reports what the item *is* as a code, with a one-scan read pulse a program has to latch.",
+            "Overhead reader. Reports what the item *is* as a code, with a read pulse whose rising edge a program has to latch the code on.",
             () => new BarcodeScanner()),
         new("RotaryEncoder", "Measuring Encoder", "SENSORS",
             "Wheel riding the belt it is placed over, counting pulses per metre travelled — so product can be tracked by distance instead of by a timer.",

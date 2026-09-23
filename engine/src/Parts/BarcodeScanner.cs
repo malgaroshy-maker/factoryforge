@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FactoryForge.TagBus;
 using Godot;
 
@@ -9,9 +10,11 @@ namespace FactoryForge.Parts;
 /// The library could tell a controller that something was *there* and how tall
 /// or how heavy it was. It could not tell it *what* the thing was. That is the
 /// gap this fills, and it fills it in the shape real identification devices
-/// use: a code plus a one-scan read pulse. A program that does not latch the
-/// code on that pulse loses it, which is a mistake worth making here rather
-/// than on a line.
+/// use: a code plus a read pulse. A program that does not latch the code on
+/// that pulse's rising edge loses it when the next item is read, which is a
+/// mistake worth making here rather than on a line. The pulse is held for
+/// <see cref="ReadHold"/> rather than one scan, so a polled link can see it
+/// (IP-31).
 ///
 /// Codes come from what the item actually is, so the reading is predictable and
 /// a sorting program written against it is testable:
@@ -39,11 +42,28 @@ public partial class BarcodeScanner : Node3D, IPart
     /// `.enable` is an Output rather than a setting.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Last code read. Held until the next read, the way a real
-    /// reader's output register is.</summary>
+    /// <summary>Last code reported. Held until the next read is reported, the
+    /// way a real reader's output register is -- and it changes on the same
+    /// tick <see cref="ReadPulse"/> rises, so the edge and the code it belongs
+    /// to always arrive together.</summary>
     public int LastCode { get; private set; }
 
-    /// <summary>True for exactly the tick a new item was read.</summary>
+    /// <summary>
+    /// How long the read output stays on for each read, in seconds, and the
+    /// least time it stays off before the next one (IP-31). The same 200 ms,
+    /// for the same reason, as <see cref="ButtonPanel.PressHold"/>: it used to
+    /// be one physics tick, and no controller reads this tag except through a
+    /// transport that samples it -- a Modbus master polling every 50 ms sees a
+    /// 17 ms pulse about one time in three. Counted in physics ticks, which
+    /// Godot paces by the wall clock at every time scale, as the poller is.
+    /// </summary>
+    public float ReadHold { get; set; } = ButtonPanel.DefaultPressHold;
+
+    public int ReadHoldTicks =>
+        System.Math.Max(1, (int)System.Math.Ceiling(ReadHold * Engine.PhysicsTicksPerSecond - 1e-3));
+
+    /// <summary>True while the read output is on: from the tick a read is
+    /// reported, for <see cref="ReadHoldTicks"/> ticks.</summary>
     public bool ReadPulse { get; private set; }
 
     /// <summary>Something is in the read window right now.</summary>
@@ -57,6 +77,19 @@ public partial class BarcodeScanner : Node3D, IPart
 
     private ulong _lastReadId;
     private float _sweep;
+
+    /// <summary>Reads made while the output was still on, or still off for
+    /// its minimum, waiting to be reported in order. Two items read closer
+    /// together than two holds -- a short gap on a fast belt -- would otherwise
+    /// share one edge, and the program would latch the first code and never
+    /// see the second. Bounded, because a belt that can outrun the reader
+    /// indefinitely is a scene problem and not a queue to grow.</summary>
+    private readonly Queue<int> _unreported = new();
+    private const int MaxUnreported = 8;
+
+    private enum OutputPhase { Idle, On, Off }
+    private OutputPhase _phase;
+    private int _phaseTicksLeft;
 
     private float WindowY => PartLayout.BeltSurface + HeightAboveBelt;
 
@@ -179,15 +212,13 @@ public partial class BarcodeScanner : Node3D, IPart
     }
 
     /// <summary>
-    /// One scan. Returns having set <see cref="ReadPulse"/> true for this tick
-    /// only if a *different* item entered the window — holding one carton under
-    /// the head does not re-read it, which is exactly the behaviour that makes
-    /// the pulse worth latching.
+    /// One scan. A read is made only when a *different* item enters the window
+    /// — holding one carton under the head does not re-read it, which is
+    /// exactly the behaviour that makes the pulse worth latching — and is then
+    /// reported through the held output (see <see cref="StepOutput"/>).
     /// </summary>
     public void Scan(float delta)
     {
-        ReadPulse = false;
-
         BoxPhysics? item = null;
         if (Enabled && _window is not null)
         {
@@ -210,11 +241,54 @@ public partial class BarcodeScanner : Node3D, IPart
         else if (item.GetInstanceId() != _lastReadId)
         {
             _lastReadId = item.GetInstanceId();
-            LastCode = item.IsMetal ? CodeMetal : (item.IsTall ? CodeTallCarton : CodeShortCarton);
-            ReadPulse = true;
+            if (_unreported.Count >= MaxUnreported) _unreported.Dequeue();
+            _unreported.Enqueue(item.IsMetal ? CodeMetal : (item.IsTall ? CodeTallCarton : CodeShortCarton));
         }
 
+        StepOutput();
         UpdateVisuals(delta);
+    }
+
+    /// <summary>
+    /// Move the read output on by a tick: on for the hold, then off for at
+    /// least the hold, then the next waiting read. One read, one rising edge,
+    /// with the code register changed on that same tick. A disarmed reader
+    /// reports nothing, so disarming drops the output and anything waiting --
+    /// but still keeps the output off for its minimum, so re-arming cannot make
+    /// an edge a poller would read as no edge at all.
+    /// </summary>
+    private void StepOutput()
+    {
+        int hold = ReadHoldTicks;
+
+        if (!Enabled)
+        {
+            _unreported.Clear();
+            if (_phase == OutputPhase.On) { _phase = OutputPhase.Off; _phaseTicksLeft = hold - 1; }
+        }
+
+        switch (_phase)
+        {
+            case OutputPhase.On:
+                if (_phaseTicksLeft > 0) { _phaseTicksLeft--; break; }
+                _phase = OutputPhase.Off;
+                _phaseTicksLeft = hold - 1;
+                break;
+
+            case OutputPhase.Off:
+                if (_phaseTicksLeft > 0) { _phaseTicksLeft--; break; }
+                _phase = OutputPhase.Idle;
+                goto case OutputPhase.Idle;
+
+            case OutputPhase.Idle:
+                if (_unreported.Count == 0) break;
+                LastCode = _unreported.Dequeue();
+                _phase = OutputPhase.On;
+                _phaseTicksLeft = hold - 1;
+                break;
+        }
+
+        ReadPulse = _phase == OutputPhase.On;
     }
 
     private void UpdateVisuals(float delta)
@@ -250,8 +324,9 @@ public partial class BarcodeScanner : Node3D, IPart
         // anything is a part that looks broken when it is placed.
         .Bit("enable", $"Scanner {tags.Index} Enable", TagKind.Output, initial: true)
         .Int("code", $"Scanner {tags.Index} Code", TagKind.Input)
-        // One scan wide, exactly like a panel button's pulse -- which is why a
-        // program has to latch it rather than poll it.
+        // One edge per read, held long enough for a polled link to see
+        // (ReadHold) -- and the code changes with it, so a program latches the
+        // code on the edge, the same way it would on a real reader.
         .Bit("read", $"Scanner {tags.Index} Read Pulse", TagKind.Input)
         .Bit("present", $"Scanner {tags.Index} Item Present", TagKind.Input);
 
@@ -259,12 +334,14 @@ public partial class BarcodeScanner : Node3D, IPart
     {
         settings.Put("height", HeightAboveBelt);
         settings.Put("window", WindowLength);
+        settings.Put("read_hold", ReadHold);
     }
 
     public void ApplySettings(PartSettings settings)
     {
         if (settings.Number("height") is { } height) HeightAboveBelt = height;
         if (settings.Number("window") is { } window) WindowLength = window;
+        if (settings.Number("read_hold") is { } hold) ReadHold = hold;
     }
 
     public void StepPart(PartTick tick)
@@ -274,10 +351,10 @@ public partial class BarcodeScanner : Node3D, IPart
         Scan(tick.Dt);
 
         tick.Write("code", LastCode);
-        // Written every tick, so the pulse falls again on the very next one
-        // without anybody having to remember to clear it — the panel's
-        // queue-and-drain problem does not arise here because the read happens
-        // on the same clock the tag is written on.
+        // Written every tick, so the tag is always what the output is. The
+        // read is made on the same clock the tag is written on, so there is
+        // no click to queue here the way the panel has to -- only reads that
+        // arrive faster than the output can report them.
         tick.Write("read", ReadPulse);
         tick.Write("present", IsPresent);
     }
@@ -288,6 +365,21 @@ public partial class BarcodeScanner : Node3D, IPart
                   value => { WindowLength = value; Rebuild(); });
         ui.Slider("Head Height (m)", HeightAboveBelt, 0.15f, 0.9f, 0.02f,
                   value => { HeightAboveBelt = value; Rebuild(); });
+        // Read by StepOutput every tick, so no rebuild. Raise it for a link
+        // that samples slower than 200 ms (IP-31).
+        ui.Slider("Read Pulse (s)", ReadHold, 0.05f, 2.0f, 0.05f, value => ReadHold = value);
+    }
+
+    public void ResetPart(PartReset reset)
+    {
+        // A new run starts with nothing read and the output off -- not halfway
+        // through reporting a carton from the last one.
+        _unreported.Clear();
+        _phase = OutputPhase.Idle;
+        _phaseTicksLeft = 0;
+        _lastReadId = 0;
+        ReadPulse = false;
+        reset.Write("read", false);
     }
 
     public PartOperation? Operation => new("scanner", "enable");

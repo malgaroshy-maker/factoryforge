@@ -55,7 +55,7 @@ themselves worked fine. So end-to-end coverage is not optional here.
 
 | # | Check | Command |
 |---|---|---|
-| C1 | Panel buttons: one-scan pulse, maintained E-stop, cap picking incl. rotated | `--self-test=buttons` |
+| C1 | Panel buttons: one edge per click held ≥ 0.2 s, double-click rules, maintained E-stop, cap picking incl. rotated | `--self-test=buttons` |
 | C2 | Rename and I/O export | `--self-test=io` |
 | C3 | Scene save/load round-trip, every part type, undo/redo | `--self-test=scene` |
 | C4 | Every shipped start-screen template loads and registers its I/O  Each one also carries a **brief** — what to build, which tags to use, how you know it works — and every tag a brief names must exist in the scene the editor has just loaded. A shipped template with no brief is a failure, not a skip. | `--self-test=templates` |

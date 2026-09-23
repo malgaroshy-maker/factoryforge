@@ -96,7 +96,7 @@ names.
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX35.2 | Stop button, momentary: a short pulse per press | yes |
 | `pickstation.fault` | PLC reads | `PickstationFault` | Bool | DBX35.3 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
 | `scanner.present` | PLC reads | `ScannerPresent` | Bool | DBX35.4 | TRUE while a carton is under the reader | yes |
-| `scanner.read` | PLC reads | `ScannerRead` | Bool | DBX35.5 | one engine tick wide on each new read -- a polled link can miss it | yes |
+| `scanner.read` | PLC reads | `ScannerRead` | Bool | DBX35.5 | TRUE for 0.2 s on each new read, as `code` changes -- latch the code on the rising edge | yes |
 
 `int` travels as a `DInt` and `float` as a `Real`: the OPC UA driver writes
 Int32 and Float, and a member of any other type is refused as a type mismatch.

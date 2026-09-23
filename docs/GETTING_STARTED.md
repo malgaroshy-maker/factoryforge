@@ -126,7 +126,7 @@ Click the **control panel** beside the belt:
 
 | Control | Tag | Behaviour |
 |---|---|---|
-| Start (green) | `panel.start` | Momentary — high for exactly one scan per click |
+| Start (green) | `panel.start` | Momentary — one rising edge per click, held 0.2 s so a polled link sees it (the panel's *Press Hold* setting). Act on the edge, not the level |
 | Stop (black) | `panel.stop` | Momentary |
 | Reset (blue) | `panel.reset` | Momentary |
 | E-Stop (red mushroom) | `panel.estop` | Maintained — click to strike, click again to release |

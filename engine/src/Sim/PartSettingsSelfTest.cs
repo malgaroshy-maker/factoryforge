@@ -49,7 +49,7 @@ public partial class PartSettingsSelfTest : Node
         ["Chute"] = new[] { "Incline (deg)", "Surface Friction" },
         ["Emitter"] = new[] { "Metal every Nth" },
         ["Remover"] = new[] { "Counts into" },
-        ["ButtonPanel"] = new[] { "Scale Min", "Scale Max", "Scale Unit", "Setpoint" },
+        ["ButtonPanel"] = new[] { "Scale Min", "Scale Max", "Scale Unit", "Setpoint", "Press Hold (s)" },
         // IP-17's five. Not in any template yet (IP-14 places them), so the
         // test builds a scene of its own for them.
         ["LimitSwitch"] = new[] { "Lever (m)", "Height (m)", "Bounce (ms)" },
@@ -432,6 +432,28 @@ public partial class PartSettingsSelfTest : Node
         Drive("Scale Min", 300.0);
         Expect(Mathf.IsEqualApprox(panel.Setpoint, 300.0f),
                $"raising the bottom of the plate carries the pot up with it (got {panel.Setpoint})");
+
+        CheckPressHold(panel);
+    }
+
+    /// <summary>IP-31. The observable is how long a click then holds
+    /// <c>panel.start</c> high through the editor's real tick -- what a
+    /// controller polling the tag gets -- not the number in the property.
+    /// </summary>
+    private void CheckPressHold(ButtonPanel panel)
+    {
+        Drive("Press Hold (s)", 0.5);
+        panel.Press(PanelButton.Start);
+
+        int high = 0;
+        for (int i = 0; i < 60; i++)
+        {
+            Editor._PhysicsProcess(1.0 / 60.0);
+            if (Tags.Contains("panel.start") && Tags.Visible("panel.start") is true) high++;
+        }
+        int wanted = Mathf.CeilToInt(0.5f * Engine.PhysicsTicksPerSecond - 1e-3f);
+        Expect(high == wanted,
+               $"Press Hold 0.5 s holds a click on Start for {wanted} ticks (held {high})");
     }
 
     // ---------- IP-17: the five industrial parts, in a scene of their own

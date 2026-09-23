@@ -7,7 +7,7 @@ namespace FactoryForge.Parts;
 /// A maintained rotary selector (CP-09).
 ///
 /// Every operator input in the library so far is momentary or latching: Start
-/// and Stop pulse for one scan, the mushroom latches until Reset. A selector is
+/// and Stop give one held edge per click, the mushroom latches until Reset. A selector is
 /// the third kind, and the one an Auto/Manual program is built around — it
 /// *stays where it is put*, and the controller reads a position rather than an
 /// edge. A student who has only ever handled momentary bits has never had to

@@ -50,6 +50,12 @@ public partial class PanelPressTrain : Node
 
     public ulong Seed { get; set; } = 31;
 
+    /// <summary>Seconds after each click to click again, or negative for single
+    /// clicks. Shorter than the panel's hold, the second click lands on a
+    /// button that is already down and must not make an edge of its own;
+    /// longer, it must make exactly one more.</summary>
+    public float SecondAfter { get; set; } = -1.0f;
+
     private ButtonPanel? _panel;
     private TagBusServer? _bus;
     private readonly RandomNumberGenerator _rng = new();
@@ -58,6 +64,8 @@ public partial class PanelPressTrain : Node
     private double _nextPressAt = -1;
     private double _lastPressAt = -1;
     private int _made;
+    private int _seconds;
+    private double _secondAt = -1;
 
     private bool _prev;
     private int _edges;
@@ -132,24 +140,35 @@ public partial class PanelPressTrain : Node
             return;
         }
 
+        if (_secondAt >= 0 && now >= _secondAt)
+        {
+            Click();
+            _seconds++;
+            _secondAt = -1;
+            return;
+        }
+
         if (_made < Presses)
         {
             if (now < _nextPressAt) return;
-            var (from, dir) = StartCapRay();
-            Editor!.PressControlAtRay(from, dir);
+            Click();
             _made++;
-            _lastPressAt = now;
+            _secondAt = SecondAfter >= 0 ? now + SecondAfter : -1;
             _nextPressAt = now + _rng.RandfRange(GapMin, GapMax);
             return;
         }
 
-        if (now - _lastPressAt < Settle) return;
+        if (_secondAt >= 0 || now - _lastPressAt < Settle) return;
 
         string runs = _highRuns.Count == 0
             ? "none"
             : $"{Min(_highRuns)}..{Max(_highRuns)}";
-        bool ok = _edges == _made;
-        Finish($"press-train: presses={_made} edges={_edges} high_ticks={runs} " +
+        // A second click inside the hold is the same press; one after it is
+        // a press of its own.
+        int expected = _made + (SecondAfter >= _panel!.PressHold ? _seconds : 0);
+        bool ok = _edges == expected;
+        Finish($"press-train: presses={_made + _seconds} expected={expected} edges={_edges} " +
+               $"hold_s={_panel.PressHold:0.###} high_ticks={runs} " +
                $"physics_hz={Engine.PhysicsTicksPerSecond} " + (ok ? "OK" : "FAIL"),
                ok ? 0 : 1);
     }
@@ -166,6 +185,13 @@ public partial class PanelPressTrain : Node
         if (now) _highRun++;
         if (!now && _prev) _highRuns.Add(_highRun);
         _prev = now;
+    }
+
+    private void Click()
+    {
+        var (from, dir) = StartCapRay();
+        Editor!.PressControlAtRay(from, dir);
+        _lastPressAt = Now;
     }
 
     private static int Min(List<int> xs) { int m = int.MaxValue; foreach (int x in xs) if (x < m) m = x; return m; }

@@ -343,16 +343,21 @@ public void Operate(PartOperate op) => op.ToggleBit(op.Region);
 Take the ray into local space. A test written against world axes passes for an
 unrotated part and misses every control once someone turns it.
 
-**Decide momentary or maintained, and mean it.** A momentary contact is high for
-*one scan*, not for as long as the mouse is down — clicks arrive on the frame
-clock and tags are written on the physics clock, so queue presses when the click
-lands and drain the queue in your `StepPart`, clearing the previous tick's pulse
-before raising this tick's. `ButtonPanel` does it in about eight lines. Keep the
-pending list as *suffixes*, not full tag ids: a rename moves the tags, and a
-stored id would strand a pulse latched high under the new name. A maintained
-control latches until it is clicked again.
-Getting this wrong produces a button that looks fine and gives a PLC program a
-rising edge of unpredictable width.
+**Decide momentary or maintained, and mean it.** A momentary contact is *one
+edge, held long enough to be seen* — not high for as long as the mouse is down,
+and not high for one scan either. Clicks arrive on the frame clock and tags are
+written on the physics clock, so record the click when it lands and move the
+contact in your `StepPart`. Then hold it: every controller reads the tag through
+a transport that samples it, and a one-tick (17 ms) pulse was missed by a 50 ms
+Modbus poll 38 times in 50 (IP-31). `ButtonPanel` closes the contact for
+`PressHold` (200 ms, counted in physics ticks, which run on the wall clock at
+every time scale), keeps it open at least as long afterwards, treats a click
+while it is closed as the same press, and holds a click made while it is
+re-opening until the gap has run out. Keep that state on the part, not keyed by
+tag id: a rename moves the tags, and a stored id would strand a press latched
+high under the new name. A maintained control latches until it is clicked
+again. Getting this wrong produces a button that looks fine and gives a PLC
+program a rising edge of unpredictable width — or none at all.
 
 Finally: **the input path needs its own test.** Take the click position from the
 `InputEventMouseButton`, never from `GetViewport().GetMousePosition()`, and

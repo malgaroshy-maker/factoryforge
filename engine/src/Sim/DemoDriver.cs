@@ -98,9 +98,10 @@ public partial class DemoDriver : Node
         EmitSignal(SignalName.ActiveChanged, false);
     }
 
-    // Physics clock, not the frame clock: a panel button's rising edge is
-    // exactly one _PhysicsProcess tick wide (SceneEditor.StepPanelButtons sets
-    // it, then clears it at the top of the next physics tick), and headless
+    // Physics clock, not the frame clock: a panel button's rising edge was
+    // exactly one _PhysicsProcess tick wide when this was written (it is held
+    // for ButtonPanel.PressHold now, IP-31, but the reasoning stands for any
+    // one-tick signal), and headless
     // has no vsync holding _Process and _PhysicsProcess at the same cadence --
     // uncapped, the engine can run several physics ticks per frame to catch
     // up. A frame-clock reader can watch a pulse turn on and off again between

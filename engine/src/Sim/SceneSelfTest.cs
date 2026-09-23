@@ -207,6 +207,8 @@ public partial class SceneSelfTest : Node
                     props["setpoint_max"] = "450";
                     props["setpoint_unit"] = "kPa";
                     props["setpoint"] = "175";
+                    // How long a click holds a momentary button (IP-31).
+                    props["press_hold"] = "0.45";
                     break;
                 case "DigitalDisplay":
                     props["unit"] = "kg";
@@ -237,6 +239,7 @@ public partial class SceneSelfTest : Node
                 case "BarcodeScanner":
                     props["height"] = "0.37";
                     props["window"] = "0.31";
+                    props["read_hold"] = "0.35";
                     break;
                 case "AnalogGauge":
                     props["scale_min"] = "-20";
@@ -382,6 +385,7 @@ public partial class SceneSelfTest : Node
                     ExpectNear(props, "setpoint", 175.0f, part.Type);
                     Expect(props.GetValueOrDefault("setpoint_unit") == "kPa",
                            "ButtonPanel kept the unit its scale plate is graduated in");
+                    ExpectNear(props, "press_hold", 0.45f, part.Type);
                     break;
                 case "VariableConveyor":
                     Expect(!props.ContainsKey("speed"),
@@ -403,6 +407,7 @@ public partial class SceneSelfTest : Node
                 case "BarcodeScanner":
                     ExpectNear(props, "height", 0.37f, part.Type);
                     ExpectNear(props, "window", 0.31f, part.Type);
+                    ExpectNear(props, "read_hold", 0.35f, part.Type);
                     break;
                 case "AnalogGauge":
                     ExpectNear(props, "scale_max", 260.0f, part.Type);

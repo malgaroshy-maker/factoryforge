@@ -201,7 +201,7 @@ PROGRAM pick_and_place_cell
     PanelStop        AT %IX101.2  : BOOL;  (* panel.stop        1x10  Stop button, momentary: a short pulse per press *)
     PickstationFault AT %IX101.3  : BOOL;  (* pickstation.fault 1x11  drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told *)
     ScannerPresent   AT %IX101.4  : BOOL;  (* scanner.present   1x12  TRUE while a carton is under the reader *)
-    ScannerRead      AT %IX101.5  : BOOL;  (* scanner.read      1x13  one engine tick wide on each new read -- a polled link can miss it *)
+    ScannerRead      AT %IX101.5  : BOOL;  (* scanner.read      1x13  TRUE for 0.2 s on each new read, as `code` changes -- latch the code on the rising edge *)
     (* --- PLC reads: input registers, two per value --------------------- *)
     GantryPositionHi AT %IW100    : WORD;  (* gantry.position 3x0   high word of GantryPosition *)
     GantryPositionLo AT %IW101    : WORD;  (* gantry.position 3x1   low word of GantryPosition *)
