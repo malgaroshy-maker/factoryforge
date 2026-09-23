@@ -22,6 +22,11 @@ namespace FactoryForge.Sim;
 ///
 /// Every part type is exercised, not a representative sample, because the cost
 /// of forgetting one is exactly the silent kind.
+///
+/// Then every part is driven and has to report an effect — see
+/// <c>SceneSelfTest.Probes.cs</c> (IP-07). A part that saves and loads
+/// perfectly and does nothing when its PLC writes to it is the other half of
+/// the same silent failure.
 /// </summary>
 public partial class SceneSelfTest : Node
 {
@@ -52,14 +57,33 @@ public partial class SceneSelfTest : Node
         // Phase 1 builds and saves; phase 2 loads and inspects. They cannot be
         // the same tick: parts build their geometry in _Ready, which does not
         // run until the node has been in the tree for a frame.
+        if (_done) return;
         if (++_step == 3) { BuildAndSave(); return; }
-        if (_step != 8 || _done) return;
-        _done = true;
+        if (_step < 8) return;
+
+        // After the synchronous checks, every part is probed for an effect
+        // (IP-07). That runs over real physics ticks, so it is a phase of its
+        // own rather than one more call below; see SceneSelfTest.Probes.cs.
+        if (_step > 8)
+        {
+            bool finished;
+            try
+            {
+                finished = StepProbes();
+            }
+            catch (System.Exception ex)
+            {
+                _failures.Add(ex.Message);
+                GD.PrintErr($"  FAIL  probes threw: {ex.GetType().Name}: {ex.Message}");
+                finished = true;
+            }
+            if (finished) Finish();
+            return;
+        }
 
         try
         {
             CheckRoundTrip();
-            CheckDispatchSurvives();
             CheckClearUndo();
             CheckRotateAndDuplicate();
             CheckACopiedRemoverCountsItsOwn();
@@ -73,6 +97,26 @@ public partial class SceneSelfTest : Node
             _failures.Add(ex.Message);
             GD.PrintErr($"  FAIL  threw: {ex.GetType().Name}: {ex.Message}");
         }
+
+        try
+        {
+            StartProbes();
+        }
+        catch (System.Exception ex)
+        {
+            _failures.Add(ex.Message);
+            GD.PrintErr($"  FAIL  starting the probes threw: {ex.GetType().Name}: {ex.Message}");
+            Finish();
+        }
+    }
+
+    /// <summary>Report and quit, once. Latched: Quit() takes effect at the end
+    /// of the frame, and a second pass would run against state the first one
+    /// already changed (gotcha 13).</summary>
+    private void Finish()
+    {
+        if (_done) return;
+        _done = true;
 
         if (_failures.Count == 0)
         {
@@ -389,31 +433,6 @@ public partial class SceneSelfTest : Node
                     break;
             }
         }
-    }
-
-    /// <summary>
-    /// The loaded parts have to survive being driven. Every output tag is set
-    /// high at once — not a realistic scene state, deliberately: it reaches
-    /// every branch of the part dispatch in one tick, which is where a null
-    /// reference in a rarely-used part would hide.
-    /// </summary>
-    private void CheckDispatchSurvives()
-    {
-        foreach (var tag in Tags)
-        {
-            if (tag.Kind != TagKind.Output) continue;
-            Tags.Set(tag.Id, tag.Type switch
-            {
-                TagType.Bit => true,
-                TagType.Int => 1,
-                _ => (object)50.0,
-            });
-        }
-
-        // If the dispatch throws, the catch in _PhysicsProcess records it.
-        Editor!._PhysicsProcess(1.0 / 60.0);
-        Editor._PhysicsProcess(1.0 / 60.0);
-        Expect(true, "part dispatch survives every output being driven");
     }
 
     /// <summary>

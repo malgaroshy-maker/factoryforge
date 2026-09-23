@@ -44,7 +44,7 @@ and saving it stores a sample and restores it as configuration. See Step 1.
 >
 > | Where | What it does |
 > |---|---|
-> | `engine/src/Parts/<YourPart>.cs` | the machine, and everything about it: its tags, its settings, its tick, its inspector rows, its reset, what a click on it means |
+> | `engine/src/Parts/<YourPart>.cs` | the machine, and everything about it: its tags, its settings, its tick, its inspector rows, its reset, what a click on it means — and its `Probe`: how to drive it and what it reports when driven (Step 3). A part without one fails `--self-test=scene` by name |
 > | `PartCatalog.All` | one entry: palette button, group, tooltip, and the factory that builds it |
 >
 > That is the whole list. It used to be eight, and the two extra entries nobody
@@ -57,10 +57,11 @@ and saving it stores a sample and restores it as configuration. See Step 1.
 >
 > `--self-test=partcontract` fails if a concrete part type name appears anywhere
 > in `engine/src/Editor/` outside those two places, so the list cannot quietly
-> grow back. `--self-test=scene` walks the catalog and checks every part
-> round-trips through a save and a load. `--self-test=newparts` and
-> `--self-test=lineparts` are the pattern for behaviour: assert the *effect*,
-> not that the tag exists.
+> grow back. `--self-test=scene` walks the catalog, checks every part
+> round-trips through a save and a load, and then drives every part through its
+> `Probe` and fails any that does not report the effect it promised (IP-07).
+> `--self-test=newparts` and `--self-test=lineparts` are the pattern for deeper
+> behaviour: assert the *effect*, not that the tag exists.
 
 ---
 
@@ -72,7 +73,9 @@ One file under `engine/src/Parts/`. It is a Godot `Node3D` (or a `StaticBody3D`,
 or an `Area3D` — whatever the machine needs) that implements `IPart`.
 
 Every member of `IPart` except `DeclareTags` has a default, so a part with no
-settings and nothing to do each tick says so by staying silent:
+settings and nothing to do each tick says so by staying silent. `Probe` has a
+default too, but a catalog part left without one fails `--self-test=scene`
+(Step 3):
 
 ```csharp
 using FactoryForge.TagBus;
@@ -120,6 +123,13 @@ public partial class CustomPart : Node3D, IPart
     // Rows in the property inspector.
     public void DescribeControls(IPartInspector ui) =>
         ui.Slider("Speed (m/s)", Speed, 0.1f, 2.0f, 0.1f, value => Speed = value);
+
+    // How --self-test=scene proves the machine works: drive this, expect that.
+    // See Step 3.
+    public PartProbe? Probe => new("`active` made", r => r.Bit("active"))
+    {
+        Drive = PartProbe.Drives(("run", true)),
+    };
 }
 ```
 
@@ -183,11 +193,64 @@ That is the whole build. Now prove it does something.
 
 `--self-test=scene` already covers the save/load round-trip from the catalog
 entry alone, and `--self-test=partcontract` already checks nothing outside your
-file learned your type's name. Neither of them checks your machine *works*.
+file learned your type's name.
 
-Add a check to `--self-test=newparts`, `--self-test=lineparts` or
-`--self-test=controlparts` (or a new self-test of your own) that asserts an
-**effect**: not "the tag exists" but
+**Give your part a `Probe`.** Of the members of `IPart` that have a default, it
+is the one that is not optional in practice: `--self-test=scene` fails any catalog part that has
+neither a probe nor an entry, with a reason, on `SceneSelfTest.ProbeExemptions`
+(and that list only accepts a part that declares no tags at all — today, the
+chute). A probe says how to drive the part and what it will report:
+
+```csharp
+public PartProbe? Probe => new(
+    "`active` made",                    // the effect, for the failure message
+    r => r.Bit("active"))               // ...and as a predicate
+{
+    Drive = PartProbe.Drives(("run", true)),
+    WithinTicks = 30,                   // physics ticks, 60 a second
+};
+```
+
+The test lays one of every part out on a fresh scene, leaves them undriven for
+half a second, applies every probe's stimulus at once and waits. For each part
+it asserts two things, and both matter:
+
+- the effect is **absent at rest**. A predicate that already holds with nothing
+  driven cannot tell your part working from your part doing nothing, and the
+  test says so;
+- the effect **appears** within `WithinTicks` of the stimulus. A part whose
+  `StepPart` does nothing fails here, by name.
+
+Two rules keep a probe honest, and the test enforces both. `Drive` may only
+name tags your part declared as `TagKind.Output`: a probe that writes its own
+feedback proves nothing. And the predicate's reader, `r`, only reads tags your
+part declared as `TagKind.Input` — reading back the output the test just wrote
+is the same tautology from the other end. `r.AtStart("temperature")` is the
+value when the stimulus was applied, so "rises" can be said without guessing
+where it started.
+
+Not every part is driven by an output. The stimulus can also be:
+
+| Stimulus | For | Worked example |
+|---|---|---|
+| `Carton = new ProbeCarton(localBottomCentre, Tall, Metal)` | a part that senses product: the test parks a frozen carton there | `PhotoelectricSensor`, `LimitSwitch`, `Remover` |
+| `Operate = new[] { "left", "right" }` | a part a hand drives: the test calls your `Operate` once per region | `TwoHandControl`, `SelectorSwitch` |
+| `Companion = new ProbeCompanion("ConveyorBelt", offset, drive)` | a part that measures another machine: the test places and drives it | `RotaryEncoder` (a belt beneath), `FlowMeter` (a pump in reach) |
+
+A part that only *shows* something — a lamp, a needle, a display — reports no
+tags, so its predicate reads its own rendered state instead: the light's
+energy, the needle pivot's rotation, the label's text. Read what the renderer
+draws, not a flag set beside it (`StackLight`, `AnalogGauge`, `DigitalDisplay`).
+Like `DeclareTags`, building the probe must not depend on anything `_Ready`
+builds; only the predicate runs on the placed part.
+
+Then prove the probe the same way as everything else: stub your `StepPart`
+body out, run `--self-test=scene`, and watch it fail naming your part.
+
+A probe is one effect, not a behaviour test. For more, add a check to
+`--self-test=newparts`, `--self-test=lineparts` or `--self-test=controlparts`
+(or a new self-test of your own) that asserts an **effect**: not "the tag
+exists" but
 "forcing `.fault` stopped the belt", "the reference ramped and `actual` lagged
 it", "a raised blade held a carton on a belt that was still running". A test
 that passes while the simulation does nothing is not a test, and it is
