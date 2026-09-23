@@ -10,7 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import Item, PlantScene, Script
+from ..plant import (CARTON_LENGTH, Item, PlantScene, Script, declare_stack_light,
+                     fault_input)
+from ..templates import template
 
 
 SCENE = "accumulation-buffer"
@@ -33,18 +35,33 @@ SCENE = "accumulation-buffer"
 # the encoder has to have been counting the whole time, so "the line stopped"
 # is ruled out as the explanation.
 #
-# Numbers from `engine/templates/accumulation_buffer.json`: 100 pulses per
-# metre, a 0.26 m blade stroke at 2 m/s, a drive ramping at 60 %/s.
+# Read from the template (IP-19). As shipped: 100 pulses per metre, a 0.26 m
+# blade stroke at 2 m/s, a drive ramping at 60 %/s to 0.5 m/s. Positions are
+# world X.
+_PLANT = template(SCENE)
+_BUFFER = _PLANT.part("buffer", "VariableConveyor")
+_ENCODER = _PLANT.part("enc", "RotaryEncoder")
+_STOP = _PLANT.part("stop", "StopGate")
+_OUTFEED = _PLANT.part("outfeed", "ConveyorBelt")
+
+#: IP-19 finding, left as it was pending a decision: the template places the
+#: blade (`stop`) at x = 2.6 and the exit eye at x = 2.75. This model has
+#: always had them 0.4 m further on, the blade at the buffer deck's far end.
+#: It also starts a carton at x = 0 where the template's emitter is at 0.2.
 AB_BLADE_POS = 3.0
 AB_EYE_POS = 3.15
-AB_REMOVER_POS = 4.2
+#: Off the end of the outfeed, where the `released` remover waits.
+AB_REMOVER_POS = _OUTFEED.span()[1]
+#: Centre to centre of two cartons queued nose to tail: this model's own.
 AB_PITCH = 0.22
-AB_PULSES_PER_METRE = 100.0
-AB_BLADE_TIME = 0.26 / 2.0
-AB_RAMP = 60.0
-#: The drive's top speed, before and after the exam changes it.
-AB_SPEED_FIRST = 0.5
-AB_SPEED_THEN = 1.0
+AB_PULSES_PER_METRE = _ENCODER.number("pulses_per_metre")
+AB_BLADE_TIME = _STOP.number("stroke") / _STOP.number("lift_speed")
+AB_RAMP = _BUFFER.number("accel_rate")
+#: The drive's top speed, before and after the exam changes it. The change is
+#: the exam's, and not a number from anywhere else: it doubles.
+AB_SPEED_FIRST = _BUFFER.number("max_speed")
+AB_SPEEDUP = 2.0
+AB_SPEED_THEN = AB_SPEED_FIRST * AB_SPEEDUP
 AB_SPEED_CHANGES_AT = 40.0
 
 
@@ -67,7 +84,12 @@ class AccumulationScene(PlantScene):
             Tag("stop.down", "Stop (Blade Down)", "bit", "input", value=True),
             Tag("exit_eye.detect", "Diffuse Sensor (Detect)", "bit", "input"),
             Tag("released.count", "Remover (Count)", "int", "input"),
+            Tag("enc.rate", "Encoder Rate (pulses/s)", "float", "input"),
+            fault_input("buffer", "VFD Conveyor Drive Fault"),
+            fault_input("outfeed", "Conveyor Drive Fault"),
+            fault_input("stop", "Stop Drive Fault"),
         )
+        declare_stack_light(self.tags)
 
         self.max_speed = AB_SPEED_FIRST
         self.actual_percent = 0.0
@@ -134,11 +156,20 @@ class AccumulationScene(PlantScene):
         self.tags.set("stop.up", up)
         self.tags.set("stop.down", self.blade <= 0.001)
 
-        self.pulses += speed * AB_PULSES_PER_METRE * dt
+        # `RotaryEncoder.cs` (`Step`): the rate is surface speed times pulses
+        # per metre, and it reads the belt whether or not the count is held
+        # in reset.
+        rate = speed * AB_PULSES_PER_METRE
+        self.pulses += rate * dt
         if self.bit("enc.reset"):
             self.pulses = 0.0
         self.tags.set("enc.count", int(self.pulses))
+        self.tags.set("enc.rate", rate)
 
+        # IP-19 finding, left as it was pending a decision: every carton moves
+        # at the buffer drive's speed, including the ones past the blade. In
+        # the template those ride the `outfeed` belt, which runs at its own
+        # `speed` (0.5 m/s as shipped) and only while `outfeed.rotate` is true.
         moved = speed * dt
         if up:
             self.travel_while_held += moved
@@ -151,7 +182,7 @@ class AccumulationScene(PlantScene):
             was = item.position
             limit = float("inf")
             if blocking and was < AB_BLADE_POS:
-                limit = AB_BLADE_POS - 0.10
+                limit = AB_BLADE_POS - CARTON_LENGTH / 2
             if ahead is not None:
                 limit = min(limit, ahead - AB_PITCH)
             item.position = min(item.position + moved, limit)

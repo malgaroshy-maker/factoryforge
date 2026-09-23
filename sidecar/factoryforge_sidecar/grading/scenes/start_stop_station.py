@@ -10,7 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import ESTOP_LIMIT, Item, PlantScene, Script
+from ..plant import (CARTON_LENGTH, ESTOP_LIMIT, Item, PlantScene, Script,
+                     declare_stack_light, fault_input)
+from ..templates import template
 
 
 SCENE = "start-stop-station"
@@ -35,16 +37,25 @@ SCENE = "start-stop-station"
 # Reset *and* Start. Every one of those is metres of belt, not the state of a
 # lamp.
 
-#: `engine/templates/start_stop_station.json`: belt speed 0.5 m/s, 3 m deck.
-SS_BELT_SPEED = 0.5
+#: Read from the template (IP-19). Positions are world X, and the emitter
+#: sits at 0, which is where a carton starts.
+_PLANT = template(SCENE)
+SS_BELT_SPEED = _PLANT.part("belt", "ConveyorBelt").number("speed")
+#: IP-19 finding, left as it was pending a decision: the template places
+#: `part_present` at x = 2.0. This model has always had it at 1.5.
 SS_EYE_POS = 1.5
-SS_EYE_WINDOW = 0.20
+#: A carton's length along the belt (`BoxPhysics.cs`), which is how long it
+#: holds the beam.
+SS_EYE_WINDOW = CARTON_LENGTH
 #: Where a carton *enters* the eye's window, which is the moment the beam
 #: breaks and therefore the physical event a counter counts. Counting from the
 #: middle of the window instead put the plant's ledger 0.1 m -- a fifth of a
 #: second -- behind the sensor, so a correct controller that stopped the belt
 #: on its fourth edge was marked as having made three.
 SS_EYE_BREAK = SS_EYE_POS - SS_EYE_WINDOW / 2
+#: IP-19 finding, left as it was pending a decision: the belt ends at x = 3.0
+#: and the template's `counter` remover takes x = 3.0 to 3.5. This model
+#: retires a carton at 2.8.
 SS_REMOVER_POS = 2.8
 
 
@@ -59,7 +70,9 @@ class StartStopScene(PlantScene):
             Tag("produced.value", "Produced (Display)", "int", "output"),
             Tag("part_present.detect", "Diffuse Sensor (Detect)", "bit", "input"),
             Tag("counter.count", "Remover (Count)", "int", "input"),
+            fault_input("belt", "Conveyor Drive Fault"),
         )
+        declare_stack_light(self.tags)
 
         self.items: list[Item] = []
         self.removed: list[Item] = []

@@ -20,9 +20,12 @@ from factoryforge_sidecar.tags import Tag, TagTable
 # *kind* of thing: 1-D kinematic plants with no physics, faithful about tag
 # semantics, sensor windows and -- where the lesson is analog -- about the
 # engine's own dynamics, which are copied from the C# part and the template
-# that configures it rather than invented. Every constant that matters carries
-# the file it came from, so a change to a part shows up there as a number that
-# no longer matches rather than as a rubric that is quietly wrong.
+# that configures it rather than invented. A number the template sets is read
+# from the template (`grading/templates.py`, IP-19), so retuning the scene
+# retunes the model. A number the C# part owns is a named constant carrying
+# the file it came from, and `tests/test_grade_templates.py` reads that file
+# and fails when the two stop matching -- so a change to a part shows up as a
+# failed test rather than as a rubric that is quietly wrong.
 #
 # Three rules each of them follows.
 #
@@ -47,6 +50,19 @@ from factoryforge_sidecar.tags import Tag, TagTable
 # ignores a command it is not obeying. See docs/GRADING.md, which says so.
 
 
+#: A carton, from `engine/src/Parts/BoxPhysics.cs`, which owns these and which
+#: no template configures: `Length` and `Width` (:22, :23), the two heights
+#: (`Height`, :24), and the two densities (`CartonDensity` :29,
+#: `MetalDensity` :33). Length is along the belt, so it is also how long a
+#: carton holds a beam broken as it passes.
+CARTON_LENGTH = 0.20
+CARTON_WIDTH = 0.24
+SHORT_HEIGHT = 0.10
+TALL_HEIGHT = 0.30
+CARDBOARD_DENSITY = 150.0
+STEEL_DENSITY = 900.0
+
+
 @dataclass
 class Item:
     """A carton, in one dimension. Height and mass are the plant's secret.
@@ -54,7 +70,7 @@ class Item:
     `height` is metres, `mass` kilograms -- both from `BoxPhysics.cs`, where a
     carton is 0.20 x H x 0.24 at 150 kg/m3 and a steel one at 900.
     """
-    height: float = 0.10
+    height: float = SHORT_HEIGHT
     metal: bool = False
     position: float = 0.0
     id: int = 0
@@ -65,8 +81,8 @@ class Item:
 
     @property
     def mass(self) -> float:
-        density = 900.0 if self.metal else 150.0
-        return 0.20 * self.height * 0.24 * density
+        density = STEEL_DENSITY if self.metal else CARDBOARD_DENSITY
+        return CARTON_LENGTH * self.height * CARTON_WIDTH * density
 
     @property
     def grams(self) -> float:
@@ -228,11 +244,13 @@ class PlantScene:
         for tag in tags:
             self.tags.add(tag)
 
-    def _eye(self, items: list[Item], position: float, window: float = 0.20) -> bool:
+    def _eye(self, items: list[Item], position: float,
+             window: float = CARTON_LENGTH) -> bool:
         """A diffuse photoelectric sensor: true while an item is in its window.
 
         Matches `sorting_scene.py`, which is in turn the semantics
-        `PhotoelectricSensor.cs` gives a diffuse head.
+        `PhotoelectricSensor.cs` gives a diffuse head: a beam across the belt
+        is broken for as long as a carton's length covers it.
         """
         half = window / 2
         return any(abs(item.position - position) <= half for item in items)
@@ -255,3 +273,28 @@ def shuffled_cycle(rng: random.Random, values: list, repeats: int) -> list:
 #: rather than with the start / stop station, because the guarded cell allows
 #: the same 200 ms of belt after its gate opens.
 ESTOP_LIMIT = 0.200
+
+
+# --- tags the engine declares and no rubric reads -------------------------
+#
+# A student is handed the scene's tag list and writes a mapping against it, so
+# the grader has to offer the same list the engine does -- ids, types and
+# kinds -- or a mapping that works on the 3D scene fails to connect to the
+# exam. `tests/test_grade_templates.py` holds every graded scene to the tag set
+# the engine registers. Some of those tags are the plant's business and are
+# modelled; these two kinds are declared and nothing more.
+
+def declare_stack_light(tags: TagTable, prefix: str = "tower") -> None:
+    """A `StackLight`'s three lamps: outputs the program may write, and which
+    nothing on the line reads -- `StackLight.cs` only lights them."""
+    for colour in ("green", "yellow", "red"):
+        tags.add(Tag(f"{prefix}.{colour}", f"Stack Light {colour.title()}",
+                     "bit", "output"))
+
+
+def fault_input(prefix: str, title: str) -> Tag:
+    """A part's `.fault` input. Declared so the tag list matches the scene a
+    student is handed, never raised: no exam injects a fault (docs/GRADING.md,
+    "Fault injection is not graded"), so the plant never reads it back either.
+    A rubric that starts injecting one must also make the model obey it."""
+    return Tag(f"{prefix}.fault", title, "bit", "input")

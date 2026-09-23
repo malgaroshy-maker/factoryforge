@@ -10,7 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import Item, PlantScene, Script, shuffled_cycle
+from ..plant import (Item, PlantScene, Script, declare_stack_light, fault_input,
+                     shuffled_cycle)
+from ..templates import template
 
 
 SCENE = "pick-and-place-cell"
@@ -37,24 +39,51 @@ SCENE = "pick-and-place-cell"
 # held carried air -- which a timed sequencer does the moment it grips before a
 # carton has been indexed.
 #
-# Numbers from `engine/templates/pick_and_place_cell.json`: a 2.4 m rail at
-# 80 %/s with a 1.5 % in-position window, a 0.52 m stroke at 1.3 m/s, and an
-# infeed behind a VFD ramping at 35 %/s to 0.8 m/s.
-PP_INFEED_TO = 2.0
+# Read from the template (IP-19). As shipped: a 2.4 m rail at 80 %/s with a
+# 1.5 % in-position window, a 0.52 m stroke at 1.3 m/s, and an infeed behind a
+# VFD ramping at 35 %/s to 0.8 m/s. Positions along the line are world X; the
+# emitter sits at 0, where a carton starts. The gantry's are percent of its rail.
+_PLANT = template(SCENE)
+_INFEED = _PLANT.part("infeed", "VariableConveyor")
+_SCANNER = _PLANT.part("scanner", "BarcodeScanner")
+_STATION = _PLANT.part("pickstation", "ConveyorBelt")
+_GANTRY = _PLANT.part("gantry", "PickPlaceArm")
+
+PP_INFEED_TO = _INFEED.span()[1]
+#: IP-19 finding, left as it was pending a decision: the template places the
+#: scanner at x = 1.5. This model has always had it at 1.4.
 PP_SCANNER_POS = 1.4
+#: Half the scanner's read window: a carton is in front of it while its centre
+#: is this close.
+PP_SCANNER_REACH = _SCANNER.number("window") / 2
+#: IP-19 finding, left as it was pending a decision: this model picks at, and
+#: detects at, x = 2.9, the far end of the station deck, and calls that 0 % of
+#: the rail. In the template the `atstation` eye is at x = 2.5 and the rail's
+#: 0 % is at x = 2.4 (`PickPlaceArm.cs:290`: centre minus half `rail_length`).
 PP_STATION_POS = 2.9
-PP_STATION_END = 3.0
-PP_STATION_SPEED = 0.5
-PP_INFEED_MAX = 0.8
-PP_INFEED_RAMP = 35.0
-PP_TOLERANCE = 1.5
-PP_LOWER_TIME = 0.52 / 1.3
-PP_TRAVEL_FIRST = 80.0
-PP_TRAVEL_THEN = 32.0
+PP_STATION_END = _STATION.span()[1]
+PP_STATION_SPEED = _STATION.number("speed")
+PP_INFEED_MAX = _INFEED.number("max_speed")
+PP_INFEED_RAMP = _INFEED.number("accel_rate")
+PP_TOLERANCE = _GANTRY.number("tolerance")
+PP_LOWER_TIME = _GANTRY.number("stroke") / _GANTRY.number("lower_speed")
+PP_TRAVEL_FIRST = _GANTRY.number("travel_speed")
+#: The exam's slow-down, and not a number from anywhere else: after
+#: PP_TRAVEL_CHANGES_AT the axis runs at two fifths of the template's speed.
+PP_SLOWDOWN = 0.4
+PP_TRAVEL_THEN = PP_TRAVEL_FIRST * PP_SLOWDOWN
 PP_TRAVEL_CHANGES_AT = 35.0
 #: Where on the rail the outfeed is. Let go anywhere else and the carton falls.
+#: IP-19 finding, left as it was pending a decision: in the template the
+#: `outfeed` remover spans x = 4.25 to 4.95 under a rail running 2.4 to 4.8,
+#: which is roughly 77 % to the end of the rail. This model accepts 92 % to
+#: the end.
 PP_PLACE_AT = 100.0
 PP_PLACE_WINDOW = 8.0
+#: What `BarcodeScanner.cs` reads off a carton (`CodeShortCarton`,
+#: `CodeTallCarton`, `CodeMetal`, :33-35). The engine derives the code from
+#: what the carton is; this model deals them out shuffled, so the order cannot
+#: be learned.
 PP_CODES = (101, 102, 201)
 
 
@@ -88,7 +117,10 @@ class PickPlaceScene(PlantScene):
             Tag("gantry.holding", "Gantry Holding", "bit", "input"),
             Tag("gantry.fault", "Gantry Drive Fault", "bit", "input"),
             Tag("outfeed.count", "Remover (Count)", "int", "input"),
+            fault_input("infeed", "VFD Conveyor Drive Fault"),
+            fault_input("pickstation", "Conveyor Drive Fault"),
         )
+        declare_stack_light(self.tags)
 
         self.travel_speed = PP_TRAVEL_FIRST
         self.actual_percent = 0.0
@@ -233,7 +265,7 @@ class PickPlaceScene(PlantScene):
     def _step_sensors(self) -> None:
         waiting = [i for i in self.items if i is not self.carried]
         in_window = [i for i in waiting
-                     if abs(i.position - PP_SCANNER_POS) <= 0.13]
+                     if abs(i.position - PP_SCANNER_POS) <= PP_SCANNER_REACH]
         self.tags.set("scanner.present", bool(in_window))
         fresh = [i for i in in_window if i.id not in self._scanned]
         if fresh and self.bit("scanner.enable"):

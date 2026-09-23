@@ -7,10 +7,14 @@ controllers are in `grading/reference/guarded_cell.py`.
 
 from __future__ import annotations
 
+import math
+
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import ESTOP_LIMIT, Item, PlantScene, Script
+from ..plant import (ESTOP_LIMIT, Item, PlantScene, Script, declare_stack_light,
+                     fault_input)
+from ..templates import template
 
 
 SCENE = "guarded-cell"
@@ -40,21 +44,45 @@ SCENE = "guarded-cell"
 # scanner withdraws one, which is what a mute somebody has taped on looks like
 # from inside the machine.
 #
-# Numbers from `engine/templates/guarded_cell.json` and the parts: a relay with
-# a 0.5 s channel-sync window that energises on a RISING reset edge only, a
-# contactor with a 0.06 s pull-in, a scanner with a 6 s mute limit, and a 0.7 m
-# cylinder stroke at 1.4 m/s.
-GC_BELT_SPEED = 0.5
+# Read from the template (IP-19), with the behaviour from the parts: a relay
+# that energises on a RISING reset edge only, within a channel-sync window; a
+# contactor with a pull-in delay; a scanner with a mute limit; a cylinder with a
+# stroke and a rod speed. As shipped: 0.5 s, 0.06 s, 6 s, and 0.7 m at 1.4 m/s.
+# Positions are world X; the emitter sits at 0, where a carton starts.
+_PLANT = template(SCENE)
+_BELT = _PLANT.part("belt", "ConveyorBelt")
+_SCANNER = _PLANT.part("scanner", "AreaScanner")
+_CYLINDER = _PLANT.part("cylinder", "PneumaticCylinder")
+_STARTER = _PLANT.part("starter", "MotorStarter").engineering_units()
+_RELAY = _PLANT.part("relay", "SafetyRelay")
+
+GC_BELT_SPEED = _BELT.number("speed")
+#: IP-19 finding, left as it was pending a decision: none of this model's
+#: positions along the line is where the template puts the part. The template
+#: has the mute eye at x = 1.0, the push eye at 2.0, the cylinder at 2.5 and
+#: the belt ending at 3.0 over the `line_end` remover (3.0 to 3.5); the
+#: scanner's 1.1 m protective field, centred 1 m off the belt at x = 1.5,
+#: crosses the belt's centreline from x = 1.04 to 1.96, and its 1.6 m warning
+#: field from 0.25 to 2.75. The numbers below are this model's own layout.
 GC_MUTE_EYE_POS = 1.35
 GC_FIELD_FROM = 1.6
 GC_FIELD_TO = 2.4
 GC_PUSH_EYE_POS = 2.8
 GC_STATION_POS = 3.2
 GC_LINE_END_POS = 3.9
-GC_SYNC_WINDOW = 0.5
-GC_PULL_IN = 0.06
-GC_MUTE_LIMIT = 6.0
-GC_ROD_TIME = 0.7 / 1.4
+GC_SYNC_WINDOW = _RELAY.number("sync_window")
+GC_PULL_IN = _STARTER.number("pull_in")
+GC_MUTE_LIMIT = _SCANNER.number("mute_limit")
+GC_ROD_TIME = _CYLINDER.number("stroke") / _CYLINDER.number("rod_speed")
+#: The motor behind the contactor, for `starter.current`: its full-load amps
+#: and how loaded it runs, from the template.
+GC_FLA = _STARTER.number("fla")
+GC_LOAD_PERCENT = _STARTER.number("load_percent")
+#: No template sets these: `MotorStarter.cs` owns them (`InrushFactor` :100,
+#: `InrushDecay` :101). Locked-rotor current is six times full load, decaying
+#: to the running current with a 0.45 s time constant.
+GC_INRUSH_FACTOR = 6.0
+GC_INRUSH_DECAY = 0.45
 
 
 class GuardedCellScene(PlantScene):
@@ -94,7 +122,15 @@ class GuardedCellScene(PlantScene):
                 value=True),
             Tag("transferred.count", "Chute Remover (Count)", "int", "input"),
             Tag("line_end.count", "Line End Remover (Count)", "int", "input"),
+            Tag("starter.current", "Starter Motor Current (A)", "float", "input"),
+            Tag("guard_a.lock", "Gate Leaf A Solenoid Lock", "bit", "output"),
+            Tag("guard_b.lock", "Gate Leaf B Solenoid Lock", "bit", "output"),
+            Tag("guard_a.locked", "Gate Leaf A Locked Shut", "bit", "input"),
+            Tag("guard_b.locked", "Gate Leaf B Locked Shut", "bit", "input"),
+            fault_input("belt", "Conveyor Drive Fault"),
+            fault_input("cylinder", "Cylinder Seized"),
         )
+        declare_stack_light(self.tags)
 
         #: The relay powers up open, so the cell powers up unable to move. That
         #: is not a fault, it is what every safety relay does.
@@ -106,6 +142,7 @@ class GuardedCellScene(PlantScene):
 
         self.contactor = False
         self._coil_timer = 0.0
+        self._start_timer = 0.0
         self.mute_held = 0.0
         self.muted = False
         self.rod = 0.0
@@ -200,6 +237,13 @@ class GuardedCellScene(PlantScene):
         self.tags.set("relay.fault", self.relay_fault)
         self.tags.set("guard_a.closed", a)
         self.tags.set("guard_b.closed", b)
+        # `SafetyGate.cs`: `locked` is the solenoid energised AND the leaf
+        # shut. IP-19 finding, left as it was pending a decision: in the
+        # engine a leaf locked shut cannot be opened, and here the examiner
+        # opens both leaves at 22 s whatever the program asked for -- the
+        # lock is reported, not obeyed.
+        self.tags.set("guard_a.locked", self.bit("guard_a.lock") and a)
+        self.tags.set("guard_b.locked", self.bit("guard_b.lock") and b)
 
     def _step_starter(self, dt: float) -> None:
         # The relay holds the coil circuit open. In the engine it does that by
@@ -224,6 +268,21 @@ class GuardedCellScene(PlantScene):
         elif was and not self.contactor:
             self._stopped_at = self.t
 
+        # `MotorStarter.cs` (`Step`): inrush from the moment the contactor
+        # closes, decaying to the running current. The thermal overload is
+        # not modelled -- `starter.overload` reads healthy throughout, and
+        # at the template's load a running motor never reaches its trip.
+        if self.contactor:
+            if not was:
+                self._start_timer = 0.0
+            self._start_timer += dt
+            running = GC_FLA * max(GC_LOAD_PERCENT, 0.0) / 100.0
+            locked_rotor = GC_FLA * GC_INRUSH_FACTOR
+            current = running + max(locked_rotor - running, 0.0) * math.exp(
+                -self._start_timer / GC_INRUSH_DECAY)
+        else:
+            current = 0.0
+        self.tags.set("starter.current", current)
         self.tags.set("starter.aux", self.contactor)
         self.tags.set("belt.rotate", self.contactor)
 

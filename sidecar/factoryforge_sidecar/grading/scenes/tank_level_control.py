@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script
+from ..plant import Script, declare_stack_light
+from ..templates import template
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
 
@@ -31,10 +32,12 @@ SCENE = "tank-level-control"
 # square root of the head and a controller tuned at the top of the tank behaves
 # differently at the bottom. That is why the second setpoint is a low one.
 #
-# Numbers from `engine/src/Parts/LevelTank.cs` and the template that configures
-# it: 18 %/s at a fully open fill valve, 22 %/s draining a full tank.
-TANK_FILL_RATE = 18.0
-TANK_DRAIN_RATE = 22.0
+# The equation is `engine/src/Parts/LevelTank.cs`'s; the rates are the
+# template's, read from it (IP-19): percent per second at a fully open fill
+# valve, and draining a full tank.
+_TANK = template(SCENE).part("tank", "LevelTank").engineering_units()
+TANK_FILL_RATE = _TANK.number("fill_rate")
+TANK_DRAIN_RATE = _TANK.number("drain_rate")
 
 
 class TankScene(Regulator):
@@ -51,6 +54,7 @@ class TankScene(Regulator):
             Tag("tank.level", "Tank Level (%)", "float", "input"),
             Tag("tank.fault", "Tank Valve Fault", "bit", "input"),
         )
+        declare_stack_light(self.tags)
         self.level = 0.0
 
         high = self.rng.choice([65.0, 70.0, 75.0])

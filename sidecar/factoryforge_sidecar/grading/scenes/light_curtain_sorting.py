@@ -10,7 +10,8 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import Item, PlantScene, Script, shuffled_cycle
+from ..plant import CARTON_LENGTH, Item, PlantScene, Script, fault_input, shuffled_cycle
+from ..templates import template
 
 
 SCENE = "light-curtain-sorting"
@@ -35,16 +36,34 @@ SCENE = "light-curtain-sorting"
 # in flight when the knob turned is judged by the old rule, which is what a
 # real line does and what makes the check fair.
 #
-# Geometry and the curtain from `engine/templates/light_curtain_sorting.json`:
-# a 12-beam array over 0.48 m, a 0.55 m diverter stroke at 1.83 m/s.
-LC_BELT_SPEED = 0.5
+# Geometry and the curtain are read from the template (IP-19). As shipped: a
+# 12-beam array over 0.48 m, and a 0.55 m diverter stroke at 1.83 m/s.
+# Positions are world X; the emitter sits at 0, where a carton starts.
+_PLANT = template(SCENE)
+_BELT = _PLANT.part("belt", "ConveyorBelt")
+_CURTAIN = _PLANT.part("height_gauge", "LightArray")
+_DIVERTER = _PLANT.part("diverter", "PusherMechanism")
+
+LC_BELT_SPEED = _BELT.number("speed")
+#: IP-19 finding, left as it was pending a decision: the template places the
+#: curtain (`height_gauge`) at x = 1.5 and the diverter at x = 2.5. This model
+#: has always had them 0.3 m upstream of that.
 LC_CURTAIN_POS = 1.2
 LC_DIVERTER_POS = 2.2
-LC_REMOVER_POS = 3.0
+#: Off the end of the belt, where the far-end remover waits.
+LC_REMOVER_POS = _BELT.span()[1]
+#: How far either side of the plate a carton can still be struck. No template
+#: sets it: it is the deterministic sorting line's `PusherCatch`
+#: (`engine/src/Scenes/SortingScene.cs:38`). In the rigid-body engine the
+#: diverter here is a 0.34 m plate (`PusherMechanism.cs:75`) striking a carton
+#: 0.20 m long, which is contact within 0.27 m rather than 0.15.
 LC_CATCH = 0.15
-LC_TRAVEL_TIME = 0.55 / 1.83
-LC_BEAMS = 12
-LC_CURTAIN_HEIGHT = 0.48
+LC_TRAVEL_TIME = _DIVERTER.number("stroke") / _DIVERTER.number("speed")
+LC_BEAMS = int(_CURTAIN.number("beams"))
+LC_CURTAIN_HEIGHT = _CURTAIN.number("curtain_height")
+#: `LightArray.cs:116`: the lowest beam sits this far above the belt, so the
+#: shortest carton still breaks one. No template sets it.
+LC_LOWEST_BEAM = 0.02
 
 
 def lc_beam_ladder() -> list[float]:
@@ -56,7 +75,7 @@ def lc_beam_ladder() -> list[float]:
     height is a rung of this ladder and never its true height -- which is why
     the thresholds below sit between rungs and never on one.
     """
-    return [0.02 + (LC_CURTAIN_HEIGHT - 0.02) * i / (LC_BEAMS - 1)
+    return [LC_LOWEST_BEAM + (LC_CURTAIN_HEIGHT - LC_LOWEST_BEAM) * i / (LC_BEAMS - 1)
             for i in range(LC_BEAMS)]
 
 
@@ -76,6 +95,8 @@ class LightCurtainScene(PlantScene):
                 value=True),
             Tag("tall_count.count", "Chute Remover (Count)", "int", "input"),
             Tag("short_count.count", "Far End Remover (Count)", "int", "input"),
+            fault_input("belt", "Conveyor Drive Fault"),
+            fault_input("diverter", "Pusher Drive Fault"),
         )
 
         ladder = lc_beam_ladder()
@@ -130,7 +151,7 @@ class LightCurtainScene(PlantScene):
         # The curtain. Measured once, on the beam break, and stamped with the
         # rule that was in force at that moment.
         in_curtain = [i for i in self.items
-                      if abs(i.position - LC_CURTAIN_POS) <= 0.10]
+                      if abs(i.position - LC_CURTAIN_POS) <= CARTON_LENGTH / 2]
         if in_curtain:
             tallest = max(in_curtain, key=lambda i: i.height)
             rung = max(y for y in self.ladder if y <= tallest.height)

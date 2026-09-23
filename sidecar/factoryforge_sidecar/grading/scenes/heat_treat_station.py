@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script
+from ..plant import Script, declare_stack_light
+from ..templates import template
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
 
@@ -30,17 +31,20 @@ SCENE = "heat-treat-station"
 # (120-20)*0.30 = 30 degC/s of heat, which is 33 % of a 90 degC/s element, and
 # a gain of 3.5 can only produce 33 % from an error of 9.5 degC.
 #
-# Numbers from `engine/src/Parts/HeatingStation.cs` and the template: a 90
-# degC/s element, a loss of 0.30 per degC above a 20 degC room, a thermal mass
-# of 6. That is a first-order lag with a 20-second time constant.
-OVEN_POWER = 90.0
-OVEN_LOSS = 0.30
-OVEN_MASS = 6.0
-OVEN_AMBIENT = 20.0
+# The equation is `engine/src/Parts/HeatingStation.cs`'s; the numbers are the
+# template's, read from it (IP-19). As shipped: a 90 degC/s element, a loss of
+# 0.30 per degC above a 20 degC room, a thermal mass of 6 -- a first-order lag
+# with a 20-second time constant. The worked numbers in the comment above and
+# in `grade_oven` are for those values.
+_OVEN = template(SCENE).part("oven", "HeatingStation").engineering_units()
+OVEN_POWER = _OVEN.number("heater_power")
+OVEN_LOSS = _OVEN.number("loss_rate")
+OVEN_MASS = _OVEN.number("thermal_mass")
+OVEN_AMBIENT = _OVEN.number("ambient")
 #: The part's own at-temperature window, which is about its configured target
 #: and not about the pot -- exactly as the engine has it.
-OVEN_TARGET = 180.0
-OVEN_TOLERANCE = 3.0
+OVEN_TARGET = _OVEN.number("target_temp")
+OVEN_TOLERANCE = _OVEN.number("tolerance")
 
 
 class OvenScene(Regulator):
@@ -61,6 +65,7 @@ class OvenScene(Regulator):
             Tag("oven.attemp", "Heating Station At Temperature", "bit", "input"),
             Tag("oven.fault", "Heating Station Element Fault", "bit", "input"),
         )
+        declare_stack_light(self.tags)
         self.temperature = OVEN_AMBIENT
         self.tags.set("oven.temperature", self.temperature)
 

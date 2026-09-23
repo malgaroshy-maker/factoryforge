@@ -12,6 +12,7 @@ import random
 from factoryforge_sidecar import sorting_scene as scene_model
 
 from ..core import GradedEngine, Report, Watched
+from ..plant import Panel, fault_input
 
 
 SCENE = "sorting-by-height"
@@ -67,8 +68,30 @@ def feed_pattern(seed: int) -> list[bool]:
     return pattern
 
 
+#: The operator panel's pot on the engine's sorting line, which is built in C#
+#: rather than from a template (`SceneEditor.DefaultScene.cs:130`,
+#: `ConfigureSetpoint(0.30f, 1.80f, "s", 0.90f)`). Nothing in this exam turns
+#: it; it is here so `panel.setpoint` reads what the engine's does.
+SORTING_PANEL_SETPOINT = 0.90
+
+
 def build_sorting_scene(seed: int):
-    return scene_model.SortingScene(emit_pattern=feed_pattern(seed))
+    """The sorting line, with the tags the engine's line has and
+    `sorting_scene.py` does not.
+
+    `sorting_scene.py` is the deterministic scene and declares the ten tags
+    `SortingTags` does. The line the engine opens is the rigid-body one, and it
+    also has an operator panel and a drive fault on the conveyor and the
+    pusher (`engine/fixtures/scene_tag_sets.json`). A student's mapping is
+    written against that line, so the exam has to offer the same list. None of
+    the nine is read by this rubric: the panel is not pressed and no fault is
+    raised, so each holds the value an untouched engine shows.
+    """
+    sim = scene_model.SortingScene(emit_pattern=feed_pattern(seed))
+    Panel(sim.tags, setpoint=SORTING_PANEL_SETPOINT).declare(sim.tags)
+    sim.tags.add(fault_input("conveyor", "Conveyor Drive Fault"))
+    sim.tags.add(fault_input("pusher", "Pusher Drive Fault"))
+    return sim
 
 
 def observe_sorting(watched: Watched, dt: float) -> None:

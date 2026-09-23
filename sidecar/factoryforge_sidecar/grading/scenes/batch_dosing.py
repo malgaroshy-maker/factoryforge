@@ -10,7 +10,8 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script
+from ..plant import PlantScene, Script, declare_stack_light, fault_input
+from ..templates import template
 
 
 SCENE = "batch-dosing"
@@ -29,15 +30,25 @@ SCENE = "batch-dosing"
 # that ends on litres takes twice as long and delivers the same; a batch that
 # ends on seconds delivers half and never notices.
 #
-# Numbers from `engine/templates/batch_dosing.json` and the parts: a pump rated
-# 120 L/min ramping at 300 %/s, a flow meter with a 0.2 s time constant whose
-# reset is a level rather than an edge, and a 200 L tank.
-BD_RATED_FIRST = 120.0
-BD_RATED_THEN = 60.0
-BD_RAMP = 300.0
-BD_METER_DAMPING = 0.2
-BD_CAPACITY = 200.0
-BD_TANK_DRAIN_RATE = 10.0
+# The plant is read from the template the engine opens (IP-19): the pump's
+# rating and ramp, the flow meter's time constant, the tank's capacity and
+# drain. `DosingPump.cs`, `FlowMeter.cs` and `LevelTank.cs` hold the
+# equations, which are mirrored below; the numbers are the template's. The
+# meter's reset is a level rather than an edge, as `FlowMeter.cs` has it.
+_PLANT = template(SCENE)
+_PUMP = _PLANT.part("pump", "DosingPump")
+_METER = _PLANT.part("meter", "FlowMeter").engineering_units()
+_TANK = _PLANT.part("tank", "LevelTank").engineering_units()
+
+BD_RATED_FIRST = _PUMP.number("rated_flow")
+#: The exam's re-rating, and not a number from anywhere else: the second batch
+#: runs on a pump rated for half of whatever the template rates it for.
+BD_RERATE = 0.5
+BD_RATED_THEN = BD_RATED_FIRST * BD_RERATE
+BD_RAMP = _PUMP.number("ramp_rate")
+BD_METER_DAMPING = _METER.number("damping")
+BD_CAPACITY = _TANK.number("capacity")
+BD_TANK_DRAIN_RATE = _TANK.number("drain_rate")
 
 
 class BatchDosingScene(PlantScene):
@@ -59,7 +70,9 @@ class BatchDosingScene(PlantScene):
             Tag("meter.rate", "Flow Meter Rate (L/min)", "float", "input"),
             Tag("meter.total", "Flow Meter Total (L)", "int", "input"),
             Tag("tank.level", "Tank Level (%)", "float", "input"),
+            fault_input("tank", "Tank Valve Fault"),
         )
+        declare_stack_light(self.tags)
 
         self.rated = BD_RATED_FIRST
         self.percent = 0.0
@@ -124,6 +137,11 @@ class BatchDosingScene(PlantScene):
             self.meter_total += self.meter_rate / 60.0 * dt
 
         drain = min(max(self.num("tank.drain"), 0.0), 100.0)
+        # IP-19 finding, left as it was pending a decision: the template gives
+        # the tank a fill valve of its own (`fill_rate` 6 %/s), which
+        # `LevelTank.cs` adds to what the pump delivers. This model has never
+        # read `tank.fill`, so a program that opens it raises the engine's
+        # tank and not this one.
         rise = self.flow / 60.0 / BD_CAPACITY * 100.0
         fall = (BD_TANK_DRAIN_RATE * drain / 100.0
                 * (max(self.level, 0.0) / 100.0) ** 0.5)

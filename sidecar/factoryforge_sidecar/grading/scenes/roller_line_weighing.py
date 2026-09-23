@@ -10,7 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import Item, PlantScene, Script, shuffled_cycle
+from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, PlantScene,
+                     Script, fault_input, shuffled_cycle)
+from ..templates import template
 
 
 SCENE = "roller-line-weighing"
@@ -36,10 +38,23 @@ SCENE = "roller-line-weighing"
 #
 # Masses from `BoxPhysics.cs`: 0.20 x H x 0.24 at 150 kg/m3 for cardboard and
 # 900 for steel, so the four classes are 720 g, 2160 g, 4320 g and 12960 g.
-RW_SPEED = 0.4
+#
+# The line is read from the template (IP-19): two decks, each with its own
+# speed, the scale's deck the second of them. Positions are world X; the
+# emitter sits at 0, where a carton starts.
+_PLANT = template(SCENE)
+_INFEED = _PLANT.part("infeed", "RollerConveyor")
+_SCALE = _PLANT.part("scale", "WeighingConveyor").engineering_units()
+
+RW_INFEED_SPEED = _INFEED.number("speed")
+RW_SCALE_SPEED = _SCALE.number("speed")
+#: IP-19 finding, left as it was pending a decision: the template places
+#: `metal_check` at x = 1.5. This model has always had it at 1.2.
 RW_METAL_EYE_POS = 1.2
-RW_DECK_FROM = 2.0
-RW_DECK_TO = 3.0
+RW_DECK_FROM, RW_DECK_TO = _SCALE.span()
+#: IP-19 finding, left as it was pending a decision: the scale's deck ends at
+#: x = 3.0 and the template's `outfeed` remover takes x = 3.0 to 3.5. This
+#: model retires a carton at 3.3.
 RW_REMOVER_POS = 3.3
 #: How long after a carton rolls off the deck the controller has to have made
 #: its mind up. Generous: a scan plus a network round trip.
@@ -59,6 +74,8 @@ class RollerWeighScene(PlantScene):
             Tag("scale.weight", "Weighing Conveyor Weight (g)", "int", "input"),
             Tag("metal_check.detect", "Inductive Sensor (Detect)", "bit", "input"),
             Tag("outfeed.count", "Remover (Count)", "int", "input"),
+            fault_input("infeed", "Roller Conveyor Drive Fault"),
+            fault_input("scale", "Weighing Conveyor Drive Fault"),
         )
 
         #: All four mass classes, shuffled in blocks of four rather than
@@ -94,8 +111,8 @@ class RollerWeighScene(PlantScene):
         emit = self.bit("emitter.emit")
         if emit and not self._emit_edge:
             tall, metal = self.feed[self._fed % len(self.feed)]
-            self.items.append(Item(height=0.30 if tall else 0.10, metal=metal,
-                                   id=self._next_id))
+            self.items.append(Item(height=TALL_HEIGHT if tall else SHORT_HEIGHT,
+                                   metal=metal, id=self._next_id))
             self._fed += 1
             self._next_id += 1
         self._emit_edge = emit
@@ -103,16 +120,17 @@ class RollerWeighScene(PlantScene):
         infeed = self.bit("infeed.rotate")
         deck = self.bit("scale.rotate")
         for item in self.items:
-            moving = deck if RW_DECK_FROM <= item.position < RW_DECK_TO else infeed
-            if moving:
-                item.position += RW_SPEED * dt
+            on_scale = RW_DECK_FROM <= item.position < RW_DECK_TO
+            running = deck if on_scale else infeed
+            if running:
+                item.position += (RW_SCALE_SPEED if on_scale else RW_INFEED_SPEED) * dt
 
         on_deck = [i for i in self.items
                    if RW_DECK_FROM <= i.position <= RW_DECK_TO]
         self.tags.set("scale.weight", int(round(sum(i.grams for i in on_deck))))
         self.tags.set("metal_check.detect",
                       any(i.metal for i in self.items
-                          if abs(i.position - RW_METAL_EYE_POS) <= 0.10))
+                          if abs(i.position - RW_METAL_EYE_POS) <= CARTON_LENGTH / 2))
 
         # A carton's record opens when it reaches the deck and closes when it
         # leaves. `shared` is the plant's own answer to "was this weighed on
