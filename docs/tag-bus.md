@@ -306,6 +306,6 @@ before returning, which is what puts the current value back on the bus.
 
 ## Reference
 
-- Engine-side server: `harness/engine_stub.py` (Python reference implementation)
+- Engine-side server: `sidecar/factoryforge_sidecar/engine_stub.py` (Python reference implementation; `harness/engine_stub.py` is an alias of it)
 - Sidecar client: `sidecar/factoryforge_sidecar/tagbus.py`
 - Tag model: `sidecar/factoryforge_sidecar/tags.py`

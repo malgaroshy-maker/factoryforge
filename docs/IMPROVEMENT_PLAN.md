@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-27. IP-02, IP-03, IP-06 and IP-21 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-28. IP-02, IP-03, IP-06, IP-16, IP-18, IP-21 and IP-26 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -182,6 +182,15 @@ against the frozen binary.
 *Verify:* on a machine with no Python, unzip the release and grade the
 sorting scene to PASS and FAIL.
 *Size:* M.
+*Found while doing IP-18:* two traps for this item. (1) `sidecar/__main__.py`'s
+`demo` still reaches `harness/` through a checkout-relative path, so `demo` is
+probably broken in the frozen sidecar today. That is from reading the code,
+not from a run. It can import `factoryforge_sidecar.engine_stub` directly now.
+(2) PyInstaller's `--collect-submodules factoryforge_sidecar` collects
+*nothing* when the Python running it cannot import the package. That gives a
+frozen grader with no scenes and a sidecar with no drivers. The registry now
+raises "not collected" rather than listing zero scenes, and this item's gate
+must grade a scene against the frozen binary, not only list scenes.
 
 **IP-09 — A no-licence first hour** · gate
 *Files:* `docs/GETTING_STARTED.md`, `README.md`, `examples/openplc/`.
@@ -413,6 +422,21 @@ is from a lockstep run, which is now reproducible, with the command that
 produced it. Ideally a test regenerates it or asserts it (the IP-02 approach).
 *Size:* S.
 
+**IP-28 — Raw analog for outputs and the remaining inputs**
+*Files:* the parts below, `engine/src/Parts/AnalogSignal.cs`, `docs/tag-bus.md`.
+*Done when:* analog *outputs* can take raw counts too: tank fill and drain,
+heater power, pump and fan speed, VFD speed reference, gantry target and gauge
+value. So can the inputs IP-16 left in engineering units: `DosingPump.flow`,
+`CoolingFan.airflow`, `VariableConveyor.actual`, `PickPlaceArm.position`,
+`RotaryEncoder.rate`, the height readings on `LightArray`, `VerticalLift` and
+`ArticulatedArm`, and possibly `ButtonPanel.setpoint`. Also settle the OPC UA
+client writing int tags as Int32: a real `%IW` channel is an S7 `Int`, and a
+student's PLC variable should be able to be one. `tag-bus.md` documents that
+mismatch today; it does not fix it.
+*Verify:* `--self-test=analog` extended to every channel added. The OPC UA
+test writes a raw count into an `Int` node on the test server.
+*Size:* M.
+
 ---
 
 ## Sequencing
@@ -482,9 +506,9 @@ produced it. Ideally a test regenerates it or asserts it (the IP-02 approach).
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | open |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | open |
-| IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | open |
+| IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |
 | IP-17 | Five industrial parts | 3 | XL |  | open |
-| IP-18 | `grade.py` becomes a package | 4 | L |  | open |
+| IP-18 | `grade.py` becomes a package | 4 | L |  | **done** 8d4c395, 38660a3, 48f2691 |
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | open |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | open |
 | IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
@@ -492,8 +516,9 @@ produced it. Ideally a test regenerates it or asserts it (the IP-02 approach).
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
 | IP-25 | The graded plant starts when the controller connects | 2 | S | ● | open |
-| IP-26 | A tag-bus coalescing test that flakes on its own | 1 | S |  | open |
+| IP-26 | A tag-bus coalescing test that flakes on its own | 1 | S |  | **done** 6023e1f (a test bug) |
 | IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | open |
+| IP-28 | Raw analog for outputs and the remaining inputs | 3 | M |  | open |
 
 ## Appendix B — where the findings came from
 
