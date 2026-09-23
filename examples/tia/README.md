@@ -7,6 +7,14 @@ S7-1500 sorts boxes by height in the FactoryForge simulation, over OPC UA.
 Only Advanced provides a virtual Ethernet adapter, and without it nothing
 outside TIA Portal can reach the CPU.
 
+**Starters for the other scenes.** Every graded scene has a folder here --
+`batch-dosing/`, `guarded-cell/`, ... -- with an SCL source (a global DB
+`FF_IO` holding every signal, and an empty FB) and the mapping file for each
+Siemens driver: `opcua_mapping.json`, `snap7_mapping.json`,
+`plcsim_mapping.json`. They are generated; the index is
+[`../README.md`](../README.md). The walkthrough below uses the sorting scene's
+own `FF_IO` and applies to all of them.
+
 ---
 
 ## 0. Sanity-check first, without TIA Portal

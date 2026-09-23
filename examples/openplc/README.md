@@ -8,7 +8,18 @@ licence, and nothing FactoryForge-specific in the program itself.
 |---|---|
 | `Sorting.st` | The program. Structured Text, located variables, one `CONFIGURATION`. Paste it into the OpenPLC web UI or hand it to `compile_program.sh`. |
 | `mbconfig.cfg` | The Slave Device entry that points OpenPLC's Modbus master at the sidecar. The web UI writes this file for you; it is here so you can skip the web UI. |
+| `check_starters.sh`, `check_real_helpers.c` | Compile every starter with OpenPLC's toolchain and check its 32-bit helpers bit for bit. Needs a built OpenPLC_v3; writes nothing inside it. |
 | `verify_int32.py` | Forces the two 32-bit counters to values a carton count never reaches and asks the running OpenPLC what it decoded. A sorting run only ever exercises the low register. |
+
+**Starters for the other scenes.** Every graded scene has a folder here --
+`accumulation-buffer/`, `batch-dosing/`, ... -- with a Structured Text program
+that declares all of that scene's I/O at the addresses the sidecar serves, an
+empty logic section, and its `mbconfig.cfg`. They are generated; the index is
+[`../README.md`](../README.md). `check_starters.sh` compiles every one of them
+with OpenPLC's own matiec and checks the 32-bit helpers they share
+(`check_real_helpers.c`). `sorting-by-height/` is the starter for the line the
+3D engine opens (nineteen tags); `Sorting.st` here is the finished program for
+the ten-tag `demo` scene, and their Modbus maps differ.
 
 **The walkthrough is [`docs/OPENPLC.md`](../../docs/OPENPLC.md)** — install,
 addressing, timing, troubleshooting, and what the run did and did not prove.
