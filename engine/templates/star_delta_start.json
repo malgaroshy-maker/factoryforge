@@ -1,0 +1,34 @@
+{
+  "name": "star-delta-start",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "motor",
+      "type": "StarDeltaStarter",
+      "position": [1.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "fla": "20", "load_percent": "30", "inertia": "2" }
+    },
+    {
+      "id": "current_gauge",
+      "type": "AnalogGauge",
+      "position": [3.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "scale_min": "0", "scale_max": "120", "alarm_at": "60", "unit": "A" }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [3.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "50", "setpoint_max": "95", "setpoint_unit": "%", "setpoint": "85" }
+    }
+  ]
+}

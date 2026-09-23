@@ -55,7 +55,8 @@ from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E40
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, batch_dosing as bd, guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
-    roller_line_weighing as rw, sorting_by_height as sh, start_stop_station as ss)
+    roller_line_weighing as rw, sorting_by_height as sh, star_delta_start as sd,
+    start_stop_station as ss)
 
 TEMPLATES = ROOT / "engine" / "templates"
 FIXTURE = ROOT / "engine" / "fixtures" / "scene_tag_sets.json"
@@ -239,6 +240,21 @@ CSHARP_MIRRORS = [
     (gc.GC_PLATE_THICKNESS, "Parts/PneumaticCylinder.cs",
      r"PlateThickness = ([\d.]+)f"),
     (gc.GC_GATE_CLOSED_BELOW, "Parts/SafetyGate.cs", r"IsClosed => _opening <= ([\d.]+)f"),
+    # IP-14: the star-delta starter, which no template configures beyond its
+    # rating, load and inertia.
+    (sd.SD_PULL_IN, "Parts/StarDeltaStarter.cs", r"PullInTime = ([\d.]+)f"),
+    (sd.SD_DROP_OUT, "Parts/StarDeltaStarter.cs", r"DropOutTime = ([\d.]+)f"),
+    (sd.SD_OVERLOAD_SETTING, "Parts/StarDeltaStarter.cs", r"OverloadSetting = ([\d.]+)f"),
+    (sd.SD_OVERLOAD_CLASS, "Parts/StarDeltaStarter.cs", r"OverloadClass = ([\d.]+)f"),
+    (sd.SD_LOCKED_ROTOR_CURRENT, "Parts/StarDeltaStarter.cs", r"LockedRotorCurrent = ([\d.]+)f"),
+    (sd.SD_MAGNETISING_CURRENT, "Parts/StarDeltaStarter.cs", r"MagnetisingCurrent = ([\d.]+)f"),
+    (sd.SD_CURRENT_KNEE_SLIP, "Parts/StarDeltaStarter.cs", r"CurrentKneeSlip = ([\d.]+)f"),
+    (sd.SD_RATED_SLIP, "Parts/StarDeltaStarter.cs", r"RatedSlip = ([\d.]+)f"),
+    (sd.SD_STARTING_TORQUE, "Parts/StarDeltaStarter.cs", r"StartingTorque = ([\d.]+)f"),
+    (sd.SD_PULL_OUT_TORQUE, "Parts/StarDeltaStarter.cs", r"PullOutTorque = ([\d.]+)f"),
+    (sd.SD_PULL_OUT_SPEED, "Parts/StarDeltaStarter.cs", r"PullOutSpeed = ([\d.]+)f"),
+    (sd.SD_FRICTION_TORQUE, "Parts/StarDeltaStarter.cs", r"FrictionTorque = ([\d.]+)f"),
+    (sd.SD_CLASS_MULTIPLE, "Parts/ThermalOverload.cs", r"ClassMultiple = ([\d.]+)f"),
 ]
 
 
@@ -642,6 +658,52 @@ def test_a_scanner_code_is_what_the_carton_is():
         codes.append(int(sim.items[-1].measured))
     assert codes == expected
     assert codes == [pp.pp_code(i) for i in sim.items]
+
+# --- the parts IP-14 put in scenes, stepped on their own ------------------
+#
+# Each is the model of one C# part, driven here with no bus and no exam, and
+# asserted against the behaviour the part's own file describes.
+
+def _quiet(sim):
+    sim.script = plant.Script([])
+    return sim
+
+
+def test_a_star_delta_changeover_in_one_scan_is_a_short():
+    """`StarDeltaStarter.cs`: contacts close in `PullInTime` and conduct for
+    `DropOutTime` after the coil drops, so star off and delta on in the same
+    tick overlap -- and waiting for `staraux` to fall does not."""
+    sim = _quiet(sd.StarDeltaScene(1))
+    _step(sim, 2.0, {"motor.main": True, "motor.star": True})
+    assert sim.tags.value("motor.staraux") and sim.speed > 0.3
+    _step(sim, 0.05, {"motor.star": False, "motor.delta": True})
+    assert sim.breaker_tripped and not sim.tags.value("motor.breaker")
+
+    sim = _quiet(sd.StarDeltaScene(1))
+    _step(sim, 2.0, {"motor.main": True, "motor.star": True})
+    _step(sim, sd.SD_DROP_OUT + 0.02, {"motor.star": False})
+    assert not sim.tags.value("motor.staraux")
+    _step(sim, 1.0, {"motor.delta": True})
+    assert not sim.breaker_tripped and sim.tags.value("motor.deltaaux")
+
+
+def test_a_star_run_up_is_slower_on_a_loaded_machine_and_in_proportion_to_inertia():
+    """The torque-speed curve and `LoadTorque` (:431): the time to the pot's
+    speed in star grows with the load, and scales with the template's
+    `inertia` exactly, since inertia only divides the net torque."""
+    def run_up(load: float | None = None) -> float:
+        sim = _quiet(sd.StarDeltaScene(1))
+        if load is not None:
+            sim.load = load
+        t = 0.0
+        while sim.speed * 100.0 < sd.SD_POT_START and t < 30.0:
+            _step(sim, 0.01, {"motor.main": True, "motor.star": True})
+            t += 0.01
+        return t
+    light, loaded = run_up(), run_up(max(sd.SD_LOADS_THEN))
+    assert light < 3.5 and loaded > 1.6 * light
+    assert sd.SD_INERTIA == _t("star-delta-start").part("motor", "StarDeltaStarter").number("inertia")
+
 
 def test_the_pot_range_holds_every_setpoint_the_exam_turns_it_to():
     """A real pot stops at its end stops. An exam that turned it past one

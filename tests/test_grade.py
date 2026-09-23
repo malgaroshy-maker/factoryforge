@@ -724,6 +724,41 @@ def test_a_sequence_on_timers_drops_cartons_when_the_axis_slows(tmp_path):
     assert all(20.0 < entry["position"] < 80.0 for entry in dropped)
 
 
+# --- the scenes IP-14 added --------------------------------------------------
+
+def test_the_star_delta_passes_a_changeover_on_speed_with_a_dead_time(tmp_path):
+    code, report = graded(tmp_path, "star-delta-start", "good", 42, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: both starts really ran, and the exam really loaded the
+    # machine between them, or the changeover was only ever marked once.
+    light, loaded = evidence["starts"]
+    assert light["reached_delta_at"] and loaded["reached_delta_at"]
+    assert loaded["load_percent"] > light["load_percent"] + 40
+    assert len(evidence["changeovers"]) == 2 and evidence["shorts_at"] == []
+
+
+def test_star_and_delta_in_the_same_scan_trip_the_breaker(tmp_path):
+    """The contacts open slower than they close: a changeover in one scan
+    overlaps star and delta by 15 ms, which is a short across the supply."""
+    code, report = graded(tmp_path, "star-delta-start", "samescan", 42, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "changeover.no_short" in failed_ids(report)
+    assert report["evidence"]["shorts_at"]
+    assert any("still arcing" in line for line in report["feedback"])
+
+
+def test_a_changeover_on_a_timer_comes_early_on_a_loaded_machine(tmp_path):
+    """Right on the empty machine it was calibrated on; half way up the
+    run-up once the exam loads the machine."""
+    code, report = graded(tmp_path, "star-delta-start", "timed", 42, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"changeover.at_speed"}
+    first, second = report["evidence"]["changeovers"]
+    assert first["speed"] >= 85.0 > 75.0 > second["speed"]
+    assert second["peak_current"] > 3 * report["evidence"]["full_load_amps"]
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1000,6 +1035,10 @@ TABLE_NUMBERS = {
     ("batch-dosing", "timed"): lambda e: [
         *(f"{b['delivered_L']:.1f}" for b in e["batches"]),
         f"{e['pot_litres']:g}"],
+    ("star-delta-start", "samescan"): lambda e: [f"{e['shorts_at'][0]:.2f}"],
+    ("star-delta-start", "timed"): lambda e: [
+        f"{e['changeovers'][1]['speed']:.1f}", f"{e['changeovers'][1]['peak_current']:.1f}",
+        f"{e['pot_percent']:g}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

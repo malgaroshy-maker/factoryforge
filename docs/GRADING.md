@@ -226,6 +226,7 @@ reads and the fake it shuts.
 | `heat-treat-station` | the temperature trace: settled error, ripple and overshoot | proportional-only parks short by an offset the plant's own numbers predict; a thermostat reaches setpoint and swings 9 °C |
 | `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's; and whether a program that locks the gate lets the operator in once the cell has stopped |
 | `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
+| `star-delta-start` | the motor's speed at the instant the delta contacts closed, and whether star and delta ever conducted at the same instant | a changeover on a timer — the run loads the machine between its two starts, so the star run-up takes about twice as long |
 
 Every scene also carries `controller.stayed_connected`,
 `integrity.no_forced_tags` and `integrity.no_input_writes`, and every scene has
@@ -249,6 +250,8 @@ something physical that no tag reports:
 * the **pump's rating** halves, between the two batches of the dosing exercise
 * the **gate** opens and shuts, on the guarded cell, with the operator taking
   the part out as they go in
+* the **machine's load** rises from 30 % of rated torque to 85, 90 or 95 %
+  (from the seed) between the two starts of the star-delta starter
 
 None of those is visible as a value on the bus. The controller can only find
 out by measuring — the encoder counting slower, the flow meter reading less,
@@ -453,6 +456,8 @@ scene's own 60 s window. Neither is thirteen.
 | | `lockedshut` | locks the gate and never releases it, so the operator cannot get in after Stop |
 | `batch-dosing` | `timed` | 22.6 L and then 11.3 L against the same 22 L pot |
 | | `noreset` | the second batch is over before it starts |
+| `star-delta-start` | `samescan` | drops star and energises delta in one scan; the breaker trips at 3.78 s |
+| | `timed` | changes over at 66.6 % speed and draws 98.6 A on the loaded machine, against a pot of 85 % |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released

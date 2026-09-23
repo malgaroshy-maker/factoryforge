@@ -20,6 +20,7 @@ here; the reference controllers the grader checks itself with stay Python.
 | Pick & place cell | `pick-and-place-cell` | [openplc/pick-and-place-cell/](openplc/pick-and-place-cell/) | [tia/pick-and-place-cell/](tia/pick-and-place-cell/) |
 | Roller line with weighing | `roller-line-weighing` | [openplc/roller-line-weighing/](openplc/roller-line-weighing/) | [tia/roller-line-weighing/](tia/roller-line-weighing/) |
 | Sorting by height | `sorting-by-height` | [openplc/sorting-by-height/](openplc/sorting-by-height/) | [tia/sorting-by-height/](tia/sorting-by-height/) |
+| Star-delta starter | `star-delta-start` | [openplc/star-delta-start/](openplc/star-delta-start/) | [tia/star-delta-start/](tia/star-delta-start/) |
 | Start / stop station | `start-stop-station` | [openplc/start-stop-station/](openplc/start-stop-station/) | [tia/start-stop-station/](tia/start-stop-station/) |
 | Tank level control | `tank-level-control` | [openplc/tank-level-control/](openplc/tank-level-control/) | [tia/tank-level-control/](tia/tank-level-control/) |
 

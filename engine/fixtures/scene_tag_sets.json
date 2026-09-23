@@ -1407,6 +1407,113 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "star-delta-start": [
+      {
+        "id": "current_gauge.value",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "motor.breaker",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "motor.current",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "motor.delta",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "motor.deltaaux",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "motor.main",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "motor.mainaux",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "motor.overload",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "motor.speed",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "motor.star",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "motor.staraux",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }
