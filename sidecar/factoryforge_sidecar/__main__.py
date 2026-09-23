@@ -341,10 +341,23 @@ async def connect(args) -> int:
 
 async def _bus_print_loop(bus) -> None:
     """Live status for a scene we do not own, so it reports what the bus shows
-    rather than reaching into a local simulation object."""
+    rather than reaching into a local simulation object.
+
+    Also says, once per change, whether the driver has reached its controller
+    -- the same answer the engine is sent (IP-30). "driver started" above is
+    printed the moment `start()` returns, which for most drivers is before
+    anything is connected, and a graded run does not start until this says
+    ready."""
     last = None
+    last_state = None
     while True:
         await asyncio.sleep(0.25)
+        state = bus.controller_state()
+        if state is not None and state[:2] != last_state:
+            last_state = state[:2]
+            ready, driver, message = state
+            print(f"driver {'READY' if ready else 'not ready'} ({driver}): {message}",
+                  flush=True)
         outputs = " ".join(
             f"{t.id.split('.')[-1]}={_short(bus.table.visible(t.id))}"
             for t in bus.table.by_kind("output")

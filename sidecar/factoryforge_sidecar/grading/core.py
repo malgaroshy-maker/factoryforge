@@ -34,6 +34,21 @@ SUGGESTED_PORTS = range(7500, 7511)
 #: How long it waits for a controller before giving up with ERROR.
 DEFAULT_WAIT = 120.0
 
+#: How long, after a controller is described to, the window waits for its
+#: sidecar to say its driver has reached the PLC before opening anyway (IP-30).
+#:
+#: 30 s covers one failed attempt and a slow success of the slowest driver
+#: there is: the OPC UA client gives a connect 10 s (AGENTS.md gotcha 8),
+#: waits 5 s (RECONNECT_DELAY) and tries again for up to 10 s more -- 25 s --
+#: and snap7 retries on the same 5 s. A driver that needs longer than that is
+#: not connecting, and the exam should not wait on it forever.
+#:
+#: What the wait costs is wall-clock time and nothing else. The plant is
+#: frozen until the window opens, so a controller that never says it is ready
+#: -- a hand-written client, a sidecar from before IP-30 -- is graded on the
+#: same full window, 30 s later, with the report saying why.
+DEFAULT_READY_WAIT = 30.0
+
 TICK_MS = 10
 
 
@@ -166,6 +181,11 @@ class GradedEngine(EngineStub):
         #: end of the handshake, and the moment the graded window opens. See
         #: `send_describe` for why this event and not an earlier or later one.
         self.described = asyncio.Event()
+        #: Set the first time a sidecar reports its driver has reached the
+        #: controller -- the event the window opens on (IP-30). `ready_at` is
+        #: when, in the same wall seconds as the sessions.
+        self.ready = asyncio.Event()
+        self.ready_at: float | None = None
         #: Set when a reference controller is stepped in lockstep with this
         #: plant rather than racing it on the wall clock. See `Lockstep`.
         self.lockstep: Lockstep | None = None
@@ -187,7 +207,10 @@ class GradedEngine(EngineStub):
         session = None
         if accepted:
             session = {"connected_at": self.elapsed, "described_at": None,
-                       "disconnected_at": None}
+                       "ready_at": None, "disconnected_at": None,
+                       # Every `controller` report, in order: what the
+                       # sidecar said about its driver, and when.
+                       "controller": []}
             self.sessions.append(session)
             self._session = session
         try:
@@ -213,13 +236,33 @@ class GradedEngine(EngineStub):
 
         What this cannot see is the sidecar's own driver. `factoryforge_sidecar
         connect` starts its driver after the describe arrives, so a driver
-        that takes seconds to reach its PLC spends them inside the window.
+        that takes seconds to reach its PLC would spend them inside the window.
+        That is what `controller_reported` is for (IP-30): the window waits
+        for it, and falls back to this only when it does not come.
         """
         await super().send_describe()
         session = self._session
         if session is not None and session["described_at"] is None:
             session["described_at"] = self.elapsed
             self.described.set()
+
+    async def controller_reported(self, ready: bool, driver: str, message: str) -> None:
+        """The sidecar said whether its driver has reached the controller.
+
+        The first `ready: true` opens the window. Every report is kept, in the
+        session that made it: a driver that reaches its PLC late, or loses it
+        halfway, is something the report has to be able to say.
+        """
+        session = self._session
+        if session is None:
+            return
+        session["controller"].append({"at": self.elapsed, "ready": ready,
+                                      "driver": driver, "message": message})
+        if ready and session["ready_at"] is None:
+            session["ready_at"] = self.elapsed
+        if ready and not self.ready.is_set():
+            self.ready_at = self.elapsed
+            self.ready.set()
 
     async def _on_message(self, msg: dict) -> None:
         kind = msg.get("t")
@@ -321,6 +364,54 @@ def check_integrity(watched: Watched, engine: GradedEngine, report: Report,
     return True
 
 
+def window_feedback(engine: GradedEngine, window: dict) -> list[str]:
+    """What the report has to say about the driver and the window (IP-30).
+
+    Nothing, when the driver was ready before the window opened and stayed
+    so. Otherwise the reason the window opened without it, and anything the
+    driver said afterwards: a late ready or a lost PLC is exactly the kind of
+    thing that makes a correct program fail, and a student reading only the
+    verdict would never know.
+    """
+    opened = window["opened_at"]
+    reports = [r for s in engine.sessions for r in s["controller"]]
+    lines: list[str] = []
+    if window["opened_on"] != "controller ready":
+        before = [r for r in reports if r["at"] <= opened]
+        if not before:
+            lines.append(
+                f"The window opened {window['ready_wait']:g}s after your controller "
+                f"connected, without its sidecar saying its driver had reached "
+                f"the PLC: it never sent a `controller` report, which a "
+                f"hand-written client or a sidecar from before IP-30 does not. If "
+                f"your driver needed longer than that to connect, your PLC missed "
+                f"whatever the examiner did before it did.")
+        else:
+            last = before[-1]
+            lines.append(
+                f"The window opened without your driver: after "
+                f"{window['ready_wait']:g}s your sidecar was still saying it was not "
+                f"ready ({last['driver']}: {last['message']}).")
+    was_ready = any(r["ready"] for r in reports if r["at"] <= opened)
+    for r in (r for r in reports if r["at"] > opened):
+        into = r["at"] - opened
+        if r["ready"] and not was_ready:
+            lines.append(
+                f"Your driver reported ready {into:.1f}s into the window "
+                f"({r['driver']}: {r['message']}). Your PLC could not see "
+                f"anything the examiner did before then.")
+        elif not r["ready"] and was_ready:
+            lines.append(
+                f"Your driver reported losing its controller {into:.1f}s into the "
+                f"window ({r['driver']}: {r['message']}).")
+        elif not r["ready"]:
+            lines.append(
+                f"{into:.1f}s into the window your sidecar said its driver was "
+                f"not ready yet ({r['driver']}: {r['message']}).")
+        was_ready = r["ready"]
+    return lines
+
+
 async def start_reference(kind: str, url: str, scene: str,
                           lockstep: Lockstep | None = None):
     """Connect a reference controller. Returns an awaitable that stops it.
@@ -359,6 +450,13 @@ async def start_reference(kind: str, url: str, scene: str,
         await asyncio.sleep(0)
         if task.done():
             task.result()                     # re-raise if it died starting
+
+    # A reference runs in this process and has no driver and no PLC: it has
+    # reached its controller once its scan exists, because it is one. Saying
+    # so through the bus, like any sidecar, puts it through the same window
+    # a student's goes through (IP-30).
+    await bus.controller_link(f"reference:{kind}", True,
+                              f"built-in {kind!r} reference controller")
 
     async def shutdown() -> None:
         stop.set()
@@ -419,22 +517,53 @@ async def run_grading(args, on_listening=None) -> Report:
             report.evidence["sessions"] = engine.sessions
             return report
 
+        # Then, on the wall clock, for the driver behind it (IP-30). Being
+        # described means the sidecar has its tag list; it does not mean the
+        # PLC behind it can see anything yet. `connect` starts its driver only
+        # after the describe arrives, and an OPC UA or S7 driver can take
+        # seconds to reach its PLC -- seconds that used to be the plant's
+        # first, which is when eight scenes press Start. So the window waits
+        # for the sidecar to say its driver is there, and falls back to the
+        # describe after `ready_wait` for one that never says: a hand-written
+        # client, or a sidecar from before the message existed.
+        #
+        # Lockstep does not wait. Its controller is a reference in this
+        # process, attached before the plant takes its first step, and the
+        # plant does not move until `Lockstep.run` moves it.
+        ready_wait = getattr(args, "ready_wait", None)
+        if ready_wait is None:
+            ready_wait = DEFAULT_READY_WAIT
+        if lockstep is None and not engine.ready.is_set():
+            try:
+                await asyncio.wait_for(engine.ready.wait(), timeout=ready_wait)
+            except asyncio.TimeoutError:
+                pass
+
         if lockstep is None:
             ticker = asyncio.create_task(engine._tick_loop())
         # Wall seconds since the grader started listening. The window and the
         # plant open together, so a student's plant time 0 is the moment their
-        # controller had its tag list -- and the report says when that was.
+        # driver could see the plant -- and the report says when that was.
         #
         # It opens once. A controller that drops and reconnects finds the
         # plant still running, as a real line would be, and fails
         # `controller.stayed_connected`; pausing the plant for it instead would
         # let a program stop the exam's clock by hanging up.
         first = next(s for s in engine.sessions if s["described_at"] is not None)
+        opened_on_ready = lockstep is None and engine.ready.is_set()
+        driver_names = [r["driver"] for s in engine.sessions for r in s["controller"]]
         report.evidence["window"] = {
-            "opened_on": ("controller described" if lockstep is None
-                          else "controller described; stepped in lockstep"),
+            "opened_on": ("controller described; stepped in lockstep"
+                          if lockstep is not None
+                          else "controller ready" if opened_on_ready
+                          else f"controller described; no ready within {ready_wait:g}s"),
             "controller_connected_at": first["connected_at"],
             "controller_described_at": first["described_at"],
+            # When the sidecar said its driver had reached the PLC, if it had
+            # by the time the window opened. None on the fallback.
+            "controller_ready_at": engine.ready_at,
+            "driver": driver_names[-1] if driver_names else None,
+            "ready_wait": ready_wait,
             "opened_at": engine.elapsed,
             # Plant seconds that had already passed when the window opened.
             # Zero by construction; recorded so a report can show it rather
@@ -443,10 +572,17 @@ async def run_grading(args, on_listening=None) -> Report:
         }
 
         if not args.quiet:
-            print(f"controller connected after "
-                  f"{first['described_at']:.1f}s; "
-                  f"the plant starts now and is graded for {args.duration:g}s\n",
-                  flush=True)
+            if opened_on_ready:
+                how = (f"controller connected after {first['described_at']:.1f}s "
+                       f"and its driver was ready at {engine.ready_at:.1f}s")
+            elif lockstep is None:
+                how = (f"controller connected after {first['described_at']:.1f}s; "
+                       f"its sidecar did not say its driver was ready within "
+                       f"{ready_wait:g}s")
+            else:
+                how = f"controller connected after {first['described_at']:.1f}s"
+            print(f"{how}; the plant starts now and is graded for "
+                  f"{args.duration:g}s\n", flush=True)
 
         # The PLANT's clock, not the wall's and not a tick count.
         #
@@ -490,6 +626,9 @@ async def run_grading(args, on_listening=None) -> Report:
                         f"the engine was not stepping, so this mark is not trustworthy")
                     break
                 await asyncio.sleep(0.05)
+
+        if lockstep is None:
+            report.feedback.extend(window_feedback(engine, report.evidence["window"]))
 
         if check_integrity(watched, engine, report, args.duration):
             rubric["grade"](watched, engine, report, args.duration)
@@ -561,11 +700,23 @@ def print_summary(report: Report, args) -> None:
     evidence = report.evidence
     window = evidence.get("window")
     if window:
-        print(textwrap.fill(
-            f"The controller connected {window['controller_described_at']:.1f}s "
-            f"after the grader started listening; the plant and the "
-            f"{args.duration:g}s window started then.",
-            width=76, initial_indent="  ", subsequent_indent="  "))
+        connected = (f"The controller connected {window['controller_described_at']:.1f}s "
+                     f"after the grader started listening")
+        opened_on = window.get("opened_on", "")
+        if opened_on == "controller ready":
+            line = (f"{connected}, and its driver ({window['driver']}) reported "
+                    f"ready at {window['controller_ready_at']:.1f}s; the plant and "
+                    f"the {args.duration:g}s window started then.")
+        elif opened_on.startswith("controller described; no ready"):
+            line = (f"{connected}. Its sidecar did not say its driver was ready "
+                    f"within {window['ready_wait']:g}s, so the plant and the "
+                    f"{args.duration:g}s window started at "
+                    f"{window['opened_at']:.1f}s without it.")
+        else:
+            line = (f"{connected}; the plant and the {args.duration:g}s window "
+                    f"started then.")
+        print(textwrap.fill(line, width=76, initial_indent="  ",
+                            subsequent_indent="  "))
         print()
 
     for check in report.checks:
@@ -622,6 +773,11 @@ def main(argv: list[str] | None = None, prog: str = "grade.py") -> int:
                              "carton)")
     parser.add_argument("--wait", type=float, default=DEFAULT_WAIT,
                         help="seconds to wait for a controller before giving up")
+    parser.add_argument("--ready-wait", type=float, default=DEFAULT_READY_WAIT,
+                        help="seconds to wait, once a controller is connected, for "
+                             "its sidecar to say its driver has reached the PLC "
+                             "before starting the plant anyway (default "
+                             f"{DEFAULT_READY_WAIT:g}); the report says which it was")
     parser.add_argument("--seed", type=int, default=None,
                         help="feed pattern seed; reported, so a mark is reproducible")
     parser.add_argument("--bus-port", type=int, default=0,
