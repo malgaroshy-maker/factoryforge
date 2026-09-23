@@ -9,10 +9,23 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
+from ..plant import CARTON_LENGTH
+from ..scenes.roller_line_weighing import (RW_INFEED_SPEED, RW_METAL_EYE_POS,
+                                           RW_WEIGH_FROM)
 from ._shared import Scanner
 
 
 SCENE = "roller-line-weighing"
+
+#: Seconds from the inductive eye firing to the same carton loading the scale:
+#: the eye fires as the carton's nose reaches it, and the scale reads the
+#: carton once its collider touches the load cell's area. Computed from the
+#: line rather than written down, so moving the eye moves this -- it was a
+#: hand-measured 1.4 to 2.8 s when the model had the eye 0.3 m further back.
+RW_EYE_TO_SCALE = (RW_WEIGH_FROM - (RW_METAL_EYE_POS - CARTON_LENGTH / 2)) / RW_INFEED_SPEED
+#: Either side of that, because a carton's pulse and its landing are each
+#: seen on a scan. Well inside the 3.4 s between cartons.
+RW_EYE_SLACK = 0.7
 
 
 # --- roller line with weighing references ---------------------------------
@@ -60,12 +73,12 @@ async def _rw_body(bus, stop, *, on_metal: bool, feed_gap: float) -> None:
         if weight > 20.0:
             if not state["loaded"]:
                 state["peak"] = 0.0
-                # The eye sits 0.8 m before the deck on rollers running at
-                # 0.4 m/s, so a pulse two seconds ago belongs to the carton
-                # arriving now. A window either side, because the infeed is not
-                # a metronome.
-                state["this_is_metal"] = any(1.4 <= now - t <= 2.8
-                                             for t in state["metal"])
+                # A pulse RW_EYE_TO_SCALE ago belongs to the carton arriving
+                # now: 0.6 m of rollers at 0.4 m/s as the template lays the
+                # line out.
+                state["this_is_metal"] = any(
+                    abs(now - t - RW_EYE_TO_SCALE) <= RW_EYE_SLACK
+                    for t in state["metal"])
             state["loaded"] = True
             state["peak"] = max(state["peak"], weight)
         elif state["loaded"]:

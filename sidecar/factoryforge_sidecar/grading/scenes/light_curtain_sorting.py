@@ -10,7 +10,8 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import CARTON_LENGTH, Item, PlantScene, Script, fault_input, shuffled_cycle
+from ..plant import (CARTON_LENGTH, Item, PlantScene, Script, fault_input, pot_start,
+                     remover_catch, shuffled_cycle)
 from ..templates import template
 
 
@@ -38,20 +39,26 @@ SCENE = "light-curtain-sorting"
 #
 # Geometry and the curtain are read from the template (IP-19). As shipped: a
 # 12-beam array over 0.48 m, and a 0.55 m diverter stroke at 1.83 m/s.
-# Positions are world X; the emitter sits at 0, where a carton starts.
+# Positions are world X; a carton starts at the emitter's.
+#
+# What is NOT the engine's here, on purpose: the feed. The template's emitter
+# alternates a 0.10 m and a 0.30 m carton, and this exam feeds eight heights
+# shuffled, because an alternation is exactly what `everyother` is written
+# against (docs/GRADING.md, "The feed patterns are shuffled").
 _PLANT = template(SCENE)
 _BELT = _PLANT.part("belt", "ConveyorBelt")
 _CURTAIN = _PLANT.part("height_gauge", "LightArray")
 _DIVERTER = _PLANT.part("diverter", "PusherMechanism")
 
 LC_BELT_SPEED = _BELT.number("speed")
-#: IP-19 finding, left as it was pending a decision: the template places the
-#: curtain (`height_gauge`) at x = 1.5 and the diverter at x = 2.5. This model
-#: has always had them 0.3 m upstream of that.
-LC_CURTAIN_POS = 1.2
-LC_DIVERTER_POS = 2.2
-#: Off the end of the belt, where the far-end remover waits.
-LC_REMOVER_POS = _BELT.span()[1]
+LC_START_POS = _PLANT.part("emitter", "Emitter").x
+#: Until IP-29 this model had the curtain and the diverter 0.3 m upstream of
+#: where the template puts them, at 1.2 and 2.2.
+LC_CURTAIN_POS = _CURTAIN.x
+LC_DIVERTER_POS = _DIVERTER.x
+#: Where the far-end remover takes a carton (`plant.remover_catch`).
+LC_REMOVER_POS = remover_catch(_PLANT.part("short_count", "Remover"), _BELT.span()[1])
+LC_POT_START = pot_start(_PLANT)
 #: How far either side of the plate a carton can still be struck. No template
 #: sets it: it is the deterministic sorting line's `PusherCatch`
 #: (`engine/src/Scenes/SortingScene.cs:38`). In the rigid-body engine the
@@ -83,7 +90,7 @@ class LightCurtainScene(PlantScene):
     name = "light-curtain-sorting"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=LC_POT_START)
         self._declare(
             Tag("belt.rotate", "Belt Conveyor (Rotate)", "bit", "output"),
             Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
@@ -133,7 +140,7 @@ class LightCurtainScene(PlantScene):
             rung = self.feed[self._fed % len(self.feed)]
             self._fed += 1
             self.items.append(Item(height=self.ladder[rung] + 0.005,
-                                   id=self._next_id))
+                                   position=LC_START_POS, id=self._next_id))
             self._next_id += 1
         self._emit_edge = emit
 

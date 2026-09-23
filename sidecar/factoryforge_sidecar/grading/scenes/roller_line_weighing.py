@@ -11,7 +11,7 @@ from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
 from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, PlantScene,
-                     Script, fault_input, shuffled_cycle)
+                     Script, fault_input, pot_start, remover_catch, shuffled_cycle)
 from ..templates import template
 
 
@@ -40,22 +40,37 @@ SCENE = "roller-line-weighing"
 # 900 for steel, so the four classes are 720 g, 2160 g, 4320 g and 12960 g.
 #
 # The line is read from the template (IP-19): two decks, each with its own
-# speed, the scale's deck the second of them. Positions are world X; the
-# emitter sits at 0, where a carton starts.
+# speed, the scale's deck the second of them. Positions are world X; a carton
+# starts at the emitter's.
+#
+# What is NOT the engine's here, on purpose: the feed, for the reason given
+# above `self.feed` below. The template's emitter makes every third carton
+# steel and alternates the heights.
 _PLANT = template(SCENE)
 _INFEED = _PLANT.part("infeed", "RollerConveyor")
 _SCALE = _PLANT.part("scale", "WeighingConveyor").engineering_units()
 
 RW_INFEED_SPEED = _INFEED.number("speed")
 RW_SCALE_SPEED = _SCALE.number("speed")
-#: IP-19 finding, left as it was pending a decision: the template places
-#: `metal_check` at x = 1.5. This model has always had it at 1.2.
-RW_METAL_EYE_POS = 1.2
+RW_START_POS = _PLANT.part("emitter", "Emitter").x
+#: The inductive eye. Until IP-29 this model had it at 1.2, 0.3 m upstream of
+#: where the template puts it.
+RW_METAL_EYE_POS = _PLANT.part("metal_check", "InductiveSensor").x
 RW_DECK_FROM, RW_DECK_TO = _SCALE.span()
-#: IP-19 finding, left as it was pending a decision: the scale's deck ends at
-#: x = 3.0 and the template's `outfeed` remover takes x = 3.0 to 3.5. This
-#: model retires a carton at 3.3.
-RW_REMOVER_POS = 3.3
+#: The load cell. `WeighingConveyor.cs` weighs every carton whose collider
+#: overlaps an area `RW_SCALE_AREA` of the deck long, centred on it -- so a
+#: carton weighs while its centre is within that half-length plus half a
+#: carton of the deck's centre. On the template's 1 m deck that happens to be
+#: the deck's own span, 2.0 to 3.0, which is what this model used before
+#: anybody checked.
+RW_SCALE_AREA = 0.8
+_WEIGH_REACH = RW_SCALE_AREA * _SCALE.number("size_x") / 2 + CARTON_LENGTH / 2
+RW_WEIGH_FROM, RW_WEIGH_TO = _SCALE.x - _WEIGH_REACH, _SCALE.x + _WEIGH_REACH
+#: Where the `outfeed` remover takes a carton (`plant.remover_catch`): as its
+#: nose crosses x = 3.0, still on the scale's deck. Until IP-29 this model
+#: retired one at 3.3, past the end of the line.
+RW_REMOVER_POS = remover_catch(_PLANT.part("outfeed", "Remover"), RW_DECK_TO)
+RW_POT_START = pot_start(_PLANT)
 #: How long after a carton rolls off the deck the controller has to have made
 #: its mind up. Generous: a scan plus a network round trip.
 RW_VERDICT_WINDOW = 0.6
@@ -65,7 +80,7 @@ class RollerWeighScene(PlantScene):
     name = "roller-line-weighing"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=RW_POT_START)
         self._declare(
             Tag("infeed.rotate", "Roller Conveyor (Rotate)", "bit", "output"),
             Tag("scale.rotate", "Weighing Conveyor (Rotate)", "bit", "output"),
@@ -112,7 +127,8 @@ class RollerWeighScene(PlantScene):
         if emit and not self._emit_edge:
             tall, metal = self.feed[self._fed % len(self.feed)]
             self.items.append(Item(height=TALL_HEIGHT if tall else SHORT_HEIGHT,
-                                   metal=metal, id=self._next_id))
+                                   metal=metal, position=RW_START_POS,
+                                   id=self._next_id))
             self._fed += 1
             self._next_id += 1
         self._emit_edge = emit
@@ -126,7 +142,7 @@ class RollerWeighScene(PlantScene):
                 item.position += (RW_SCALE_SPEED if on_scale else RW_INFEED_SPEED) * dt
 
         on_deck = [i for i in self.items
-                   if RW_DECK_FROM <= i.position <= RW_DECK_TO]
+                   if RW_WEIGH_FROM <= i.position <= RW_WEIGH_TO]
         self.tags.set("scale.weight", int(round(sum(i.grams for i in on_deck))))
         self.tags.set("metal_check.detect",
                       any(i.metal for i in self.items

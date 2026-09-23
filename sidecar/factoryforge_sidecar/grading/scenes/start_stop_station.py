@@ -10,8 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, ESTOP_LIMIT, Item, PlantScene, Script,
-                     declare_stack_light, fault_input)
+from ..plant import (CARTON_LENGTH, ESTOP_LIMIT, EngineFeed, Item, PlantScene,
+                     Script, declare_stack_light, fault_input, pot_start,
+                     remover_catch)
 from ..templates import template
 
 
@@ -37,13 +38,17 @@ SCENE = "start-stop-station"
 # Reset *and* Start. Every one of those is metres of belt, not the state of a
 # lamp.
 
-#: Read from the template (IP-19). Positions are world X, and the emitter
-#: sits at 0, which is where a carton starts.
+#: Read from the template (IP-19, and IP-29 for the positions). Positions are
+#: world X along the belt.
 _PLANT = template(SCENE)
-SS_BELT_SPEED = _PLANT.part("belt", "ConveyorBelt").number("speed")
-#: IP-19 finding, left as it was pending a decision: the template places
-#: `part_present` at x = 2.0. This model has always had it at 1.5.
-SS_EYE_POS = 1.5
+_BELT = _PLANT.part("belt", "ConveyorBelt")
+SS_BELT_SPEED = _BELT.number("speed")
+#: Where a carton starts: the emitter's own X.
+SS_EMITTER = _PLANT.part("emitter", "Emitter")
+SS_START_POS = SS_EMITTER.x
+#: The part-present eye. Until IP-29 this model had it at 1.5, half a metre
+#: upstream of where the template puts it.
+SS_EYE_POS = _PLANT.part("part_present", "PhotoelectricSensor").x
 #: A carton's length along the belt (`BoxPhysics.cs`), which is how long it
 #: holds the beam.
 SS_EYE_WINDOW = CARTON_LENGTH
@@ -53,17 +58,20 @@ SS_EYE_WINDOW = CARTON_LENGTH
 #: second -- behind the sensor, so a correct controller that stopped the belt
 #: on its fourth edge was marked as having made three.
 SS_EYE_BREAK = SS_EYE_POS - SS_EYE_WINDOW / 2
-#: IP-19 finding, left as it was pending a decision: the belt ends at x = 3.0
-#: and the template's `counter` remover takes x = 3.0 to 3.5. This model
-#: retires a carton at 2.8.
-SS_REMOVER_POS = 2.8
+#: Where the `counter` remover takes a carton (`plant.remover_catch`): its
+#: zone starts where the belt ends and reaches above the deck, so a carton is
+#: taken as its nose crosses into it. This model retired one at 2.8 until
+#: IP-29.
+SS_REMOVER_POS = remover_catch(_PLANT.part("counter", "Remover"), _BELT.span()[1])
+#: The pot, before the exam turns it.
+SS_POT_START = pot_start(_PLANT)
 
 
 class StartStopScene(PlantScene):
     name = "start-stop-station"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=SS_POT_START)
         self._declare(
             Tag("belt.rotate", "Belt Conveyor (Rotate)", "bit", "output"),
             Tag("emitter.emit", "Emitter (Emit)", "bit", "output"),
@@ -78,6 +86,7 @@ class StartStopScene(PlantScene):
         self.removed: list[Item] = []
         self._next_id = 1
         self._emit_edge = False
+        self._feed = EngineFeed(SS_EMITTER)
 
         #: Ground truth. Crossings of the eye, stamped with the sim time, so a
         #: batch can be counted from the Start press that began it.
@@ -123,7 +132,9 @@ class StartStopScene(PlantScene):
 
         emit = self.bit("emitter.emit")
         if emit and not self._emit_edge:
-            self.items.append(Item(id=self._next_id))
+            height, metal = self._feed.next()
+            self.items.append(Item(height=height, metal=metal,
+                                   position=SS_START_POS, id=self._next_id))
             self._next_id += 1
         self._emit_edge = emit
 
