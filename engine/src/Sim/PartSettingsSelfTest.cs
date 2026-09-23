@@ -38,13 +38,14 @@ public partial class PartSettingsSelfTest : Node
     {
         ["ConveyorBelt"] = new[] { "Belt Speed (m/s)", "Surface Friction" },
         ["RollerConveyor"] = new[] { "Belt Speed (m/s)", "Surface Friction" },
-        ["WeighingConveyor"] = new[] { "Belt Speed (m/s)", "Surface Friction" },
+        ["WeighingConveyor"] = new[] { "Belt Speed (m/s)", "Surface Friction", "Signal", "Range Min", "Range Max" },
         ["PhotoelectricSensor"] = new[] { "Beam Range (m)", "Beam Height (m)" },
         ["InductiveSensor"] = new[] { "Beam Range (m)", "Beam Height (m)" },
         ["RetroreflectiveSensor"] = new[] { "Beam Range (m)", "Beam Height (m)" },
         ["PusherMechanism"] = new[] { "Stroke Speed (m/s)", "Stroke Length (m)" },
         ["LightArray"] = new[] { "Curtain Height (m)", "Beams" },
-        ["LevelTank"] = new[] { "Fill Rate (%/s)", "Drain Rate (%/s)" },
+        // Range Min/Max only appear once the Signal is raw (IP-16).
+        ["LevelTank"] = new[] { "Fill Rate (%/s)", "Drain Rate (%/s)", "Signal", "Range Min", "Range Max" },
         ["Chute"] = new[] { "Incline (deg)", "Surface Friction" },
         ["Emitter"] = new[] { "Metal every Nth" },
         ["Remover"] = new[] { "Counts into" },
@@ -278,6 +279,8 @@ public partial class PartSettingsSelfTest : Node
         Expect(FindSettingControl<SpinBox>("Surface Friction") is not null,
                "a weighing conveyor offers Surface Friction too (LE-05)");
 
+        CheckWeigherSignal(weigher);
+
         Inspect(roller, "infeed", "RollerConveyor");
         Drive("Surface Friction", 0.90);
         Expect(roller.PhysicsMaterialOverride is { } mat && Mathf.IsEqualApprox(mat.Friction, 0.90f),
@@ -312,6 +315,64 @@ public partial class PartSettingsSelfTest : Node
         Expect(Mathf.IsEqualApprox(tank.FillRate, 40.0f), $"Fill Rate reaches the tank (got {tank.FillRate})");
         Drive("Drain Rate (%/s)", 35.0);
         Expect(Mathf.IsEqualApprox(tank.DrainRate, 35.0f), $"Drain Rate reaches the tank (got {tank.DrainRate})");
+
+        CheckTankSignal(tank);
+    }
+
+    /// <summary>
+    /// IP-16. The observable for Signal is what the PLC is handed: the level
+    /// tag's type on the bus. The observable for the range is the count the
+    /// tag carries -- not the property, which is assigned by construction.
+    /// </summary>
+    private void CheckTankSignal(LevelTank tank)
+    {
+        DriveChoice("Signal", "S7 raw 0-27648");
+        Expect(Tags.Get("tank.level")?.Type == TagType.Int,
+               $"Signal=S7 raw turns tank.level into an INT on the bus (got {Tags.Get("tank.level")?.Type})");
+
+        // The rebuilt panel now offers the range, which it did not while the
+        // channel published engineering units.
+        Inspect(tank, "tank", "LevelTank");
+        Drive("Range Min", -50.0);
+        Drive("Range Max", 150.0);
+        Editor._PhysicsProcess(1.0 / 60.0);
+        int expected = (int)System.Math.Round(27648.0 * (tank.Level + 50.0) / 200.0,
+                                              System.MidpointRounding.AwayFromZero);
+        int got = System.Convert.ToInt32(Tags.Visible("tank.level"));
+        Expect(System.Math.Abs(got - expected) <= 1,
+               $"Range Min/Max reach the count the PLC reads: {tank.Level:0.##} % on a -50..150 span "
+               + $"reads {got}, expected {expected}");
+
+        DriveChoice("Signal", "Engineering");
+        Expect(Tags.Get("tank.level")?.Type == TagType.Float,
+               $"Signal=Engineering puts tank.level back to a float (got {Tags.Get("tank.level")?.Type})");
+    }
+
+    /// <summary>The load cell's Signal: at 4-20 mA the bus gains a wire-break
+    /// contact for it, and loses it again on the way back.</summary>
+    private void CheckWeigherSignal(WeighingConveyor weigher)
+    {
+        DriveChoice("Signal", "4-20 mA raw");
+        Expect(Tags.Contains("scale.wirebreak"),
+               "Signal=4-20 mA gives the load cell a wire-break contact on the bus");
+        Expect(Tags.Get("scale.weight")?.Name.Contains("4-20 mA") == true,
+               $"and names its weight tag for what it carries (got '{Tags.Get("scale.weight")?.Name}')");
+
+        // Same observable as the tank's: the count on the bus.
+        Inspect(weigher, "scale", "WeighingConveyor");
+        Drive("Range Min", -1000.0);
+        Drive("Range Max", 1000.0);
+        Editor._PhysicsProcess(1.0 / 60.0);
+        int expected = (int)System.Math.Round(27648.0 * (weigher.MeasuredWeight + 1000.0) / 2000.0,
+                                              System.MidpointRounding.AwayFromZero);
+        int got = System.Convert.ToInt32(Tags.Visible("scale.weight"));
+        Expect(System.Math.Abs(got - expected) <= 1,
+               $"the load cell's range reaches its count: {weigher.MeasuredWeight:0} g on a -1000..1000 g "
+               + $"span reads {got}, expected {expected}");
+
+        DriveChoice("Signal", "Engineering");
+        Expect(!Tags.Contains("scale.wirebreak"),
+               "Signal=Engineering takes the wire-break contact away again");
     }
 
     /// <summary>The setpoint pot's scale plate. A panel dragged in from the
@@ -395,6 +456,21 @@ public partial class PartSettingsSelfTest : Node
         if (field is null) { Expect(false, $"no settings control labelled '{label}'"); return; }
         field.Text = value;
         field.EmitSignal(LineEdit.SignalName.TextChanged, value);
+    }
+
+    /// <summary>Pick a dropdown entry the way a click does, by its text.</summary>
+    private void DriveChoice(string label, string item)
+    {
+        var picker = FindSettingControl<OptionButton>(label);
+        if (picker is null) { Expect(false, $"no dropdown labelled '{label}'"); return; }
+        for (int i = 0; i < picker.ItemCount; i++)
+        {
+            if (picker.GetItemText(i) != item) continue;
+            picker.Select(i);
+            picker.EmitSignal(OptionButton.SignalName.ItemSelected, i);
+            return;
+        }
+        Expect(false, $"'{label}' offers no '{item}'");
     }
 
     /// <summary>Move a settings control the way a drag does, by its label.</summary>

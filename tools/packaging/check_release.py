@@ -40,6 +40,9 @@ SELF_TESTS = [
     # `partcontract` is deliberately absent: it scans .cs sources, which a
     # .pck does not contain, so here it would skip forever and look green.
     "controlparts", "editorkeys", "handlingparts",
+    # Raw analog (IP-16): every analog input at 0/50/100 % in each signal
+    # mode, the wire break, and the setting across a save and a load.
+    "analog",
 ]
 
 

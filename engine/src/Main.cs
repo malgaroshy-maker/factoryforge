@@ -308,6 +308,10 @@ public partial class Main : Node
         {
             AddChild(new BuildFlowSelfTest { Name = "BuildFlowSelfTest", Editor = _editor!, Tags = tags });
         }
+        if (_selfTest == "analog")
+        {
+            AddChild(new AnalogSignalSelfTest { Name = "AnalogSignalSelfTest", Editor = _editor!, Tags = tags });
+        }
     }
 
     private void BuildView(TagTable tags)
