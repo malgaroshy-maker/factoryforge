@@ -36,6 +36,20 @@ public partial class PanelSelfTest : Node
 
     public override void _Ready()
     {
+        // --press-train=N turns this run into the click source for
+        // tools/click_poll_repro.py instead: the same panel, pressed through
+        // the same dispatch, but counted from the far side of a real driver.
+        if (PressTrainArgs() is { } train)
+        {
+            train.Name = "PanelPressTrain";
+            train.Tags = Tags;
+            train.Editor = Editor;
+            GetParent().CallDeferred(Node.MethodName.AddChild, train);
+            SetPhysicsProcess(false);
+            QueueFree();
+            return;
+        }
+
         // The panel the default scene builds, found the way anything else would
         // find it rather than through a back door the test alone can use.
         foreach (var child in GetParent().GetChildren())
@@ -48,6 +62,35 @@ public partial class PanelSelfTest : Node
             GD.PrintErr("self-test: no ButtonPanel in the default scene");
             GetTree().Quit(1);
         }
+    }
+
+    /// <summary>The press train's settings, when this run was asked for one:
+    /// <c>--press-train=N</c>, and optionally <c>--press-gap=MIN:MAX</c>
+    /// seconds and <c>--press-seed=S</c>.</summary>
+    private static PanelPressTrain? PressTrainArgs()
+    {
+        PanelPressTrain? train = null;
+        foreach (var arg in OS.GetCmdlineUserArgs())
+        {
+            if (arg.StartsWith("--press-train="))
+                (train ??= new PanelPressTrain()).Presses = arg.Substring("--press-train=".Length).ToInt();
+        }
+        if (train is null) return null;
+
+        foreach (var arg in OS.GetCmdlineUserArgs())
+        {
+            if (arg.StartsWith("--press-gap=")
+                && arg.Substring("--press-gap=".Length).Split(':') is { Length: 2 } gap)
+            {
+                train.GapMin = gap[0].ToFloat();
+                train.GapMax = gap[1].ToFloat();
+            }
+            else if (arg.StartsWith("--press-seed="))
+            {
+                train.Seed = (ulong)arg.Substring("--press-seed=".Length).ToInt();
+            }
+        }
+        return train;
     }
 
     private void Expect(bool condition, string what)
