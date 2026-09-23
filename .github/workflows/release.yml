@@ -73,11 +73,13 @@ jobs:
       # release. `sidecar[opcua]` alone shipped a binary with no S7 and no
       # PLCSIM -- two of the three Siemens paths the README headlines. The
       # pythonnet marker is Windows-only, so pip simply skips it on Linux.
+      # mqtt too: without it the release lists an MQTT driver that is dead,
+      # and check_release.py now expects it.
       - name: Install the sidecar and every protocol driver
         shell: bash
         run: |
           python -m pip install --upgrade pip pyinstaller
-          python -m pip install -e "sidecar[opcua,siemens,plcsim]"
+          python -m pip install -e "sidecar[opcua,siemens,plcsim,mqtt]"
 
       # dotnet build never writes a .sln, and Godot refuses to export the .NET
       # assemblies without one -- while still writing a binary and exiting 0.

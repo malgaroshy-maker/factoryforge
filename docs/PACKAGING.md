@@ -162,7 +162,7 @@ Two things about the freeze are worth knowing:
   The first CI run did exactly this: the workflow installed `sidecar[opcua]`,
   so both archives had a working OPC UA path and no S7 or PLCSIM — two of the
   three Siemens routes the README headlines. Build with
-  `pip install -e "sidecar[opcua,siemens,plcsim]"`, which is what the workflow
+  `pip install -e "sidecar[opcua,siemens,plcsim,mqtt]"`, which is what the workflow
   now does.
 
   `factoryforge-sidecar drivers` reports what a build can genuinely run, and

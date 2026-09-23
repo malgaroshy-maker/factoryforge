@@ -85,7 +85,7 @@ def run_self_test(binary: Path, name: str, timeout: float = 180) -> tuple[bool, 
 #: Drivers a release is expected to carry. The frozen sidecar contains whatever
 #: was importable when PyInstaller ran, so a missing extra at build time is a
 #: driver the user finds missing at connect time -- and nothing else notices.
-EXPECTED_DRIVERS = ["mock", "modbus-tcp", "opcua-client", "opcua-server", "s7-snap7"]
+EXPECTED_DRIVERS = ["mock", "modbus-tcp", "mqtt", "opcua-client", "opcua-server", "s7-snap7"]
 
 
 def check_drivers(sidecar: Path, target: str) -> list[str]:
@@ -117,7 +117,7 @@ def check_drivers(sidecar: Path, target: str) -> list[str]:
 
     missing = [name for name in expected if name not in usable]
     return ([f"the frozen sidecar cannot run: {', '.join(missing)} "
-             f"-- build with pip install -e \"sidecar[opcua,siemens,plcsim]\""]
+             f"-- build with pip install -e \"sidecar[opcua,siemens,plcsim,mqtt]\""]
             if missing else [])
 
 
