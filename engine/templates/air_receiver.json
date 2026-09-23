@@ -1,0 +1,44 @@
+{
+  "name": "air-receiver",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "receiver",
+      "type": "PressureTransmitter",
+      "position": [1.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {
+        "supply_pressure": "10", "consumption": "25",
+        "signal": "ma_4_20", "range_min": "0", "range_max": "10"
+      }
+    },
+    {
+      "id": "valve",
+      "type": "SolenoidValve",
+      "position": [2.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "travel_time": "2" }
+    },
+    {
+      "id": "pressure_gauge",
+      "type": "AnalogGauge",
+      "position": [1.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "scale_min": "0", "scale_max": "10", "alarm_at": "7.5", "unit": "bar" }
+    },
+    {
+      "id": "alarm",
+      "type": "AlarmBeacon",
+      "position": [2.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "rotation_speed": "1.8" }
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.0, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "4", "setpoint_max": "6.5", "setpoint_unit": "bar", "setpoint": "6" }
+    }
+  ]
+}

@@ -53,7 +53,8 @@ sys.path.insert(0, str(ROOT / "sidecar"))
 
 from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E402
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
-    accumulation_buffer as ab, batch_dosing as bd, cooling_tunnel as ct, guarded_cell as gc,
+    accumulation_buffer as ab, air_receiver as ar, batch_dosing as bd, cooling_tunnel as ct,
+    guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
     roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
@@ -178,9 +179,35 @@ def test_every_analog_input_a_template_places_is_in_engineering_units():
                 f"signal={part['properties']['signal']!r}"
                 for scene, data in sorted(_templated().items())
                 for part in data["parts"]
-                if part["type"] in analog
+                if part["type"] in analog and part["type"] not in RAW_BY_DESIGN
                 and part.get("properties", {}).get("signal", "engineering") != "engineering"]
     assert not problems, "\n".join(problems)
+
+
+#: Parts that have no engineering-units mode at all (`PressureTransmitter.cs`
+#: turns `engineering` into `ma_4_20`, because the scaling is the lesson), and
+#: the grader model of each that publishes the card's count instead.
+RAW_BY_DESIGN = {"PressureTransmitter"}
+
+
+def test_a_raw_only_transmitter_is_modelled_as_counts():
+    """The air receiver's model publishes the count `AnalogSignal.ToRaw`
+    would -- an `int`, 0 at the range's bottom, 27648 at its top, 7FFFh past
+    the overrange -- and refuses a template wired any other way than the
+    4-20 mA loop it models."""
+    assert "PressureTransmitter" in _analog_part_types()
+    receiver = _t("air-receiver").part("receiver", "PressureTransmitter")
+    assert receiver.properties["signal"] == "ma_4_20"
+    low, high = ar.AR_RANGE_MIN, ar.AR_RANGE_MAX
+    assert ar.to_raw(low, low, high) == 0
+    assert ar.to_raw(high, low, high) == 27648
+    assert ar.to_raw(low + (high - low) / 2, low, high) == 13824
+    assert ar.to_raw(high * 1.2, low, high) == 32767
+    assert ar.to_raw(low - (high - low) * 0.2, low, high) == -32768
+    sim = _quiet(ar.AirReceiverScene(1))
+    _step(sim, 3.0, {"receiver.supply": True})
+    assert sim.tags.get("receiver.pressure").type == "int"
+    assert sim.tags.value("receiver.pressure") == ar.to_raw(sim.pressure, low, high) > 0
 
 
 def test_the_loader_refuses_a_raw_analog_input(tmp_path, monkeypatch):
@@ -258,6 +285,14 @@ CSHARP_MIRRORS = [
     (ct.CT_COOLING_CEILING, "Parts/HeatingStation.cs",
      r"_offeredCooling \+ extraLossRate, ([\d.]+)f\)"),
     (ct.CT_AIRFLOW_FLOOR, "Parts/CoolingFan.cs", r"if \(Airflow > ([\d.]+)f\)"),
+    (ar.AR_SUPPLY_RATE, "Parts/PressureTransmitter.cs", r"SupplyRate = ([\d.]+)f"),
+    (ar.AR_CONSUMPTION_RATE, "Parts/PressureTransmitter.cs", r"ConsumptionRate = ([\d.]+)f"),
+    (ar.AR_FULL_SCALE, "Parts/AnalogSignal.cs", r"NominalFullScale = (\d+);"),
+    (ar.AR_OVERRANGE, "Parts/AnalogSignal.cs", r"OverrangeLimit = (\d+);"),
+    (ar.AR_OVERFLOW, "Parts/AnalogSignal.cs", r"Overflow = (\d+);"),
+    (ar.AR_UNDERRANGE, "Parts/AnalogSignal.cs", r"UnderrangeLimit = (-\d+);"),
+    (ar.AR_UNDERFLOW, "Parts/AnalogSignal.cs", r"Underflow = (-\d+);"),
+    (ar.AR_SWITCH_BAND, "Parts/SolenoidValve.cs", r"SwitchBand = ([\d.]+)f"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
@@ -708,6 +743,35 @@ def test_a_star_run_up_is_slower_on_a_loaded_machine_and_in_proportion_to_inerti
     light, loaded = run_up(), run_up(max(sd.SD_LOADS_THEN))
     assert light < 3.5 and loaded > 1.6 * light
     assert sd.SD_INERTIA == _t("star-delta-start").part("motor", "StarDeltaStarter").number("inertia")
+
+
+def test_a_solenoid_valve_travels_and_a_seized_one_does_not():
+    """`SolenoidValve.Step` (:309): the stem takes `travel_time` end to end,
+    neither limit switch is made in between, the spring closes it when the
+    solenoid drops, and a seized stem stays where it is."""
+    sim = _quiet(ar.AirReceiverScene(1))
+    _step(sim, ar.AR_TRAVEL / 2, {"valve.open": True})
+    assert not sim.tags.value("valve.opened") and not sim.tags.value("valve.closed")
+    _step(sim, ar.AR_TRAVEL / 2 + 0.05, {"valve.open": True})
+    assert sim.tags.value("valve.opened")
+    _step(sim, ar.AR_TRAVEL + 0.05, {"valve.open": False})
+    assert sim.tags.value("valve.closed")
+    sim.seized = True
+    _step(sim, ar.AR_TRAVEL * 2, {"valve.open": True})
+    assert sim.tags.value("valve.closed") and not sim.tags.value("valve.opened")
+    assert sim.tags.value("valve.fault")
+
+
+def test_the_receiver_fills_towards_the_balance_of_supply_and_draw():
+    """`PressureTransmitter.Step` (:256): open, it settles where the supply's
+    inflow balances the consumption's; shut, it bleeds towards nothing."""
+    sim = _quiet(ar.AirReceiverScene(1))
+    _step(sim, 30.0, {"receiver.supply": True})
+    k_in, k_out = ar.AR_SUPPLY_RATE, ar.AR_CONSUMPTION_RATE * ar.AR_CONSUMPTION_FIRST / 100
+    assert sim.pressure == pytest.approx(k_in * ar.AR_SUPPLY / (k_in + k_out), rel=1e-3)
+    top = sim.pressure
+    _step(sim, 2.0, {"receiver.supply": False})
+    assert sim.pressure == pytest.approx(top * math.exp(-k_out * 2.0), rel=1e-2)
 
 
 def test_the_fan_cools_the_plate_through_the_same_loss_term():

@@ -228,6 +228,7 @@ reads and the fake it shuts.
 | `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
 | `star-delta-start` | the motor's speed at the instant the delta contacts closed, and whether star and delta ever conducted at the same instant | a changeover on a timer — the run loads the machine between its two starts, so the star run-up takes about twice as long |
 | `cooling-tunnel` | the temperature trace, the seconds the product took to reach a dropped setpoint, and the overlap of heater power and delivered airflow | holding every setpoint on the heater alone, or with the fan left running under it — the recipe drops 60 C or more, which the room alone takes 15 s and more to take away |
+| `air-receiver` | the receiver's true pressure in bar, against the band the pot sets; and the seconds from commanding a seized valve open to the alarm | scaling that is nearly right — the run raises the consumption and moves the pot — and a discrepancy check with no timer, which the first, healthy start shows up |
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 
 Every scene also carries `controller.stayed_connected`,
@@ -254,6 +255,8 @@ something physical that no tag reports:
   the part out as they go in
 * the **machine's load** rises from 30 % of rated torque to 85, 90 or 95 %
   (from the seed) between the two starts of the star-delta starter
+* the **receiver's consumption** doubles, and the **isolation valve seizes**
+  shut while the station is stopped, on the air receiver
 * the **servo drive faults** mid-move, and the fault clears three seconds
   before anybody presses Reset, on the servo positioning scene
 
@@ -466,6 +469,9 @@ scene's own 60 s window. Neither is thirteen.
 | | `noack` | never acknowledges, so the first fault stops the axis for good |
 | `cooling-tunnel` | `heatonly` | never runs the fan, so the drop from 170 C to 80 C takes 19.6 s where 10 s is allowed |
 | | `fight` | leaves the fan at a floor under the heater: both on together for 70.6 s |
+| `air-receiver` | `by32767` | scales by the biggest INT rather than the card's full scale, reads low, and holds the receiver at 7.14 bar against a pot of 6 |
+| | `nodiscrepancy` | trusts the valve; a seized one is never noticed |
+| | `impatient` | alarms on "commanded and not opened" with no timer, at 1.01 s, while a healthy valve is still travelling |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released

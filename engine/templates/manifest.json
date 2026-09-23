@@ -166,5 +166,17 @@
       "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · oven.heater · oven.temperature · oven.attemp · oven.fault · fan.run · fan.speed · fan.airflow · fan.fault · temp_gauge.value · tower.green · tower.yellow · tower.red",
       "done": "The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses."
     }
+  },
+  {
+    "id": "air-receiver",
+    "title": "Air receiver",
+    "blurb": "A compressed-air receiver on a 4-20 mA transmitter and an isolation valve with limit switches. The PLC gets counts and contacts, never bar and 'open' -- scaling the one and proving the other is the exercise.",
+    "path": "res://templates/air_receiver.json",
+    "scene": "air-receiver",
+    "brief": {
+      "task": "While the station runs, keep the receiver between the pot less 0.5 bar and the pot: open receiver.supply at the bottom of the band, close it at the top. receiver.pressure is the card's raw count -- 0 at 4 mA, 27648 at 20 mA, over 0..10 bar -- so scale it (NORM_X, then SCALE_X) and show bar on the gauge. Open the isolation valve while the station runs and prove it by valve.opened: it takes 2 s to travel, and if it has not arrived when that and a margin have run out, it has failed -- alarm, and stop.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · receiver.supply · receiver.pressure · receiver.wirebreak · valve.open · valve.opened · valve.closed · valve.fault · pressure_gauge.value · alarm.beacon · alarm.horn",
+      "done": "The needle on the receiver's own gauge and the one you drive agree, and the receiver cycles inside the band -- still after the plant draws harder (the receiver's Consumption) and after you move the pot. Divide by 32767 instead of 27648 and everything reads 16 % low and the receiver runs 16 % high. Seize the valve (valve.fault) and Start: valve.opened never comes, and only a timer on the feedback notices -- but a check without one alarms on every healthy start, because for two seconds neither limit switch is made."
+    }
   }
 ]

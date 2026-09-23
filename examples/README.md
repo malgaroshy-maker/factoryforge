@@ -13,6 +13,7 @@ here; the reference controllers the grader checks itself with stay Python.
 | Scene | Id | OpenPLC (Modbus TCP) | TIA Portal (S7-1500) |
 |---|---|---|---|
 | Accumulation buffer | `accumulation-buffer` | [openplc/accumulation-buffer/](openplc/accumulation-buffer/) | [tia/accumulation-buffer/](tia/accumulation-buffer/) |
+| Air receiver | `air-receiver` | [openplc/air-receiver/](openplc/air-receiver/) | [tia/air-receiver/](tia/air-receiver/) |
 | Batch dosing | `batch-dosing` | [openplc/batch-dosing/](openplc/batch-dosing/) | [tia/batch-dosing/](tia/batch-dosing/) |
 | Cooling tunnel | `cooling-tunnel` | [openplc/cooling-tunnel/](openplc/cooling-tunnel/) | [tia/cooling-tunnel/](tia/cooling-tunnel/) |
 | Guarded cell | `guarded-cell` | [openplc/guarded-cell/](openplc/guarded-cell/) | [tia/guarded-cell/](tia/guarded-cell/) |

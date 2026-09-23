@@ -813,6 +813,38 @@ def test_a_fan_that_never_stops_fights_the_heater(tmp_path):
     assert failed_ids(report) == {"split.no_fighting"}
 
 
+def test_the_air_receiver_passes_scaled_counts_and_a_proven_valve(tmp_path):
+    code, report = graded(tmp_path, "air-receiver", "good", 75, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: the receiver really cycled through the band, the exam really
+    # seized the valve, and the alarm came after the travel time, not before.
+    assert evidence["highest_bar"] - evidence["lowest_bar"] > 0.4
+    assert evidence["stuck_command_at"] is not None
+    assert 2.0 <= evidence["alarm_took_s"] <= evidence["alarm_within_s"]
+    assert evidence["gauge_mean_error_bar"] < 0.1
+
+
+def test_scaling_by_32767_holds_the_receiver_high(tmp_path):
+    code, report = graded(tmp_path, "air-receiver", "by32767", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"receiver.held_the_band"}
+    worst = report["evidence"]["worst_outside"]
+    assert worst["bar"] / worst["pot"] == pytest.approx(32767 / 27648, abs=0.03)
+
+
+def test_a_valve_trusted_without_its_feedback_hides_a_seizure(tmp_path):
+    code, report = graded(tmp_path, "air-receiver", "nodiscrepancy", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"valve.stuck_was_caught"}
+
+
+def test_a_discrepancy_check_with_no_timer_alarms_on_a_healthy_valve(tmp_path):
+    code, report = graded(tmp_path, "air-receiver", "impatient", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"valve.no_false_alarm"}
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1100,6 +1132,9 @@ TABLE_NUMBERS = {
         f"{e['arrived_after_the_drop_s']:.1f}", f"{e['recipe'][0]:g}", f"{e['recipe'][1]:g}",
         f"{e['arrive_within_s']:g}"],
     ("cooling-tunnel", "fight"): lambda e: [f"{e['both_on_s']:.1f}"],
+    ("air-receiver", "by32767"): lambda e: [
+        f"{e['worst_outside']['bar']:.2f}", f"{e['worst_outside']['pot']:g}"],
+    ("air-receiver", "impatient"): lambda e: [f"{e['false_alarms_at'][0]:.2f}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

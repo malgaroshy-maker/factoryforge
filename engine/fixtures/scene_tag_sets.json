@@ -1713,6 +1713,93 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "air-receiver": [
+      {
+        "id": "alarm.beacon",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "alarm.horn",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pressure_gauge.value",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "receiver.pressure",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "receiver.supply",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "receiver.wirebreak",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "valve.closed",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "valve.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "valve.open",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "valve.opened",
+        "type": "bit",
+        "kind": "input"
+      }
     ]
   }
 }
