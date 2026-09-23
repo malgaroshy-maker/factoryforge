@@ -10,8 +10,9 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, Item, PlantScene, Script, declare_stack_light,
-                     fault_input)
+from ..plant import (BELT_THICKNESS, CARTON_LENGTH, EngineFeed, Item, PlantScene,
+                     Script, Vfd, declare_stack_light, fault_input, pot_start,
+                     remover_catch)
 from ..templates import template
 
 
@@ -26,50 +27,77 @@ SCENE = "accumulation-buffer"
 # How a program fakes it: by dropping the blade for a fixed number of seconds.
 # At one belt speed that releases the right amount every time, and it is the
 # obvious thing to write. So the exam reaches into the drive halfway through
-# the run and *doubles the belt's top speed* -- a physical change no tag
-# reports, visible only as the encoder counting faster. A release measured in
+# the run and *halves the belt's top speed* -- a physical change no tag
+# reports, visible only as the encoder counting slower. A release measured in
 # pulses is a release measured in distance and lets out the same product; a
-# release measured in seconds lets out twice as much.
+# release measured in seconds lets out half as much.
+#
+# It halves rather than doubles, and until IP-29 it doubled. The drive only
+# moves the buffer: a carton past the blade crosses onto the `outfeed` belt,
+# which runs at its own 0.5 m/s, and the model used to ignore that and carry
+# every carton at the buffer's speed. Once it does not, a buffer running at
+# 1.0 m/s is feeding a 0.5 m/s outfeed: released cartons pile up on it and
+# back up to the blade, so a release lets out what the OUTFEED can take, and
+# a correct release measured in pulses lets out fewer at the higher speed.
+# The engine does exactly that, so the exam cannot ask for it. Slower than
+# the outfeed, the outfeed is never the limit, and the lesson is the same
+# one: same distance, same product; same seconds, half the product.
 #
 # The other half is the blade itself: nothing may pass it while it is up, and
 # the encoder has to have been counting the whole time, so "the line stopped"
 # is ruled out as the explanation.
 #
-# Read from the template (IP-19). As shipped: 100 pulses per metre, a 0.26 m
-# blade stroke at 2 m/s, a drive ramping at 60 %/s to 0.5 m/s. Positions are
-# world X.
+# Read from the template (IP-19, and IP-29 for the positions). As shipped: 100
+# pulses per metre, a 0.26 m blade stroke at 2 m/s, a drive ramping at 60 %/s
+# to 0.5 m/s, the blade at x = 2.6 on the buffer's 3 m deck, then a 1.2 m
+# outfeed. Positions are world X.
 _PLANT = template(SCENE)
 _BUFFER = _PLANT.part("buffer", "VariableConveyor")
 _ENCODER = _PLANT.part("enc", "RotaryEncoder")
 _STOP = _PLANT.part("stop", "StopGate")
 _OUTFEED = _PLANT.part("outfeed", "ConveyorBelt")
 
-#: IP-19 finding, left as it was pending a decision: the template places the
-#: blade (`stop`) at x = 2.6 and the exit eye at x = 2.75. This model has
-#: always had them 0.4 m further on, the blade at the buffer deck's far end.
-#: It also starts a carton at x = 0 where the template's emitter is at 0.2.
-AB_BLADE_POS = 3.0
-AB_EYE_POS = 3.15
-#: Off the end of the outfeed, where the `released` remover waits.
-AB_REMOVER_POS = _OUTFEED.span()[1]
-#: Centre to centre of two cartons queued nose to tail: this model's own.
-AB_PITCH = 0.22
+#: Where a carton starts: the emitter's X, 0.2 m in. Until IP-29 this model
+#: started them at 0.
+AB_START_POS = _PLANT.part("emitter", "Emitter").x
+#: The blade and the exit eye. Until IP-29 this model had both 0.4 m further
+#: on, the blade at the buffer deck's far end.
+AB_BLADE_POS = _STOP.x
+AB_EYE_POS = _PLANT.part("exit_eye", "PhotoelectricSensor").x
+#: `StopGate.cs` (`BladeThickness`): a queued carton's nose rests against the
+#: blade's upstream face, half this in front of the blade's centre line.
+AB_BLADE_THICKNESS = 0.035
+#: The buffer deck ends here and the outfeed deck takes over, at its own speed
+#: and only while `outfeed.rotate` is true.
+AB_BUFFER_FROM, AB_BUFFER_TO = _BUFFER.span()
+AB_OUTFEED_SPEED = _OUTFEED.number("speed")
+#: Where the `released` remover takes a carton (`plant.remover_catch`).
+AB_REMOVER_POS = remover_catch(_PLANT.part("released", "Remover"), _OUTFEED.span()[1])
+#: Centre to centre of two cartons queued nose to tail: they touch, so one
+#: carton's length. This model used 0.22 m, a number of its own, until IP-29.
+AB_PITCH = CARTON_LENGTH
 AB_PULSES_PER_METRE = _ENCODER.number("pulses_per_metre")
-AB_BLADE_TIME = _STOP.number("stroke") / _STOP.number("lift_speed")
+AB_STROKE = _STOP.number("stroke")
+AB_BLADE_TIME = AB_STROKE / _STOP.number("lift_speed")
+#: The blade holds a carton back once its top edge is above the deck: the
+#: parked blade's top sits a deck's thickness below the carrying surface
+#: (`StopGate.cs`, `ParkedY`), so that is how far it has to rise.
+AB_BLOCKS_AT = BELT_THICKNESS / AB_STROKE
 AB_RAMP = _BUFFER.number("accel_rate")
 #: The drive's top speed, before and after the exam changes it. The change is
-#: the exam's, and not a number from anywhere else: it doubles.
+#: the exam's, and not a number from anywhere else: it halves.
 AB_SPEED_FIRST = _BUFFER.number("max_speed")
-AB_SPEEDUP = 2.0
-AB_SPEED_THEN = AB_SPEED_FIRST * AB_SPEEDUP
+AB_SPEED_CHANGE = 0.5
+AB_SPEED_THEN = AB_SPEED_FIRST * AB_SPEED_CHANGE
 AB_SPEED_CHANGES_AT = 40.0
+AB_POT_START = pot_start(_PLANT)
 
 
 class AccumulationScene(PlantScene):
     name = "accumulation-buffer"
 
     def __init__(self, seed: int) -> None:
-        super().__init__(seed)
+        super().__init__(seed, setpoint=AB_POT_START)
         self._declare(
             Tag("buffer.run", "VFD Conveyor (Run)", "bit", "output"),
             Tag("buffer.speed", "VFD Conveyor Speed Ref (%)", "float", "output"),
@@ -91,14 +119,14 @@ class AccumulationScene(PlantScene):
         )
         declare_stack_light(self.tags)
 
-        self.max_speed = AB_SPEED_FIRST
-        self.actual_percent = 0.0
+        self.drive = Vfd(AB_SPEED_FIRST, AB_RAMP)
         self.blade = 0.0                 # 0 down, 1 up
         self.pulses = 0.0
         self.items: list[Item] = []
         self.released: list[Item] = []
         self._next_id = 1
         self._emit_edge = False
+        self._feed = EngineFeed(_PLANT.part("emitter", "Emitter"))
 
         #: Ground truth. One entry per time the blade was down, with the
         #: cartons that got past during it and the drive speed at the time.
@@ -106,6 +134,9 @@ class AccumulationScene(PlantScene):
         self._open: dict | None = None
         #: Cartons that got past a raised blade, which must be none.
         self.escaped: list[int] = []
+        #: Cartons a queue backed up past the emitter pushed off the infeed
+        #: end of the belt.
+        self.spilled: list[int] = []
         #: Metres of belt travelled while the blade was up, so "nothing got
         #: past" cannot be satisfied by a line that was not running.
         self.travel_while_held = 0.0
@@ -115,10 +146,10 @@ class AccumulationScene(PlantScene):
         self.script = Script([
             (0.3, self.panel.set_setpoint(self.window)),
             (1.0, self.panel.press("start")),
-            (AB_SPEED_CHANGES_AT, self._speed_up),
+            (AB_SPEED_CHANGES_AT, self._change_the_drive),
         ])
 
-    def _speed_up(self) -> None:
+    def _change_the_drive(self) -> None:
         """Reach into the drive and change what 100 % means.
 
         The controller cannot read this anywhere. `buffer.speed` is its own
@@ -127,7 +158,7 @@ class AccumulationScene(PlantScene):
         which is exactly the instrument a release measured in distance uses
         and a release measured in seconds does not.
         """
-        self.max_speed = AB_SPEED_THEN
+        self.drive.max_speed = AB_SPEED_THEN
 
     @property
     def phase(self) -> str:
@@ -136,17 +167,18 @@ class AccumulationScene(PlantScene):
     def step(self, dt: float) -> None:
         emit = self.bit("emitter.emit")
         if emit and not self._emit_edge:
-            self.items.append(Item(id=self._next_id))
+            height, metal = self._feed.next()
+            self.items.append(Item(height=height, metal=metal,
+                                   position=AB_START_POS, id=self._next_id))
             self._next_id += 1
         self._emit_edge = emit
 
-        running = self.bit("buffer.run")
-        reference = min(max(self.num("buffer.speed"), 0.0), 100.0) if running else 0.0
-        self.actual_percent += max(min(reference - self.actual_percent,
-                                       AB_RAMP * dt), -AB_RAMP * dt)
-        speed = self.max_speed * self.actual_percent / 100.0 if running else 0.0
-        self.tags.set("buffer.actual", self.actual_percent)
+        # `VariableConveyor.cs`: dropping `buffer.run` ramps the belt down
+        # rather than stopping it dead.
+        speed = self.drive.step(self.bit("buffer.run"), self.num("buffer.speed"), dt)
+        self.tags.set("buffer.actual", self.drive.actual)
         self.speed_samples[self.phase].append(speed)
+        outfeed = AB_OUTFEED_SPEED if self.bit("outfeed.rotate") else 0.0
 
         target = 1.0 if self.bit("stop.raise") else 0.0
         rate = dt / AB_BLADE_TIME
@@ -166,23 +198,24 @@ class AccumulationScene(PlantScene):
         self.tags.set("enc.count", int(self.pulses))
         self.tags.set("enc.rate", rate)
 
-        # IP-19 finding, left as it was pending a decision: every carton moves
-        # at the buffer drive's speed, including the ones past the blade. In
-        # the template those ride the `outfeed` belt, which runs at its own
-        # `speed` (0.5 m/s as shipped) and only while `outfeed.rotate` is true.
-        moved = speed * dt
         if up:
-            self.travel_while_held += moved
+            self.travel_while_held += speed * dt
 
+        # Each carton rides the deck its centre is on: the buffer's drive up
+        # to the end of the buffer deck, the outfeed belt -- its own speed,
+        # and only while `outfeed.rotate` -- after it. Until IP-29 every
+        # carton here moved at the buffer's speed, past the blade included.
+        #
         # Queue behind the blade: each carton is stopped by whatever is in
         # front of it, and the leader by the blade when the blade is up.
-        blocking = self.blade > 0.5
+        blocking = self.blade > AB_BLOCKS_AT
         ahead = None
         for item in sorted(self.items, key=lambda i: i.position, reverse=True):
             was = item.position
+            moved = (speed if was < AB_BUFFER_TO else outfeed) * dt
             limit = float("inf")
             if blocking and was < AB_BLADE_POS:
-                limit = AB_BLADE_POS - CARTON_LENGTH / 2
+                limit = AB_BLADE_POS - AB_BLADE_THICKNESS / 2 - CARTON_LENGTH / 2
             if ahead is not None:
                 limit = min(limit, ahead - AB_PITCH)
             item.position = min(item.position + moved, limit)
@@ -209,6 +242,12 @@ class AccumulationScene(PlantScene):
         for item in self.items:
             if item.position >= AB_REMOVER_POS:
                 self.released.append(item)
+            elif item.position < AB_BUFFER_FROM:
+                # A queue backed up past the emitter has nowhere to go but off
+                # the infeed end. On master this model kept them, at x = -5 m
+                # behind a belt that starts at 0; the engine's emitter would
+                # have been spawning cartons inside each other.
+                self.spilled.append(item.id)
             else:
                 still.append(item)
         self.items = still
@@ -244,6 +283,7 @@ def grade_accumulation(watched: Watched, engine: GradedEngine, report: Report,
         "escaped_a_raised_blade": sim.escaped[:20],
         "belt_travel_while_held_m": round(sim.travel_while_held, 2),
         "released_total": len(sim.released),
+        "spilled_off_the_infeed_end": sim.spilled[:20],
         "blade_up_fraction": round(watched.held_true("stop.raise"), 3),
     })
 
@@ -299,11 +339,20 @@ def _accumulation_feedback(report, watched, sim, first, then, avg_first, avg_the
             f"{AB_BLADE_TIME * 1000:.0f} ms to travel and `stop.raise` is true "
             f"for all of it.")
 
+    if sim.spilled:
+        say(f"{len(sim.spilled)} carton(s) went off the infeed end of the belt: "
+            f"the queue behind the blade backed up past the emitter, which went "
+            f"on making cartons into it. A buffer holds as many as fit between "
+            f"the blade and the emitter; count what goes in against what passes "
+            f"`exit_eye`, and stop feeding when it is full.")
+
     if len(first) >= 1 and len(then) >= 1 and abs(avg_first - avg_then) > 1.0:
         ratio = speed_then / speed_first if speed_first > 0 else 0.0
+        how = (f"{ratio:.1f} times faster" if ratio >= 1.0
+               else f"{ratio:.0%} of the speed")
         say(f"The belt ran at {speed_first:.2f} m/s for the first half of this "
-            f"run and {speed_then:.2f} m/s for the second -- {ratio:.1f} times "
-            f"faster -- and your releases went from {avg_first:.1f} cartons to "
+            f"run and {speed_then:.2f} m/s for the second -- {how} -- "
+            f"and your releases went from {avg_first:.1f} cartons to "
             f"{avg_then:.1f}. That is a release timed in seconds. "
             f"`panel.setpoint` is a window in ENCODER PULSES, which is a "
             f"distance: at {AB_PULSES_PER_METRE:.0f} pulses per metre, hold the "
