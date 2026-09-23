@@ -43,6 +43,11 @@ SELF_TESTS = [
     # Raw analog (IP-16): every analog input at 0/50/100 % in each signal
     # mode, the wire break, and the setting across a save and a load.
     "analog",
+    # The five industrial parts of IP-17, asserted by their effects: a lever
+    # pushed by a real carton, a valve's feedback that does not follow when
+    # stuck, a star-delta short that trips and latches, raw counts that track
+    # a receiver's pressure, a servo that holds on a fault until acknowledged.
+    "industrialparts",
 ]
 
 

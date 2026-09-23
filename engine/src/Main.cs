@@ -312,6 +312,10 @@ public partial class Main : Node
         {
             AddChild(new AnalogSignalSelfTest { Name = "AnalogSignalSelfTest", Editor = _editor!, Tags = tags });
         }
+        if (_selfTest == "industrialparts")
+        {
+            AddChild(new IndustrialPartsSelfTest { Name = "IndustrialPartsSelfTest", Editor = _editor!, Tags = tags });
+        }
     }
 
     private void BuildView(TagTable tags)
