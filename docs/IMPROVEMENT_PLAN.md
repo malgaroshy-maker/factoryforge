@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-26 and IP-27 done, IP-17's parts done; IP-29 in progress; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -569,7 +569,7 @@ engines.
 | IP-26 | A tag-bus coalescing test that flakes on its own | 1 | S |  | **done** 6023e1f (a test bug) |
 | IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | **done** 963d7d3 |
 | IP-28 | Raw analog for outputs and the remaining inputs | 3 | M |  | open |
-| IP-29 | The grader marks the plant the engine runs | 4 | L | ● | in progress |
+| IP-29 | The grader marks the plant the engine runs | 4 | L | ● | **done** 326248e..c740af5 |
 | IP-30 | The window opens when the student's driver is up | 2 | M |  | open |
 
 ## Appendix B — where the findings came from
