@@ -101,7 +101,11 @@ public partial class MotorStarter : Node3D, IPart
     private float _coilTimer;
     private float _startTimer;
 
-    private const float InrushFactor = ThermalOverload.ClassMultiple;
+    // Locked-rotor current as a multiple of full load: a property of the
+    // motor. It equals ThermalOverload.ClassMultiple only because trip
+    // classes are defined at a typical inrush; the two are not one number,
+    // and the grader mirrors this literal (tests/test_grade_templates.py).
+    private const float InrushFactor = 6.0f;
     private const float InrushDecay = 0.45f;
 
     private StandardMaterial3D _closedLampMat = null!;
