@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27 and IP-29 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-31. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -594,8 +594,8 @@ to one tick fails them.
 | IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | **done** 963d7d3 |
 | IP-28 | Raw analog for outputs and the remaining inputs | 3 | M |  | open |
 | IP-29 | The grader marks the plant the engine runs | 4 | L | ● | **done** 326248e..c740af5 |
-| IP-30 | The window opens when the student's driver is up | 2 | M |  | open |
-| IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | open |
+| IP-30 | The window opens when the student's driver is up | 2 | M |  | **done** ddc74dd, 6a0887b |
+| IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | **done** b808bdd, 15c57b1 (76 % of clicks missed at a 50 ms poll before, 0 after) |
 
 ## Appendix B — where the findings came from
 
