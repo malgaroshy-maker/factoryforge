@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-28. IP-02, IP-03, IP-06, IP-16, IP-18, IP-21 and IP-26 done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-30. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-26 and IP-27 done; IP-29 in progress; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -191,6 +191,13 @@ not from a run. It can import `factoryforge_sidecar.engine_stub` directly now.
 frozen grader with no scenes and a sidecar with no drivers. The registry now
 raises "not collected" rather than listing zero scenes, and this item's gate
 must grade a scene against the frozen binary, not only list scenes.
+*Found while doing IP-19:* the grader now reads each scene's plant from
+`engine/templates/` (`grading/templates.py`). It looks in `FACTORYFORGE_TEMPLATES`,
+then `engine/templates` inside a PyInstaller bundle, then the checkout. The
+exported engine keeps its templates inside the `.pck`, where Python cannot read
+them, so the freeze needs `--add-data` for `engine/templates`. Outside a
+checkout, without that, the grader's scene modules refuse to import and say
+where they looked. The sidecar's drivers and CLI never import them.
 
 **IP-09 — A no-licence first hour** · gate
 *Files:* `docs/GETTING_STARTED.md`, `README.md`, `examples/openplc/`.
@@ -437,6 +444,48 @@ mismatch today; it does not fix it.
 test writes a raw count into an `Int` node on the test server.
 *Size:* M.
 
+**IP-29 — The grader marks the plant the engine runs** · gate
+*Files:* `sidecar/factoryforge_sidecar/grading/**`, `tests/test_grade.py`,
+`tests/test_grade_templates.py`, `docs/GRADING.md`.
+*Found by IP-19:* 16 part positions in 7 of the 9 templated scenes disagree
+between the grader's model and the template. For example, the guarded cell's
+mute eye is at 1.35 m in the model and 1.0 m in the template, and the
+accumulation blade is at 3.0 against 2.6. There are also six behavioural
+differences. The batch-dosing model ignores `tank.fill`. The guarded cell's
+examiner opens a gate the program has locked, which the engine forbids. The
+pots start at 0 rather than at the template's value. Pick-and-place barcode
+codes are shuffled, where the engine derives them from the carton. The
+accumulation outfeed ignores its own drive. And the docs say the gantry
+"halves" when it drops to 0.4×. The engine uses the template value in every
+case. **Decided on 2026-09-23: the grader adopts the engine's values
+everywhere.**
+*Done when:* `tests/test_grade_templates.py` pins no disagreement. Every
+scene's `good` reference passes, and every wrong reference fails for its own
+lesson. Exam steps are retuned or redesigned within the engine's rules where
+geometry or behaviour moved. `GRADING.md`'s table is re-measured.
+*Verify:* before/after tables of verdicts and failed check ids per reference.
+Reverting one position, the locked guard and the fill valve each fails a test.
+*Size:* L.
+
+**IP-30 — The window opens when the student's driver is up**
+*Files:* `sidecar/factoryforge_sidecar/__main__.py` (`connect`), `tagbus.py`,
+`docs/tag-bus.md`, `grading/core.py`, `engine_stub.py` and
+`TagBusServer.cs` if the protocol gains a message.
+*Found by IP-25:* the graded window now opens on `describe`, but `connect`
+starts its driver only after `describe` arrives. However long an OPC UA or S7
+driver takes to reach the PLC therefore comes out of the window. Eight of the
+ten scenes press Start at 1.0 s, for 0.15 s, so a driver that needs more than
+about a second could miss the first Start. The engine cannot see this through
+today's protocol.
+*Done when:* the sidecar tells the engine when its driver is connected (a
+status message, added to the tag-bus contract on both engines), and the grader
+opens the window on it, falling back to `describe` for a controller that never
+sends it.
+*Verify:* a test with a driver that takes 3 s to connect still sees the first
+Start. Opening on `describe` makes that test fail. Parity passes on both
+engines.
+*Size:* M.
+
 ---
 
 ## Sequencing
@@ -453,6 +502,7 @@ test writes a raw count into an `Int` node on the test server.
 | IP-14 | seven parts in the palette that no scene uses (gates only the parts it ships) |
 | IP-22 | three self-tests have never met a binary |
 | IP-25 | a student who connects late is graded on a shorter run, and can score zero |
+| IP-29 | the grader marks a plant laid out differently from the one the student sees |
 
 ### Order
 
@@ -509,16 +559,18 @@ test writes a raw count into an `Int` node on the test server.
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |
 | IP-17 | Five industrial parts | 3 | XL |  | open |
 | IP-18 | `grade.py` becomes a package | 4 | L |  | **done** 8d4c395, 38660a3, 48f2691 |
-| IP-19 | The grader's plant is read from the template | 4 | M | ● | open |
+| IP-19 | The grader's plant is read from the template | 4 | M | ● | **done** 02be83a, 568aaa0; its findings are IP-29 |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | open |
 | IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
 | IP-22 | Every release self-test meets the binary | 5 | S | ● | open |
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
-| IP-25 | The graded plant starts when the controller connects | 2 | S | ● | open |
+| IP-25 | The graded plant starts when the controller connects | 2 | S | ● | **done** 184422a |
 | IP-26 | A tag-bus coalescing test that flakes on its own | 1 | S |  | **done** 6023e1f (a test bug) |
-| IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | open |
+| IP-27 | Re-measure GRADING.md's wrong-controller table | 2 | S |  | **done** 963d7d3 |
 | IP-28 | Raw analog for outputs and the remaining inputs | 3 | M |  | open |
+| IP-29 | The grader marks the plant the engine runs | 4 | L | ● | in progress |
+| IP-30 | The window opens when the student's driver is up | 2 | M |  | open |
 
 ## Appendix B — where the findings came from
 
