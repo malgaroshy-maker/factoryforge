@@ -75,7 +75,7 @@ public partial class MotorStarter : Node3D, IPart
     /// <summary>Has the thermal element opened? Latched: an overload stays
     /// tripped until somebody presses reset, which is the whole difference
     /// between a protective device and a fuse that heals.</summary>
-    public bool IsTripped { get; private set; }
+    public bool IsTripped => _overload.IsTripped;
 
     /// <summary>Motor current, amps. Zero with the contactor out.</summary>
     public float Current { get; private set; }
@@ -92,12 +92,16 @@ public partial class MotorStarter : Node3D, IPart
     /// Exposed because "it is about to trip" is invisible otherwise, and
     /// because a test that waits for a trip should be able to see it
     /// coming.</summary>
-    public float ThermalState { get; private set; }
+    public float ThermalState => _overload.State;
+
+    /// <summary>The bimetal itself, shared with the star-delta starter so the
+    /// two trip on one curve (IP-17).</summary>
+    private readonly ThermalOverload _overload = new();
 
     private float _coilTimer;
     private float _startTimer;
 
-    private const float InrushFactor = 6.0f;
+    private const float InrushFactor = ThermalOverload.ClassMultiple;
     private const float InrushDecay = 0.45f;
 
     private StandardMaterial3D _closedLampMat = null!;
@@ -210,8 +214,7 @@ public partial class MotorStarter : Node3D, IPart
     /// a click on the part is exactly that.</summary>
     public void ResetOverload()
     {
-        IsTripped = false;
-        ThermalState = 0.0f;
+        _overload.Reset();
         Apply();
     }
 
@@ -269,14 +272,11 @@ public partial class MotorStarter : Node3D, IPart
     }
 
     /// <summary>
-    /// The trip curve. Heating goes as the square of the current over the trip
-    /// setting, which is what makes an overload inverse-time: six times the
-    /// trip current fills the element in <see cref="TripTime"/>, twice the trip
-    /// current takes about twelve times as long, and ten percent over takes a
-    /// very long while indeed.
-    ///
-    /// Below the trip setting the element cools, so a line that starts, runs a
-    /// while and starts again does not accumulate its way to a trip.
+    /// The trip curve, which lives in <see cref="ThermalOverload"/>: heating
+    /// goes as the square of the current over the trip setting, so six times
+    /// the trip current fills the element in <see cref="TripTime"/>, twice the
+    /// trip current takes about twelve times as long, and below the setting the
+    /// element cools.
     /// </summary>
     private void StepThermal(float delta)
     {
@@ -284,28 +284,14 @@ public partial class MotorStarter : Node3D, IPart
         // hand the tag table an infinity — which it now rejects outright, and a
         // throw inside the tick is the worst way to find out (HP-23).
         float tripAmps = Mathf.Max(FullLoadAmps * Mathf.Max(TripPercent, 1.0f) / 100.0f, 0.01f);
-        float ratio = Current / tripAmps;
-        float curveTime = Mathf.Max(TripTime, 0.05f);
 
-        // Heat at (I/Itrip)^2 - 1 per second, scaled so ratio == InrushFactor
-        // fills the element in TripTime -- that is what the trip class means.
-        // Cool at a third of that rate, which is roughly how a bimetal behaves
-        // and, more usefully, is slow enough that repeated starting still trips.
-        float scale = (InrushFactor * InrushFactor - 1.0f) * curveTime;
-        float rate = (ratio * ratio - 1.0f) / scale;
-        if (rate < 0.0f) rate /= 3.0f;
+        if (!_overload.Step(Current, tripAmps, TripTime, delta)) return;
 
-        ThermalState = Mathf.Clamp(ThermalState + rate * delta, 0.0f, 1.0f);
-
-        if (ThermalState >= 1.0f && !IsTripped)
-        {
-            GD.Print($"{Name}: thermal overload tripped at {Current:0.0} A "
-                     + $"({ratio * 100.0f:0} % of the trip setting)");
-            IsTripped = true;
-            IsClosed = false;
-            Current = 0.0f;
-            _coilTimer = 0.0f;
-        }
+        GD.Print($"{Name}: thermal overload tripped at {Current:0.0} A "
+                 + $"({Current / tripAmps * 100.0f:0} % of the trip setting)");
+        IsClosed = false;
+        Current = 0.0f;
+        _coilTimer = 0.0f;
     }
 
     private void Apply()
