@@ -227,6 +227,7 @@ reads and the fake it shuts.
 | `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's; and whether a program that locks the gate lets the operator in once the cell has stopped |
 | `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
 | `star-delta-start` | the motor's speed at the instant the delta contacts closed, and whether star and delta ever conducted at the same instant | a changeover on a timer — the run loads the machine between its two starts, so the star run-up takes about twice as long |
+| `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 
 Every scene also carries `controller.stayed_connected`,
 `integrity.no_forced_tags` and `integrity.no_input_writes`, and every scene has
@@ -252,6 +253,8 @@ something physical that no tag reports:
   the part out as they go in
 * the **machine's load** rises from 30 % of rated torque to 85, 90 or 95 %
   (from the seed) between the two starts of the star-delta starter
+* the **servo drive faults** mid-move, and the fault clears three seconds
+  before anybody presses Reset, on the servo positioning scene
 
 None of those is visible as a value on the bus. The controller can only find
 out by measuring — the encoder counting slower, the flow meter reading less,
@@ -458,6 +461,8 @@ scene's own 60 s window. Neither is thirteen.
 | | `noreset` | the second batch is over before it starts |
 | `star-delta-start` | `samescan` | drops star and energises delta in one scan; the breaker trips at 3.78 s |
 | | `timed` | changes over at 66.6 % speed and draws 98.6 A on the loaded machine, against a pot of 85 % |
+| `servo-positioning` | `autoack` | acknowledges at 22.01 s, as the fault clears, and the carriage moves 369 mm before the Reset at 25.0 s |
+| | `noack` | never acknowledges, so the first fault stops the axis for good |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released

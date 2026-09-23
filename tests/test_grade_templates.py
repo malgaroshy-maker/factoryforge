@@ -55,8 +55,8 @@ from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E40
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, batch_dosing as bd, guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
-    roller_line_weighing as rw, sorting_by_height as sh, star_delta_start as sd,
-    start_stop_station as ss)
+    roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
+    star_delta_start as sd, start_stop_station as ss)
 
 TEMPLATES = ROOT / "engine" / "templates"
 FIXTURE = ROOT / "engine" / "fixtures" / "scene_tag_sets.json"
@@ -255,6 +255,8 @@ CSHARP_MIRRORS = [
     (sd.SD_PULL_OUT_SPEED, "Parts/StarDeltaStarter.cs", r"PullOutSpeed = ([\d.]+)f"),
     (sd.SD_FRICTION_TORQUE, "Parts/StarDeltaStarter.cs", r"FrictionTorque = ([\d.]+)f"),
     (sd.SD_CLASS_MULTIPLE, "Parts/ThermalOverload.cs", r"ClassMultiple = ([\d.]+)f"),
+    (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
+    (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
 
 
@@ -703,6 +705,36 @@ def test_a_star_run_up_is_slower_on_a_loaded_machine_and_in_proportion_to_inerti
     light, loaded = run_up(), run_up(max(sd.SD_LOADS_THEN))
     assert light < 3.5 and loaded > 1.6 * light
     assert sd.SD_INERTIA == _t("star-delta-start").part("motor", "StarDeltaStarter").number("inertia")
+
+
+def test_a_servo_error_latches_and_clears_only_on_an_edge_after_its_cause():
+    """`ServoAxis.Step` (:267): a fault latches `error` and quick-stops the
+    carriage; an ack while the fault stands does nothing, holding ack high is
+    not a second edge, and a fresh edge once the fault has gone clears it --
+    after which the drive resumes towards the target it holds."""
+    drive = sv.ServoDrive()
+    run = lambda secs, **kw: [drive.step(**{"enable": True, "ack": False, "fault": False,  # noqa: E731
+                                            "target": 800.0, "velocity": 400.0,
+                                            "dt": 0.01, **kw})
+                              for _ in range(int(round(secs / 0.01)))]
+    run(1.0)
+    assert drive.ready and 300.0 < drive.position < 800.0
+    run(0.5, fault=True)
+    stopped = drive.position
+    assert drive.error and not drive.ready and drive.velocity == 0.0
+    run(0.5, fault=True, ack=True)
+    assert drive.error, "an acknowledge while the fault stands cleared it"
+    run(0.5, ack=True)
+    assert drive.error and drive.position == stopped, "a held ack is not an edge"
+    run(0.02)
+    run(0.02, ack=True)
+    assert not drive.error and drive.ready
+    run(3.0)
+    assert drive.position == pytest.approx(800.0) and drive.in_position
+
+    drive = sv.ServoDrive()
+    run(0.5, target=sv.SV_STROKE + 1.0)
+    assert drive.error and "outside" in drive.error_text
 
 
 def test_the_pot_range_holds_every_setpoint_the_exam_turns_it_to():

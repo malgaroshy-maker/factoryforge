@@ -759,6 +759,32 @@ def test_a_changeover_on_a_timer_comes_early_on_a_loaded_machine(tmp_path):
     assert second["peak_current"] > 3 * report["evidence"]["full_load_amps"]
 
 
+def test_the_servo_passes_a_shuttle_that_waits_for_the_operator(tmp_path):
+    code, report = graded(tmp_path, "servo-positioning", "good", 40, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    fault = report["evidence"]["fault"]
+    # Gotcha 16: the fault really was raised mid-move, and the axis really
+    # did stop and come back, or "held until Reset" is about a still axis.
+    assert abs(fault["moving_at_mm_s"]) >= 200.0
+    assert fault["reset_at"] <= fault["acknowledged_at"] < fault["reset_at"] + 0.2
+
+
+def test_acknowledging_a_servo_error_by_itself_is_automatic_restart(tmp_path):
+    code, report = graded(tmp_path, "servo-positioning", "autoack", 40, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"error.held_until_reset"}
+    fault = report["evidence"]["fault"]
+    assert fault["acknowledged_at"] < fault["reset_at"]
+    assert fault["moved_before_reset_mm"] > 100.0
+    assert any("automatic restart" in line for line in report["feedback"])
+
+
+def test_a_servo_error_nobody_acknowledges_stops_the_axis_for_good(tmp_path):
+    code, report = graded(tmp_path, "servo-positioning", "noack", 40, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"error.recovered"}
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1039,6 +1065,9 @@ TABLE_NUMBERS = {
     ("star-delta-start", "timed"): lambda e: [
         f"{e['changeovers'][1]['speed']:.1f}", f"{e['changeovers'][1]['peak_current']:.1f}",
         f"{e['pot_percent']:g}"],
+    ("servo-positioning", "autoack"): lambda e: [
+        f"{e['fault']['acknowledged_at']:.2f}", f"{e['fault']['moved_before_reset_mm']:.0f}",
+        f"{e['fault']['reset_at']:.1f}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

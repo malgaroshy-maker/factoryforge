@@ -1514,6 +1514,108 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "servo-positioning": [
+      {
+        "id": "axis.ack",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "axis.enable",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "axis.error",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "axis.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "axis.inposition",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "axis.position",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "axis.ready",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "axis.target",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "axis.velocity",
+        "type": "float",
+        "kind": "output"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "position_display.value",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

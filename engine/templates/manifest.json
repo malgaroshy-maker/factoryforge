@@ -142,5 +142,17 @@
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · motor.main · motor.star · motor.delta · motor.mainaux · motor.staraux · motor.deltaaux · motor.breaker · motor.overload · motor.speed · motor.current · current_gauge.value · tower.green · tower.yellow · tower.red",
       "done": "The motor runs up in star, changes over at the pot's speed with a modest current step, and runs on in delta, and motor.breaker never drops. Drop star and energise delta in the same scan and the breaker trips, and stays tripped until somebody closes it by hand at the starter. Then load the machine (the starter's Motor Load) and start again: the star run-up takes about twice as long, so a changeover timed in seconds comes half way up it and draws nearly the direct-on-line current. Only motor.speed knows when the motor is ready."
     }
+  },
+  {
+    "id": "servo-positioning",
+    "title": "Servo positioning",
+    "blurb": "A servo axis with a PLCopen-shaped interface: enable and ready, an absolute move, and an error the drive latches by itself and waits for somebody to acknowledge.",
+    "path": "res://templates/servo_positioning.json",
+    "scene": "servo-positioning",
+    "brief": {
+      "task": "Shuttle the axis between station A at 100 mm and station B, the panel's pot, dwelling a second at each, from Start until Stop. The drive does nothing until axis.enable has been on long enough for axis.ready, and every move needs axis.velocity as well as axis.target. When the drive faults it stops itself and latches axis.error: hold your sequence, show it, and acknowledge -- a rising edge of axis.ack -- only when the operator presses Reset and axis.fault has gone.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · axis.enable · axis.ready · axis.target · axis.velocity · axis.position · axis.inposition · axis.error · axis.ack · axis.fault · position_display.value · tower.green · tower.yellow · tower.red",
+      "done": "The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to."
+    }
   }
 ]
