@@ -3,6 +3,7 @@
     factoryforge-sidecar connect [--driver ...] [options]  drive a RUNNING engine
     factoryforge-sidecar demo    [--driver ...] [options]  run a scene + driver
     factoryforge-sidecar browse  <url>                     dump an OPC UA address space
+    factoryforge-sidecar grade   [--scene ...] [options]   mark a PLC program against a scene
 
 `connect` is the one to use with the 3D engine. `demo` starts its *own* Python
 scene on the bus port, which is right for a headless check with no Godot in the
@@ -14,6 +15,14 @@ already listening and drives that.
 `browse` exists because the hardest part of connecting to a real PLC is finding
 the right NodeIds. An S7-1500 exposes tags as `ns=3;s="DB"."Member"`, and the
 namespace index is not guaranteed to be 3. Browse first, then write the mapping.
+
+`grade` is the grader, `factoryforge_sidecar.grading`, under the name the
+release ships (IP-08). Its flags, output, JSON and exit codes are exactly those
+of `python tools/grade.py`, because both are the same `grading.main`; this CLI
+only hands it the rest of the command line. It lives here so that someone with
+the release zip and no Python can mark a program -- `tools/grade.py` needs a
+checkout and an interpreter, and the frozen sidecar is the only Python a
+release carries.
 """
 
 from __future__ import annotations
@@ -22,12 +31,6 @@ import argparse
 import asyncio
 import logging
 import sys
-from pathlib import Path
-
-# The harness lives outside the installed package; add it when running from a checkout.
-_HARNESS = Path(__file__).resolve().parent.parent.parent / "harness"
-if _HARNESS.is_dir() and str(_HARNESS) not in sys.path:
-    sys.path.insert(0, str(_HARNESS))
 
 
 # --- driver options ---
@@ -84,6 +87,23 @@ def _coerce_option(key: str, raw: str, annotation: str):
     return raw
 
 
+def _frozen() -> bool:
+    """True in the release's frozen sidecar, where there is no pip, no
+    checkout and no `engine/` directory to point anyone at."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _missing_extra_hint(extras: str) -> str:
+    """What to do about a driver dependency that is not there. From a
+    checkout, install it; in a frozen release nothing can be installed into
+    the binary, so say that instead of printing a pip command that cannot
+    help."""
+    if _frozen():
+        return ("this release was built without it, and nothing installed on "
+                "this machine can add it to factoryforge-sidecar")
+    return f'pip install -e "sidecar[{extras}]"'
+
+
 def drivers_module():
     """Imported lazily: the driver package pulls in asyncua and snap7, and
     `--help` should not pay for that."""
@@ -98,7 +118,7 @@ async def browse(url: str, max_depth: int, timeout: float = 10.0) -> int:
     try:
         from asyncua import Client, ua
     except ImportError:
-        print("asyncua is not installed. pip install 'factoryforge-sidecar[opcua]'")
+        print(f"asyncua is not available: {_missing_extra_hint('opcua')}")
         return 1
 
     print(f"connecting to {url} ...")
@@ -160,10 +180,16 @@ async def _walk(client, node, depth: int, max_depth: int, ua) -> None:
 # --- demo ---
 
 async def demo(args) -> int:
-    from engine_stub import EngineStub          # type: ignore
-    from scene import SortingScene              # type: ignore
-
+    # From the package, not from `harness/`. This used to put the checkout's
+    # `harness/` directory on sys.path, found from this file's own location,
+    # and import `engine_stub` and `scene` from there -- which exists in a
+    # checkout and nowhere else. A sidecar frozen from v1.0.0 therefore failed
+    # `demo` with "No module named 'engine_stub'" the moment it ran, while
+    # `--help` and every other command worked. Both have lived in the
+    # package since IP-18; `harness/` holds aliases to them.
     from . import drivers
+    from .engine_stub import EngineStub
+    from .sorting_scene import SortingScene
     from .tagbus import TagBusClient
 
     # Before the engine starts, so a bad option is refused rather than
@@ -179,7 +205,12 @@ async def demo(args) -> int:
 
     ticker = asyncio.create_task(engine._tick_loop())
     bus = TagBusClient(engine.url)
-    runner = asyncio.create_task(bus.run())
+    # Stopped by asking, as `connect` does, not by cancelling it mid-recv:
+    # that left websockets' pending recv holding a ConnectionClosedOK nobody
+    # retrieved, and every `demo --duration N` -- a clean run, exit 0 -- ended
+    # on "Task exception was never retrieved" and a traceback.
+    stop = asyncio.Event()
+    runner = asyncio.create_task(bus.run(stop))
     await asyncio.wait_for(bus.connected.wait(), timeout=5)
 
     driver = drivers.create(args.driver, bus, **config)
@@ -207,11 +238,27 @@ async def demo(args) -> int:
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        for task in (printer, runner, ticker):
-            task.cancel()
+        printer.cancel()
         await driver.stop()
+        # The client first, while the engine it is talking to is still up.
+        stop.set()
+        try:
+            await asyncio.wait_for(runner, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            runner.cancel()
+        ticker.cancel()
         await engine.stop()
     return 0
+
+
+#: How to start the engine, for the message `connect` prints when nothing is
+#: listening. A release has no `engine/` directory, so the checkout's command
+#: would send its user looking for something that is not there.
+def _start_engine_hint() -> str:
+    if not _frozen():
+        return "godot --path engine/"
+    binary = "FactoryForge.exe" if sys.platform.startswith("win") else "FactoryForge.x86_64"
+    return f"run {binary}, beside this program"
 
 
 async def connect(args) -> int:
@@ -246,7 +293,7 @@ async def connect(args) -> int:
     except asyncio.TimeoutError:
         runner.cancel()
         print(f"no engine listening on {url} after {args.timeout:g}s.\n"
-              f"Start it first:  godot --path engine/", file=sys.stderr)
+              f"Start it first: {_start_engine_hint()}", file=sys.stderr)
         return 1
 
     # The hello arrives before the scene description, so `connected` alone means
@@ -338,9 +385,63 @@ async def _print_loop(sim, engine) -> None:
             last = line
 
 
+# --- grade ---
+
+#: The name `grade --help` prints, so its usage line is a command that runs.
+GRADE_PROG = "factoryforge-sidecar grade"
+
+
+def grade(argv: list[str]) -> int:
+    """Hand the rest of the command line to the grader, and return its exit
+    code: 0 PASS, 1 FAIL, 2 ERROR, 3 DISQUALIFIED.
+
+    The grader finds its scenes at runtime and reads each plant from the
+    engine's templates, so two things can be missing from a sidecar that
+    otherwise works: the scene modules, if the freeze did not collect them, and
+    the templates, if it did not bundle them. Either one surfaces the moment
+    the grader lists its scenes -- before it parses a flag -- and would reach a
+    student as a traceback. Ask for the scenes first, and report either as the
+    grader's own ERROR line and exit code, which a marking script already
+    knows how to read.
+    """
+    try:
+        from .grading import main as grading_main
+        from .grading import registry
+
+        registry.rubrics()
+    except Exception as exc:  # noqa: BLE001 -- reported, with its type, as exit 2
+        print(f"RESULT grade=ERROR the grader cannot load its scenes: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    return grading_main(argv, prog=GRADE_PROG)
+
+
+def _grade_argv(argv: list[str]) -> list[str] | None:
+    """The grader's arguments, if this command line is `grade ...`, else None.
+
+    `grade` is dispatched before this CLI's own parser sees anything, rather
+    than declared as a subparser that swallows the rest: that way the grader
+    gets its argv untouched, `grade --help` is the grader's own help, and the
+    flags stay identical to `tools/grade.py`'s because this CLI never learns
+    them.
+    """
+    rest = list(argv)
+    while rest and rest[0] in ("-v", "--verbose"):
+        rest.pop(0)
+    if rest and rest[0] == "grade":
+        return rest[1:]
+    return None
+
+
 # --- entry point ---
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    grade_argv = _grade_argv(argv)
+    if grade_argv is not None:
+        return grade(grade_argv)
+
     parser = argparse.ArgumentParser(prog="factoryforge-sidecar")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -368,6 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     p_connect.add_argument("-o", "--option", nargs=2, action="append",
                            metavar=("KEY", "VALUE"),
                            help="driver option, e.g. -o url opc.tcp://...")
+
+    # Listed so that `--help` shows it; `main` dispatches it before this
+    # parser runs, so nothing here ever parses its arguments.
+    sub.add_parser("grade", add_help=False,
+                   help="mark a PLC program against a scene "
+                        "(factoryforge-sidecar grade --help)")
 
     p_demo = sub.add_parser("demo", help="run the built-in Python scene with a driver")
     p_demo.add_argument("--driver", default="opcua-server",
@@ -399,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             print()
             print(f"{len(missing)} driver(s) present but not usable: " + ", ".join(sorted(missing)))
-            print("Install the matching extra: pip install -e \"sidecar[opcua,siemens,plcsim]\"")
+            print("To fix: " + _missing_extra_hint("opcua,siemens,plcsim,mqtt"))
         return 0
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

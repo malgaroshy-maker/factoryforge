@@ -6,10 +6,12 @@ clean runners and pass every headless self-test in the release gate against the
 exported binary — **25** of them on that last run. Windows 109 MB + 20 MB
 sidecar; Linux 74 MB + 31 MB sidecar.*
 
-*The gate is **27** today (`SELF_TESTS` in `tools/packaging/check_release.py`).
-`lineparts` and `buildflow` joined it after 2026-09-02 and **no release build
-has been run since**, so those two have never been exercised against an exported
-binary. Nothing suggests they will fail; nothing has checked.*
+*On 2026-09-23 (IP-08) a local Windows build passed the whole gate: every
+self-test in `SELF_TESTS` against the exported binary, and the frozen sidecar
+grading a scene to PASS and to FAIL with no Python on the machine's PATH. **The
+Linux archive has not been built with the grader in it**; it is unverified
+until `release.yml` next runs. The list in `check_release.py` is the count;
+this paragraph deliberately does not repeat it.*
 
 Running FactoryForge from a checkout means installing Godot, the .NET 8 SDK and
 Python first — a real barrier for someone who wanted to learn ladder logic, not
@@ -102,20 +104,26 @@ run if the `.sln` is missing rather than producing the silently-broken binary.
 ## What a release contains
 
 ```
-FactoryForge-windows/
-  FactoryForge.exe                     the engine, with the .pck embedded
-  data_FactoryForge_windows_x86_64/    the .NET assemblies — required
-  factoryforge-sidecar.exe             every PLC protocol, frozen
-  examples/                            TIA project, Node-RED flow, mappings
-  docs/                                GETTING_STARTED, tag-bus, authoring guides
-  README.md, LICENSE
+FactoryForge-windows.zip
+  windows/                             (linux/ in the Linux archive)
+    FactoryForge.exe                   the engine, with the .pck embedded
+    data_FactoryForge_windows_x86_64/  the .NET assemblies — required
+    factoryforge-sidecar.exe           every PLC protocol and the grader, frozen
+    examples/                          TIA, OpenPLC and Node-RED examples, mappings
+    docs/                              GETTING_STARTED, tag-bus, authoring guides, TEST_PLAN
+    README.md, LICENSE
 ```
 
-The scene templates — eight of them, listed in `engine/templates/manifest.json`
-— are `res://` resources and travel **inside** the binary; they are deliberately
-not in that list. (This line said "five" until 2026-09-21, which was the count
-when it was written and has been wrong since the sixth template landed. The
-manifest is the one place that knows.)
+The folder inside the archive is named after the target, `windows/` or
+`linux/` — `make_archive` stores paths relative to `dist/`. This listing
+said `FactoryForge-windows/` until 2026-09-23, which no archive has ever
+contained.
+
+The scene templates — listed in `engine/templates/manifest.json`, which is the
+one place that knows how many there are — are `res://` resources and travel
+**inside** the engine binary; they are deliberately not in that list. A second
+copy travels inside `factoryforge-sidecar`, for the grader; see *How the grader
+ships* below.
 
 ### One file, or one folder — one folder
 
@@ -163,6 +171,57 @@ Two things about the freeze are worth knowing:
   hardcoded string, the second lists registered drivers whether or not their
   dependency arrived.
 
+### How the grader ships
+
+`factoryforge-sidecar grade` is the grader (`factoryforge_sidecar.grading`,
+the same `main` that `python tools/grade.py` runs), so someone with only the
+zip can mark a program: same flags, same output, same JSON, same exit codes
+(0 PASS, 1 FAIL, 2 ERROR, 3 DISQUALIFIED). It was not in v1.0.0 (IP-08).
+
+The grader is harder to freeze than the drivers, for two reasons, and each one
+produces a binary that starts, prints `--help`, and marks nothing:
+
+* **Its scenes are found, not imported.** `grading/registry.py` lists the
+  modules in `grading/scenes/` and `grading/reference/` at runtime, and
+  nothing imports them by name, so a freezer that only follows imports leaves
+  every one of them out. `--collect-submodules factoryforge_sidecar` is what
+  brings them in — and it is evaluated by *importing the package in the Python
+  that runs PyInstaller*, before `--paths` applies. If that Python cannot
+  import the package, it collects nothing and says nothing; if it imports a
+  different copy (an editable install of another checkout), it collects that
+  copy's module list. `build_release.py` therefore runs PyInstaller with this
+  checkout's `sidecar/` first on `PYTHONPATH`, and before freezing asks
+  `collect_submodules` itself and refuses unless every `.py` under
+  `factoryforge_sidecar/` is in the answer. Local builds before this had
+  exactly that gap — the package was not installed in the Python that froze
+  it — and the drivers survived only because `drivers/__init__.py` imports
+  each of them by name.
+* **It reads the templates from disk.** Each plant model takes its belt
+  speeds, pump ratings and deck lengths from `engine/templates/*.json`
+  (`grading/templates.py`, IP-19). The exported engine keeps those inside its
+  `.pck`, where Python cannot read them, so the freeze bundles the directory
+  with `--add-data <repo>/engine/templates<sep>engine/templates`. The
+  destination is fixed: `templates.py` looks for
+  `sys._MEIPASS/engine/templates` in a frozen build. `<sep>` is
+  `os.pathsep` — `;` on Windows, `:` on Linux — which is how the same line
+  builds on both runners without `release.yml` knowing about it.
+
+`templates.py` argues against shipping a copy of the templates, because a copy
+drifts. This one cannot: it is taken from the same checkout, in the same build,
+as the engine export whose `.pck` holds the other copy.
+
+Missing either one, `grade` says which on the grader's own ERROR line and
+exits 2 — "no modules found in factoryforge_sidecar.grading.scenes; in a frozen
+build, they were not collected", or the directories it searched for the
+templates — rather than a traceback. `FACTORYFORGE_TEMPLATES` still overrides
+the bundled copy, for an instructor marking against a template they changed.
+
+`demo` works in a release for the first time with this change. It used to
+import its scene from the checkout's `harness/` directory, found from its own
+file's location, and a sidecar frozen from v1.0.0 fails on its first line with
+`ModuleNotFoundError: No module named 'engine_stub'`. It imports from the
+package now.
+
 ### How the engine finds it
 
 `SidecarLocator` looks in order: the `FACTORYFORGE_SIDECAR` environment
@@ -185,12 +244,43 @@ them being headless:
 ./dist/windows/FactoryForge.exe --headless -- --self-test=scenes
 ```
 
-All of them passed against the packaged Windows build on the last run —
-25 at that point, 27 in the list now — including the two that read
+All of them passed against the packaged Windows build on the last run,
+including the two that read
 checked-in fixtures. Those two used to fail in an export for two separate
 reasons, both now fixed: the fixtures lived outside `res://` at a path that does
 not exist beside a binary, and even once moved in, `System.IO.File` cannot read
 inside a `.pck` — only Godot's `FileAccess` can (see `engine/src/Sim/FixtureFile.cs`).
+
+### The frozen sidecar is run, not just listed
+
+`check_release.py` also runs `factoryforge-sidecar` the way someone with only
+the zip would: from a scratch directory, with `FACTORYFORGE_TEMPLATES`,
+`PYTHONPATH` and `PYTHONHOME` removed, so the only modules and templates it can
+find are its own.
+
+* `drivers` — every expected protocol driver usable.
+* `grade --list` — exactly the scenes the checkout's `grading/scenes/` defines,
+  read from their `SCENE = "..."` lines.
+* `grade --scene sorting-by-height --reference good --lockstep --seed 1` must
+  exit 0 with a JSON report saying PASS, and `--reference blind`, a program
+  on a stopwatch, must exit 1 with FAIL on the `sort.*` checks and nothing
+  failed under `controller.*` or `integrity.*`. Both references, because a
+  grader that can only PASS or can only FAIL has not been tested.
+* `demo --driver mock --duration 3` — the scene runs, shuts down, exit 0, no
+  traceback.
+
+Each check was watched failing before it was trusted (AGENTS.md gotcha 24):
+built without the templates `--add-data`, every `grade` check failed with the
+grader's "cannot find them" message; built with a Python that could not import
+the package, every `grade` check failed with "they were not collected"; and
+the sidecar frozen from v1.0.0 failed every check but `drivers` (`grade` does not exist there,
+and `demo` dies on `No module named 'engine_stub'`). In the first two builds
+the `drivers` check still passed, which is why listing drivers was never
+going to catch either.
+
+To iterate on the freeze alone, `check_release.py --target windows
+--sidecar-only` runs only these checks. It prints that it is not a release
+verdict, and it is not one.
 
 ---
 

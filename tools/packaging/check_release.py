@@ -14,12 +14,30 @@ Godot's own FileAccess reaches.
 Also checks the two things that make a release a release rather than a folder of
 files: the .NET assemblies are present (an export missing them still produces a
 binary and exits 0), and the frozen sidecar is where the engine looks for it.
+
+And it runs the frozen sidecar the way someone with only the zip would (IP-08):
+`grade --list` must offer every scene the checkout's grader has, one scene is
+graded with a built-in controller that must PASS and one that must FAIL, and
+`demo` must run a scene. Each from a scratch directory, with no
+`FACTORYFORGE_TEMPLATES` and no `PYTHONPATH`, so the only templates and the
+only modules it can find are the ones inside it. Listing scenes alone would
+not do: a freeze that collected the scene modules but not the templates, or
+the other way round, fails only once something is actually marked.
+
+    python tools/packaging/check_release.py --target windows --sidecar-only
+
+checks the frozen sidecar and nothing else, for iterating on the freeze. It is
+not a release verdict and says so.
 """
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -103,17 +121,178 @@ def check_drivers(sidecar: Path, target: str) -> list[str]:
             if missing else [])
 
 
+#: The graded run the gate makes against the frozen sidecar. One scene, two
+#: built-in controllers: `good` must PASS, and `blind` -- a stopwatch program
+#: that never reads a sensor -- must FAIL on the sorting checks, not on the
+#: run. Lockstep and a fixed seed, so the verdict cannot depend on how busy the
+#: runner is.
+GATE_SCENE = "sorting-by-height"
+GATE_GOOD = "good"
+GATE_WRONG = "blind"
+GATE_SEED = "1"
+
+SCENES_DIR = ROOT / "sidecar" / "factoryforge_sidecar" / "grading" / "scenes"
+
+
+def expected_scenes() -> set[str]:
+    """Every scene the checkout's grader can mark, read from the scene
+    modules' `SCENE = "..."` lines rather than by importing them, so the gate
+    needs nothing installed to know what the frozen grader should offer."""
+    found = set()
+    for path in SCENES_DIR.glob("*.py"):
+        if path.name.startswith("_"):
+            continue
+        match = re.search(r'^SCENE\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"),
+                          re.MULTILINE)
+        if match:
+            found.add(match.group(1))
+    return found
+
+
+def _sidecar_env() -> dict[str, str]:
+    """The caller's environment, minus everything that could let the frozen
+    sidecar find templates or modules anywhere but inside itself."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("FACTORYFORGE_TEMPLATES", "PYTHONPATH", "PYTHONHOME")}
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _run_sidecar(sidecar: Path, args: list[str], cwd: Path,
+                 timeout: float = 240) -> tuple[int, str]:
+    # subprocess.run drains both pipes as it goes (AGENTS.md gotcha 15).
+    result = subprocess.run([str(sidecar), *args], cwd=cwd, env=_sidecar_env(),
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=timeout)
+    return result.returncode, (result.stdout or "") + (result.stderr or "")
+
+
+def _last_line(text: str) -> str:
+    # The bootloader's own "[PYI-...] Failed to execute script" follows every
+    # uncaught exception; the exception itself is the line worth reporting.
+    lines = [line.strip() for line in text.splitlines()
+             if line.strip() and not line.startswith("[PYI-")]
+    return lines[-1][:400] if lines else "(no output)"
+
+
+def check_grader(sidecar: Path) -> list[str]:
+    """Grade with the frozen sidecar alone. Returns the problems, and prints
+    each check as it goes."""
+    problems: list[str] = []
+
+    def fail(message: str) -> None:
+        problems.append(message)
+        print(f"  [FAIL] {message}", file=sys.stderr, flush=True)
+
+    with tempfile.TemporaryDirectory(prefix="ff-gate-") as scratch:
+        cwd = Path(scratch)
+
+        # 1. Every scene the checkout marks is offered.
+        try:
+            code, out = _run_sidecar(sidecar, ["grade", "--list"], cwd)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            fail(f"grade --list did not run: {exc}")
+            return problems
+        # --list prints each scene id flush left, its details indented.
+        listed = {line.strip() for line in out.splitlines()
+                  if line.strip() and not line[:1].isspace() and " " not in line.strip()}
+        expected = expected_scenes()
+        if code != 0:
+            fail(f"grade --list exited {code}: {_last_line(out)}")
+        elif not expected:
+            fail(f"found no scene modules in {SCENES_DIR} to compare against")
+        elif listed != expected:
+            fail(f"grade --list offers {len(listed)} scene(s), the checkout has "
+                 f"{len(expected)}; missing {sorted(expected - listed) or 'none'}, "
+                 f"extra {sorted(listed - expected) or 'none'}")
+        else:
+            print(f"  [ok]   grade --list: all {len(expected)} graded scenes", flush=True)
+
+        # 2. A graded run each way, read back from the JSON report.
+        for reference, want_code, want in ((GATE_GOOD, 0, "PASS"), (GATE_WRONG, 1, "FAIL")):
+            report_path = cwd / f"{reference}.json"
+            args = ["grade", "--scene", GATE_SCENE, "--reference", reference,
+                    "--lockstep", "--seed", GATE_SEED, "--quiet",
+                    "--json", str(report_path)]
+            label = f"grade --scene {GATE_SCENE} --reference {reference}"
+            try:
+                code, out = _run_sidecar(sidecar, args, cwd)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                fail(f"{label} did not finish: {exc}")
+                continue
+            if code != want_code:
+                fail(f"{label} exited {code}, expected {want_code} ({want}): "
+                     f"{_last_line(out)}")
+                continue
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                fail(f"{label} wrote no readable JSON report: {exc}")
+                continue
+            failed = [c["id"] for c in report.get("checks", []) if not c.get("ok")]
+            if report.get("verdict") != want or report.get("exit_code") != want_code:
+                fail(f"{label}: the report says {report.get('verdict')} "
+                     f"(exit_code {report.get('exit_code')}), expected {want}")
+                continue
+            if want == "FAIL":
+                # Wrong for the scene's own reason -- not because the run broke.
+                broken = [c for c in failed if c.startswith(("controller.", "integrity."))]
+                if broken or not any(c.startswith("sort.") for c in failed):
+                    fail(f"{label} failed for the wrong reason: {', '.join(failed)}")
+                    continue
+            print(f"  [ok]   {label}: {want}, exit {code}"
+                  + (f" ({', '.join(failed)})" if failed else ""), flush=True)
+
+        # 3. `demo` runs its scene. Until IP-08 it imported that scene from a
+        # path that exists only in a checkout, and the frozen build shipped it
+        # failing on its first line.
+        try:
+            code, out = _run_sidecar(sidecar, ["demo", "--driver", "mock", "--port", "0",
+                                               "--duration", "3"], cwd, timeout=120)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            fail(f"demo did not finish: {exc}")
+            return problems
+        if code != 0 or "engine listening on ws://" not in out or "t=" not in out:
+            fail(f"demo --driver mock exited {code}: {_last_line(out)}")
+        elif "Traceback" in out:
+            fail(f"demo --driver mock exited 0 but printed a traceback: {_last_line(out)}")
+        else:
+            print("  [ok]   demo --driver mock: the scene ran and shut down", flush=True)
+    return problems
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--target", choices=sorted(BINARIES), required=True)
+    parser.add_argument("--sidecar-only", action="store_true",
+                        help="check the frozen sidecar alone; not a release verdict")
     args = parser.parse_args(argv)
 
     staging = DIST / args.target
     binary = staging / BINARIES[args.target]
     failures: list[str] = []
 
-    print(f"Checking the {args.target} release in {staging}")
+    print(f"Checking the {args.target} release in {staging}", flush=True)
+
+    if args.sidecar_only:
+        sidecar = staging / SIDECARS[args.target]
+        if not sidecar.exists():
+            print(f"  [FAIL] no {sidecar.name}", file=sys.stderr)
+            return 1
+        for problem in check_drivers(sidecar, args.target):
+            failures.append(problem)
+            print(f"  [FAIL] {problem}", file=sys.stderr)
+        if not failures:
+            print("  [ok]   drivers usable", flush=True)
+        failures.extend(check_grader(sidecar))
+        print()
+        if failures:
+            print(f"{len(failures)} problem(s) in the frozen sidecar", file=sys.stderr)
+            return 1
+        print("Sidecar OK. The engine and its self-tests were NOT checked: "
+              "this is not a release verdict.")
+        return 0
 
     if not binary.exists():
         print(f"  [FAIL] no {binary.name} -- the export did not run", file=sys.stderr)
@@ -148,6 +327,7 @@ def main(argv: list[str]) -> int:
             if args.target == "windows":
                 verified.append("plcsim-advanced")
             print(f"  [ok]   drivers usable: {', '.join(verified)}")
+        failures.extend(check_grader(sidecar))
 
     print(f"\n  {len(SELF_TESTS)} self-tests against the exported binary:")
     for name in SELF_TESTS:
@@ -164,7 +344,8 @@ def main(argv: list[str]) -> int:
     if failures:
         print(f"{len(failures)} problem(s) -- this release is not shippable", file=sys.stderr)
         return 1
-    print(f"Release OK: {len(SELF_TESTS)} self-tests passed against {binary.name}")
+    print(f"Release OK: {len(SELF_TESTS)} self-tests passed against {binary.name}; "
+          f"the frozen sidecar graded {GATE_SCENE} to PASS and FAIL and ran demo")
     return 0
 
 

@@ -8,7 +8,12 @@ arrived as strings and stayed strings all the way into ctypes.
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
+import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -136,3 +141,78 @@ def test_the_coerced_value_is_what_the_driver_ends_up_holding(bus):
     assert driver.poll_interval == 0.25
     assert driver.auto_map is False
     assert driver.timeout == 20.0
+
+
+# --- the package stands on its own, as the frozen release needs it to -------
+
+ROOT = Path(__file__).resolve().parent.parent
+PACKAGE = ROOT / "sidecar" / "factoryforge_sidecar"
+
+
+def _run_sidecar(args, cwd, env_extra, timeout=90):
+    """`python -m factoryforge_sidecar ...` in a child with only what
+    `env_extra` puts on its path. `subprocess.run` drains both pipes, so a
+    chatty child cannot stall on a full one (AGENTS.md gotcha 15)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONPATH", "FACTORYFORGE_TEMPLATES")}
+    env.update(env_extra)
+    env["PYTHONIOENCODING"] = "utf-8"
+    return subprocess.run([sys.executable, "-m", "factoryforge_sidecar", *args],
+                          cwd=cwd, env=env, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
+
+
+def test_demo_runs_from_a_copy_of_the_package_outside_the_checkout(tmp_path):
+    """`demo` used to import `engine_stub` and `scene` from the checkout's
+    `harness/`, found relative to `__main__.py`. A checkout always has one, so
+    every run from it passed, and a sidecar frozen from v1.0.0 -- which has no
+    checkout around it -- failed `demo` with "No module named 'engine_stub'"
+    (IP-08). A copy of the package somewhere else is the installed and frozen
+    layout: no `harness/` anywhere above it."""
+    shutil.copytree(PACKAGE, tmp_path / "factoryforge_sidecar",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    result = _run_sidecar(["demo", "--driver", "mock", "--port", "0", "--duration", "1"],
+                          cwd=tmp_path, env_extra={"PYTHONPATH": str(tmp_path)})
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output[-2000:]
+    assert "engine listening on ws://" in output
+    assert "driver 'mock' started" in output
+    # And it ends cleanly: cancelling the bus client mid-recv used to end every
+    # run in "Task exception was never retrieved" and a traceback.
+    assert "Traceback" not in output, output[-2000:]
+
+
+def test_grade_is_the_grader_with_its_own_flags(capsys):
+    """`grade` hands everything after it to `grading.main` untouched, so the
+    flags are `tools/grade.py`'s, and `--help` names a command that runs."""
+    assert main(["grade", "--list"]) == 0
+    assert "sorting-by-height" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        main(["grade", "--help"])
+    assert "usage: factoryforge-sidecar grade" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reference, code, verdict", [
+    ("good", 0, "PASS"),
+    ("blind", 1, "FAIL"),
+])
+def test_grade_returns_the_graders_exit_code(capsys, reference, code, verdict):
+    """0 PASS and 1 FAIL, the numbers a marking script reads. Lockstep and a
+    fixed seed, so the mark cannot depend on how busy this machine is."""
+    assert main(["grade", "--scene", "sorting-by-height", "--reference", reference,
+                 "--lockstep", "--seed", "1", "--quiet"]) == code
+    assert f"RESULT grade={verdict} scene=sorting-by-height" in capsys.readouterr().out
+
+
+def test_grade_without_templates_is_an_error_not_a_traceback(tmp_path):
+    """The grader reads each plant from the engine's templates. A sidecar that
+    cannot see them -- a freeze without them, or an override pointing nowhere
+    -- must say so on the grader's ERROR line with exit code 2, which a
+    marking script handles, rather than die in a stack trace."""
+    result = _run_sidecar(["grade", "--list"], cwd=tmp_path,
+                          env_extra={"PYTHONPATH": str(ROOT / "sidecar"),
+                                     "FACTORYFORGE_TEMPLATES": str(tmp_path / "none")})
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "RESULT grade=ERROR" in result.stderr
+    assert "FACTORYFORGE_TEMPLATES" in result.stderr
+    assert "Traceback" not in result.stderr

@@ -13,11 +13,15 @@ have to be true, and each is checked here rather than assumed:
   file produces a binary whose every script silently fails -- it looks fine),
 * the sidecar is frozen, so no Python is needed on the target machine,
 * the engine can find that frozen sidecar (SidecarLocator looks beside the
-  binary first, which is exactly where this puts it).
+  binary first, which is exactly where this puts it),
+* the frozen sidecar carries the grader whole -- every scene module, which
+  nothing imports by name, and the engine's scene templates, which the grader
+  reads from disk and the exported engine keeps inside its .pck (IP-08).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -39,7 +43,8 @@ TARGETS = {
 }
 
 #: Everything that is not the engine itself. templates/ are res:// resources
-#: and travel inside the binary, so they are deliberately absent here.
+#: and travel inside the binary, so they are deliberately absent here; the
+#: grader's copy travels inside the frozen sidecar (`freeze_sidecar`).
 PAYLOAD = [
     ("examples", "examples"),
     ("docs/GETTING_STARTED.md", "docs/GETTING_STARTED.md"),
@@ -83,19 +88,96 @@ def export_engine(godot: str, target: str, staging: Path) -> Path:
     return out
 
 
+SIDECAR_SRC = ROOT / "sidecar"
+PACKAGE = SIDECAR_SRC / "factoryforge_sidecar"
+TEMPLATES = ENGINE / "templates"
+
+#: Where the templates go inside the frozen bundle. It must be exactly the path
+#: `grading/templates.py` looks for under `sys._MEIPASS` (`_RELATIVE` there),
+#: or the frozen grader finds nothing and says so on every command.
+TEMPLATES_IN_BUNDLE = "engine/templates"
+
+
+def freeze_env() -> dict[str, str]:
+    """The environment PyInstaller runs in: this checkout's sidecar first on
+    PYTHONPATH.
+
+    `--collect-submodules factoryforge_sidecar` is evaluated when the spec is
+    read, by importing the package in the Python running PyInstaller -- before
+    `--paths` has any effect. If that Python cannot import the package it
+    collects *nothing*, silently, and the modules nothing imports by name go
+    missing: every grader scene and every reference controller, which the
+    registry finds at runtime. If it imports a *different* copy -- an editable
+    install pointing at another checkout -- it collects that one's module
+    list. Putting this checkout first settles both.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(SIDECAR_SRC)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    return env
+
+
+def check_collectable(env: dict[str, str]) -> None:
+    """Refuse to freeze unless PyInstaller will collect every module in the
+    package -- asked the way PyInstaller itself will ask, and compared with
+    the files on disk rather than with a count that could be stale."""
+    probe = (
+        "import json, factoryforge_sidecar as p\n"
+        "from PyInstaller.utils.hooks import collect_submodules\n"
+        "print(json.dumps([p.__file__, collect_submodules('factoryforge_sidecar')]))\n")
+    result = subprocess.run([sys.executable, "-c", probe], env=env,
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=300)
+    if result.returncode != 0:
+        raise SystemExit("[sidecar] the Python running PyInstaller cannot import "
+                         "factoryforge_sidecar, so --collect-submodules would collect "
+                         "nothing:\n" + (result.stderr or result.stdout)[-2000:])
+    where, collected = json.loads(result.stdout.strip().splitlines()[-1])
+    if Path(where).resolve().parent != PACKAGE.resolve():
+        raise SystemExit(f"[sidecar] PyInstaller would collect factoryforge_sidecar from "
+                         f"{where}, not from this checkout's {PACKAGE}")
+    on_disk = set()
+    for path in PACKAGE.rglob("*.py"):
+        parts = path.relative_to(SIDECAR_SRC).with_suffix("").parts
+        if "__pycache__" in parts:
+            continue
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        on_disk.add(".".join(parts))
+    missing = sorted(on_disk - set(collected) - {"factoryforge_sidecar.__main__"})
+    if missing:
+        raise SystemExit(f"[sidecar] PyInstaller would not collect: {', '.join(missing)}")
+    print(f"[sidecar] {len(collected)} modules collectable from {PACKAGE}")
+
+
 def freeze_sidecar(staging: Path) -> Path | None:
-    """PyInstaller the sidecar into one executable beside the engine."""
+    """PyInstaller the sidecar into one executable beside the engine.
+
+    Carries the grader (IP-08): every module of the package, and the engine's
+    scene templates as data, because the exported engine keeps its own copy
+    inside the .pck where Python cannot read it.
+    """
     entry = ROOT / "tools" / "packaging" / "sidecar_entry.py"
     work = DIST / "_pyinstaller"
+    if not (TEMPLATES / "manifest.json").is_file():
+        raise SystemExit(f"[sidecar] no {TEMPLATES / 'manifest.json'}; the grader "
+                         f"would ship with no plant to mark against")
+    env = freeze_env()
+    check_collectable(env)
     print("[sidecar] freezing with PyInstaller (a few minutes)")
     result = subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onefile",
          "--name", "factoryforge-sidecar",
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          "--specpath", str(work),
-         "--paths", str(ROOT / "sidecar"),
+         "--paths", str(SIDECAR_SRC),
          "--collect-submodules", "factoryforge_sidecar",
+         # SOURCE<sep>DEST, and the separator is os.pathsep: ';' on Windows,
+         # ':' elsewhere. Absolute source, because --specpath moves the
+         # directory a relative one would be resolved against.
+         "--add-data", f"{TEMPLATES}{os.pathsep}{TEMPLATES_IN_BUNDLE}",
          str(entry)],
+        env=env,
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
     if result.returncode != 0:
         print(result.stdout[-2000:])
