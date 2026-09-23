@@ -18,30 +18,67 @@ log = logging.getLogger(__name__)
 
 @register("mock")
 class MockDriver(Driver):
-    def __init__(self, bus, **config) -> None:
+    def __init__(self, bus, connect_delay: float = 0.0, **config) -> None:
         super().__init__(bus, **config)
         self.running = False
+        #: Seconds this stand-in PLC takes to be reached (IP-30). 0, the
+        #: default, is reached the moment `start()` runs. Anything else makes
+        #: this behave like a driver still connecting: `start()` returns at
+        #: once, sensor updates are dropped as `opcua_client.push` drops them
+        #: while disconnected, and when the delay is up the current inputs are
+        #: seeded, as every real driver's bind does, and it reports ready. That
+        #: is what a slow OPC UA or S7 connection looks like from the engine,
+        #: without a PLC: `connect --driver mock -o connect_delay 3`.
+        self.connect_delay = float(connect_delay)
         #: Every value the engine has reported, in order. Test assertions read this.
         self.history: list[tuple[str, TagValue]] = []
         self.tags: TagTable | None = None
         self._ready = asyncio.Event()
         self._waiters: list[tuple[str, TagValue, asyncio.Future]] = []
+        self._connecting = False
+        self._connector: asyncio.Task | None = None
 
     async def start(self) -> None:
         self.running = True
+        if self.connect_delay <= 0:
+            await self.link(True, "mock controller: whatever script drives it")
+            return
+        self._connecting = True
+        await self.link(False, f"mock controller: connecting "
+                               f"(a simulated {self.connect_delay:g}s delay)")
+        self._connector = asyncio.create_task(self._connect_later())
+
+    async def _connect_later(self) -> None:
+        await asyncio.sleep(self.connect_delay)
+        if not self.running:
+            return
+        self._connecting = False
+        # What a PLC is handed on connecting: the current value of every
+        # input, not the edges it missed while nobody was there.
+        table = self.bus.table
+        for tag in table.by_kind("input"):
+            self.history.append((tag.id, table.visible(tag.id)))
+        await self.link(True, f"mock controller: reached after "
+                              f"{self.connect_delay:g}s")
 
     async def stop(self) -> None:
         self.running = False
+        connector, self._connector = self._connector, None
+        if connector is not None:
+            connector.cancel()
         for _, _, fut in self._waiters:
             if not fut.done():
                 fut.cancel()
         self._waiters.clear()
+        await self.link(False, "mock controller: stopped")
 
     async def rebuild(self, scene: str, epoch: int, table: TagTable) -> None:
         self.tags = table
         self._ready.set()
 
     async def push(self, values: dict[str, TagValue]) -> None:
+        if self._connecting:
+            return          # nobody there yet to hear it
         for tag_id, value in values.items():
             self.history.append((tag_id, value))
         for waiter in list(self._waiters):

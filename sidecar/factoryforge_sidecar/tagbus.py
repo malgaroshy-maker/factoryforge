@@ -77,6 +77,18 @@ class TagBusClient:
         self._next_observe: tuple[dict[str, TagValue], list[str]] = ({}, [])
         self._dispatch_wake = asyncio.Event()
 
+        #: What each driver last said about reaching its controller: name ->
+        #: (reached, detail). Only drivers that report take part; one that
+        #: never calls `controller_link` is not counted either way (IP-30).
+        self._links: dict[str, tuple[bool, str]] = {}
+        #: The last `controller` frame sent on *this* connection, as
+        #: (ready, driver). Cleared on every connect, because the engine
+        #: forgets a sidecar's report when the sidecar goes.
+        self._announced: tuple[bool, str] | None = None
+        #: Set when this connection's first rebuild has finished. Nothing is
+        #: announced before it: the drivers have no map for this engine yet.
+        self._described_once = False
+
     # --- hooks ---
 
     def on_describe(self, hook: DescribeHook) -> None:
@@ -160,6 +172,52 @@ class TagBusClient:
 
     async def status(self, level: str, code: str, message: str) -> None:
         await self._send(proto.status(level, code, message))
+
+    # --- controller readiness (IP-30) ---
+
+    async def controller_link(self, source: str, reached: bool, detail: str) -> None:
+        """Record whether *source* -- a driver, by name -- has reached its
+        controller, and tell the engine if that changes the answer.
+
+        The engine is told with a `controller` frame. It goes out:
+
+        * only once this connection's first `rebuild` has finished, and a
+          `ready: true` only while no rebuild is in progress: a driver that
+          has not bound the current tag set cannot let its PLC see it;
+        * whenever the combined answer changes -- a driver losing its PLC
+          sends `ready: false`, getting it back sends `ready: true`;
+        * again on every reconnect to the engine, whatever it is, because the
+          engine forgets it when the sidecar goes.
+
+        With several drivers the sidecar is ready only when every one that
+        reports is.
+        """
+        self._links[source] = (bool(reached), detail)
+        await self._announce_controller()
+
+    def controller_state(self) -> tuple[bool, str, str] | None:
+        """(ready, driver, message) as the engine would be told it, or None
+        when no driver reports. Readable at any time; `connect` prints it."""
+        if not self._links:
+            return None
+        names = sorted(self._links)
+        ready = all(self._links[n][0] for n in names)
+        details = [self._links[n][1] for n in names if self._links[n][1]]
+        return ready, ", ".join(names), "; ".join(details)
+
+    async def _announce_controller(self) -> None:
+        state = self.controller_state()
+        if state is None or self._ws is None or not self._described_once:
+            return
+        ready, driver, message = state
+        if ready and not self.rebuilt.is_set():
+            return          # announced when the rebuild finishes, if still true
+        if self._announced == (ready, driver):
+            return
+        # Claimed before the await, so two reports racing each other cannot
+        # both decide they are the one to send.
+        self._announced = (ready, driver)
+        await self._send(proto.controller(ready, driver, message))
 
     # --- lifecycle ---
 
@@ -349,6 +407,10 @@ class TagBusClient:
         # Anything already queued was derived under the old map, and
         # anything queued from here until the hooks return is too.
         self._write_gen += 1
+        # A new connection is a new session to the engine, which has
+        # forgotten whatever the last one was told about the controller.
+        self._announced = None
+        self._described_once = False
 
     def _queue_describe(self) -> None:
         """Hand the current scene to the describe hooks, off the receive loop.
@@ -409,6 +471,10 @@ class TagBusClient:
                 # holding the previous epoch's address map (HP-33).
                 if self._next_describe is None:
                     self.rebuilt.set()
+                    self._described_once = True
+                    # A driver that reached its PLC during the rebuild, or
+                    # before this connection existed, is announced now.
+                    await self._announce_controller()
             if forced or cleared:
                 for hook in list(self._on_observe):
                     await self._run_hook(hook, forced, cleared)

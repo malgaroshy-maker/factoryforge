@@ -545,3 +545,127 @@ async def test_a_stalled_driver_does_not_stall_the_bus(engine, bus, mock):
                      what="a describe arriving past a stalled driver")
     finally:
         release.set()
+
+
+# --- controller readiness (IP-30) --------------------------------------------
+#
+# The sidecar tells the engine when its driver has reached the controller, and
+# the grader opens its window on it. These pin *when* the sidecar says it; the
+# engines' answers to the frame are pinned by engine/fixtures/server_cases.json
+# on both engines, and what each driver means by it by tests/test_ready_window.py.
+
+import sys as _sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent / "tools"))
+from check_protocol import CONTROLLER_FIELDS  # noqa: E402
+
+
+def _record(engine) -> list[dict]:
+    """Every frame the engine handles, in order. Frames on one websocket are
+    handled in the order they were sent, which is what lets a later `status`
+    probe prove an earlier frame was *not* sent, without sleeping on it."""
+    received: list[dict] = []
+    handle = engine._on_message
+
+    async def recording(msg: dict) -> None:
+        received.append(msg)
+        await handle(msg)
+
+    engine._on_message = recording
+    return received
+
+
+async def _probe(bus, received: list[dict], name: str) -> int:
+    """Send a status the engine ignores, wait until it has been handled, and
+    return its position: everything sent before it has been handled too."""
+    await bus.status("info", "probe", name)
+    await _until(lambda: any(m.get("message") == name for m in received),
+                 what=f"the probe {name!r}")
+    return next(i for i, m in enumerate(received) if m.get("message") == name)
+
+
+async def test_the_controller_report_carries_exactly_the_fields_the_contract_names(
+        engine, bus):
+    received = _record(engine)
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild")
+    await bus.controller_link("probe-driver", True, "reached a pretend PLC")
+    await _until(lambda: engine.controller is not None, what="the report")
+    (frame,) = [m for m in received if m.get("t") == "controller"]
+    assert set(frame) == CONTROLLER_FIELDS
+    assert frame == {"t": "controller", "ready": True, "driver": "probe-driver",
+                     "message": "reached a pretend PLC"}
+    assert engine.controller == {"ready": True, "driver": "probe-driver",
+                                 "message": "reached a pretend PLC"}
+
+
+async def test_ready_is_held_back_until_the_rebuild_has_finished(engine, bus):
+    """A driver that has not bound the current tag set cannot let its PLC see
+    it, so `ready: true` waits for every rebuild hook to return."""
+    received = _record(engine)
+    # The *second* rebuild on the connection. Before the first one finishes
+    # nothing is announced at all, so testing there would pass against a
+    # client with no rebuild gate -- which is how this test first passed.
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild")
+    release = asyncio.Event()
+
+    async def slow_rebuild(scene, epoch, table):
+        await release.wait()
+
+    bus.on_describe(slow_rebuild)       # replays the describe: a rebuild starts
+    await _until(lambda: not bus.rebuilt.is_set(), what="the rebuild to start")
+    try:
+        await bus.controller_link("probe-driver", True, "reached")
+        at = await _probe(bus, received, "while rebuilding")
+        assert not any(m.get("t") == "controller" for m in received[:at]), received
+    finally:
+        release.set()
+    await _until(lambda: engine.controller is not None and engine.controller["ready"],
+                 what="ready, once the rebuild finished")
+
+
+async def test_a_lost_controller_is_announced_and_the_answer_is_resent_after_a_reconnect(
+        engine, bus):
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild")
+    await bus.controller_link("probe-driver", True, "reached")
+    await _until(lambda: engine.controller and engine.controller["ready"], what="ready")
+
+    await bus.controller_link("probe-driver", False, "lost the PLC")
+    await _until(lambda: engine.controller["ready"] is False, what="not ready")
+    assert engine.controller["message"] == "lost the PLC"
+    await bus.controller_link("probe-driver", True, "back")
+    await _until(lambda: engine.controller["ready"] is True, what="ready again")
+
+    # The engine forgets a report when the sidecar goes; the sidecar says it
+    # again on the next connection without its driver having to repeat itself.
+    await engine._client.close()
+    await _until(lambda: engine.controller is None, timeout=5,
+                 what="the engine forgetting")
+    await _until(lambda: engine.controller is not None and engine.controller["ready"],
+                 timeout=10, what="the report, resent after the reconnect")
+    assert engine.controller["message"] == "back"
+
+
+async def test_the_sidecar_is_ready_only_when_every_reporting_driver_is(engine, bus):
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild")
+    await bus.controller_link("alpha", True, "alpha reached")
+    await bus.controller_link("beta", False, "beta connecting")
+    await _until(lambda: engine.controller
+                 and engine.controller["driver"] == "alpha, beta",
+                 what="both drivers named")
+    assert engine.controller["ready"] is False
+    await bus.controller_link("beta", True, "beta reached")
+    await _until(lambda: engine.controller["ready"] is True, what="ready")
+    assert engine.controller["message"] == "alpha reached; beta reached"
+
+
+async def test_a_malformed_report_changes_nothing_the_engine_holds(engine, bus):
+    received = _record(engine)
+    await _until(lambda: bus.rebuilt.is_set(), what="the first rebuild")
+    await bus.controller_link("probe-driver", True, "reached")
+    await _until(lambda: engine.controller is not None, what="the report")
+    before = dict(engine.controller)
+    await bus._send({"t": "controller", "ready": 0, "driver": "probe-driver",
+                     "message": "ready as a number"})
+    await _probe(bus, received, "after a malformed report")
+    assert engine.controller == before

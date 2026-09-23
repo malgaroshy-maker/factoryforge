@@ -78,6 +78,44 @@ def _from_registers(type_: str, regs: list[int]) -> TagValue:
     return struct.unpack(">i", struct.pack(">HH", regs[0], regs[1]))[0]
 
 
+class _ReachedStore(DataStore):
+    """A datastore that notices the first request a master has answered.
+
+    Each access runs only after `DataStore._check` has accepted the address,
+    so a call that returns is a request the server is about to answer with
+    data rather than with an exception. The first one is the moment a master
+    can see the scene -- the Modbus half of IP-30's "ready". Reads and writes
+    both count: a master that writes a coil first has reached the map too.
+    """
+
+    def __init__(self, on_reach) -> None:
+        super().__init__()
+        self._on_reach = on_reach
+
+    def _reached(self) -> None:
+        on_reach, self._on_reach = self._on_reach, None
+        if on_reach is not None:
+            on_reach()
+
+    def read_bits(self, block, address, count):
+        result = super().read_bits(block, address, count)
+        self._reached()
+        return result
+
+    def read_regs(self, block, address, count):
+        result = super().read_regs(block, address, count)
+        self._reached()
+        return result
+
+    def write_coils(self, address, values):
+        super().write_coils(address, values)
+        self._reached()
+
+    def write_registers(self, address, values):
+        super().write_registers(address, values)
+        self._reached()
+
+
 #: The conventional Modbus prefixes, as a student would write them next to a
 #: PLC symbol table.
 _LABELS = {"coils": "0x", "discrete_inputs": "1x",
@@ -101,7 +139,7 @@ class ModbusTcpDriver(Driver):
         # they can run the conveyor, fire the pusher and rewrite the counters,
         # on a classroom network, without so much as a username.
         super().__init__(bus, host=host, port=port, **config)
-        self.store = DataStore()
+        self.store = _ReachedStore(self._master_reached)
         self.store.on_write = self._on_master_write
         self.server = ModbusTcpServer(self.store, host, port,
                                       max_connections=int(max_connections),
@@ -136,9 +174,31 @@ class ModbusTcpDriver(Driver):
             "info", "driver_connected",
             f"Modbus TCP server listening on {self.server.host}:{self.port}",
         )
+        # Listening is not ready. A slave cannot reach anybody: the student's
+        # PLC -- OpenPLC, say -- starts polling whenever its runtime is
+        # started, which may be seconds after this, and until it polls it has
+        # seen nothing. So ready is the first request a master has had
+        # answered (see _ReachedStore), and once reached it stays reached: the
+        # gap between one master's polls is its own business, and a slave
+        # cannot tell a master that has gone from one that has not asked yet.
+        await self.link(False, f"Modbus TCP server listening on "
+                               f"{self.server.host}:{self.port}; no master "
+                               f"has polled yet")
+
+    def _master_reached(self) -> None:
+        """Called from inside the server's request handler, which is on the
+        loop but not awaitable from here -- so the report is scheduled."""
+        if self._loop is None:
+            return
+        try:
+            where = f"{self.server.host}:{self.port}"
+        except RuntimeError:        # not listening: a test driving the store
+            where = f"{self.server.host}:{self.server.port}"
+        self._loop.create_task(self.link(True, f"a Modbus master reached {where}"))
 
     async def stop(self) -> None:
         await self.server.stop()
+        await self.link(False, "stopped; the Modbus TCP server is closed")
 
     @staticmethod
     def _placement(tag) -> tuple[str, int]:

@@ -240,6 +240,51 @@
       "needs": ["bit_output"]
     },
     {
+      "name": "a controller report carrying exactly its fields is accepted in silence, and one missing any of them is refused",
+      "why": "IP-30. The sidecar tells the engine when its driver has reached the controller, and the grader opens its window on it -- so what makes a report well-formed has to be the same on both engines. The runner builds the frame from check_protocol.CONTROLLER_FIELDS, the set docs/tag-bus.md names, sends it whole (no reply, connection alive), then once without each field in turn (bad_message each time, connection alive).",
+      "scenario": "controller_fields",
+      "needs": []
+    },
+    {
+      "name": "a controller report whose ready is 1 is refused, not read as true",
+      "why": "IP-30. A bit tag takes 0/1, but `ready` is a protocol field and JSON has a boolean. The same strictness HP-19 gave the epoch: one engine reading 1 as true while the other refused it would be one frame with two answers -- and the grader opens its window on this.",
+      "needs": [],
+      "raw": "{\"t\":\"controller\",\"ready\":1,\"driver\":\"parity\",\"message\":\"ready as a number\"}",
+      "expect_status": ["bad_message"]
+    },
+    {
+      "name": "a controller report whose ready is a string is refused",
+      "needs": [],
+      "raw": "{\"t\":\"controller\",\"ready\":\"true\",\"driver\":\"parity\",\"message\":\"ready as a string\"}",
+      "expect_status": ["bad_message"]
+    },
+    {
+      "name": "a controller report whose driver is not a string is refused",
+      "needs": [],
+      "raw": "{\"t\":\"controller\",\"ready\":true,\"driver\":7,\"message\":\"driver as a number\"}",
+      "expect_status": ["bad_message"]
+    },
+    {
+      "name": "a controller report whose message is null is refused",
+      "needs": [],
+      "raw": "{\"t\":\"controller\",\"ready\":false,\"driver\":\"parity\",\"message\":null}",
+      "expect_status": ["bad_message"]
+    },
+    {
+      "name": "a controller report with a field the engine does not know is accepted in silence",
+      "why": "IP-30. Forward compatibility: a later revision may add a field, and an engine that refused the frame for it would turn an optional addition into a breaking one.",
+      "needs": [],
+      "raw": "{\"t\":\"controller\",\"ready\":true,\"driver\":\"parity\",\"message\":\"has an extra field\",\"since\":12.5}",
+      "expect_silence": true
+    },
+    {
+      "name": "a message kind the engine does not know is ignored in silence, and the connection survives",
+      "why": "IP-30. This is the property that makes `controller` optional rather than a protocol bump: an engine that predates a message must ignore it without error. Both engines already did -- C#'s switch has no default, Python logs and moves on -- but nothing pinned it, and an engine that one day answered unknown kinds with bad_message would break every newer sidecar.",
+      "needs": [],
+      "raw": "{\"t\":\"no_such_message_kind\",\"anything\":true}",
+      "expect_silence": true
+    },
+    {
       "name": "a raw analog count crosses the wire as an integer, wire-break and underflow codes included",
       "why": "IP-16. An analog input in S7 raw or 4-20 mA mode publishes an int carrying a 16-bit card's codes: 27648 full scale, 32767 overflow and 4-20 mA wire break, -4864 at the bottom of the underrange, -32768 underflow. Each must arrive as a JSON integer -- not 27648.0 -- on observe, on update and in describe, on both engines. Prefers an int input, because update is the path a count takes to a PLC; a scene with no int input (the tank template's only int is an output) falls back to an int output, which covers describe and observe and can never cover update.",
       "scenario": "analog_int",

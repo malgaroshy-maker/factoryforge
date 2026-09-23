@@ -287,6 +287,7 @@ class MqttDriver(Driver):
         client.on_message = self._paho_on_message
         self._client = client
 
+        await self.link(False, f"connecting to MQTT broker {self.host}:{self.port}")
         # connect_async + loop_start never blocks and retries the first
         # connection as well as later ones, so a broker that is not up yet is
         # a delay rather than a failure -- which is the MQTT expectation.
@@ -319,6 +320,7 @@ class MqttDriver(Driver):
             # loop_stop() joins paho's thread, so it must not run on the loop.
             await asyncio.get_running_loop().run_in_executor(None, client.loop_stop)
         self._subscribed.clear()
+        await self.link(False, f"stopped; disconnected from {self.host}:{self.port}")
 
     async def ready(self, timeout: float = 10.0) -> None:
         """Block until the broker connection is up and subscribed.
@@ -377,6 +379,23 @@ class MqttDriver(Driver):
         if self.online.is_set():
             self._resubscribe()
             self._publish_all()
+            await self._link_if_ready()
+
+    async def _link_if_ready(self) -> None:
+        """Ready once the broker has us, our subscriptions are sent and the
+        inputs are published -- retained, so a controller that subscribes
+        later still reads the line as it is.
+
+        That is as far as this driver can see. A broker sits between it and
+        the controller and says nothing about who subscribes, so unlike every
+        other driver "ready" here cannot mean a controller has read a tag
+        (IP-30). A controller that subscribes after the window opens reads
+        the current state from the retained topics, but misses any edge --
+        a 0.15 s Start press -- that came and went before it did.
+        """
+        if self.online.is_set() and self._table is not None:
+            await self.link(True, f"MQTT broker {self.host}:{self.port}; topics "
+                                  f"under {self.scene_prefix}/tag/ published")
 
     # --- data flow ---
 
@@ -460,6 +479,7 @@ class MqttDriver(Driver):
         await self._report("info", "broker_connected",
                            f"MQTT connected to {self.host}:{self.port}; "
                            f"topics under {self.scene_prefix}/tag/")
+        await self._link_if_ready()
 
     async def _on_disconnected(self, reason) -> None:
         if not self.online.is_set():
@@ -468,6 +488,8 @@ class MqttDriver(Driver):
         self._subscribed.clear()
         log.warning("MQTT broker %s:%d disconnected (%s) -- retrying",
                     self.host, self.port, reason)
+        await self.link(False, f"MQTT broker {self.host}:{self.port} "
+                               f"disconnected ({reason}) -- retrying")
 
     def _resubscribe(self) -> None:
         """Subscribe to exactly the controller-owned topics.

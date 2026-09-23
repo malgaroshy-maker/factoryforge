@@ -130,6 +130,32 @@ async def parity_engine():
 SERVER_CASES = check_protocol.load_server_cases()
 
 
+def _spec_example(message: str) -> dict:
+    """The JSON example under `### \\`<message>\\`` in docs/tag-bus.md."""
+    import re
+    spec = (ROOT / "docs" / "tag-bus.md").read_text(encoding="utf-8")
+    heading = re.search(rf"^### `{message}`.*$", spec, re.MULTILINE)
+    assert heading, f"docs/tag-bus.md has no `{message}` section"
+    block = re.search(r"```json\n(.*?)\n```", spec[heading.end():], re.DOTALL)
+    assert block, f"the `{message}` section has no JSON example"
+    return json.loads(block.group(1))
+
+
+@pytest.mark.parametrize("message, fields", [
+    ("hello", check_protocol.HELLO_FIELDS),
+    ("describe", check_protocol.DESCRIBE_FIELDS),
+    ("update", check_protocol.UPDATE_FIELDS),
+    ("controller", check_protocol.CONTROLLER_FIELDS),
+])
+def test_the_checker_holds_each_message_to_the_fields_the_spec_shows(message, fields):
+    """A5 is "carry exactly the fields docs/tag-bus.md names", but the sets it
+    checks against were copied out of the document by hand and nothing held
+    the copy to it. Now the example in each section is the source, and the
+    checker's constant has to match it (IP-30 added `controller`, the first
+    message whose fields are checked at both ends of the wire)."""
+    assert set(_spec_example(message)) == fields
+
+
 @pytest.mark.parametrize("case", SERVER_CASES, ids=lambda c: c["name"])
 async def test_server_case(parity_engine, case: dict) -> None:
     """Run one shared server case against the Python engine.

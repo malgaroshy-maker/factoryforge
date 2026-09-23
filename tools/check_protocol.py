@@ -7,6 +7,11 @@ exactly the fields the spec names -- no more, no less -- and the engine answers
 every case in `engine/fixtures/server_cases.json` the way the spec says it
 must. Otherwise prints "RESULT <problem>; <problem>; ..." and exits 1.
 
+`controller` (IP-30) travels the other way, so its fields are checked as what
+the engine *accepts*: a frame carrying exactly `CONTROLLER_FIELDS` draws no
+reply, and one missing any of them draws `bad_message` (the
+`controller_fields` case).
+
 This is what would have caught FF-10 before it shipped: `hello` silently
 missing `tick_ms` while the sidecar quietly filled in a default and nobody
 noticed the two had drifted. Connects raw (not through TagBusClient), since the
@@ -52,6 +57,13 @@ DESCRIBE_FIELDS = {"t", "scene", "epoch", "tags"}
 TAG_REQUIRED_FIELDS = {"id", "name", "type", "kind", "value"}
 TAG_OPTIONAL_FIELDS = {"forced"}
 UPDATE_FIELDS = {"t", "tick", "values"}
+#: `controller` travels the other way, sidecar -> engine (IP-30), so for it
+#: "exactly the fields" is checked at both ends of the wire: every engine must
+#: accept a frame carrying these and refuse one missing any of them (the
+#: `controller_fields` scenario below), and the sidecar must send exactly
+#: these (tests/test_tagbus.py). tests/test_tag_parity.py holds this set, and
+#: the three above, to the examples in docs/tag-bus.md.
+CONTROLLER_FIELDS = {"t", "ready", "driver", "message"}
 
 SERVER_CASES = (Path(__file__).resolve().parent.parent
                 / "engine" / "fixtures" / "server_cases.json")
@@ -403,6 +415,12 @@ async def _run_case(url: str, case: dict, roles: dict[str, str],
     for want in want_status:
         if want not in codes:
             problems.append(f"{name}: expected a {want!r} status, got {codes or 'nothing'}")
+    # Silence is checked against the probe's round trip, not a timer: frames
+    # are handled in order, so any answer to the case's own frames arrives
+    # before the probe's `unknown_tags` does.
+    if case.get("expect_silence") and statuses:
+        problems.append(f"{name}: expected no reply, got "
+                        f"{[(s.get('code'), s.get('message')) for s in statuses]}")
     for banned in case.get("forbid_status", []):
         if banned in codes:
             problems.append(f"{name}: unexpected {banned!r} status: "
@@ -843,9 +861,57 @@ async def _analog_int(url: str, case: dict, roles, initial, timeout: float,
     return problems
 
 
+async def _controller_fields(url: str, case: dict, roles, initial, timeout: float,
+                             settle: float) -> list[str]:
+    """A `controller` report with exactly `CONTROLLER_FIELDS` is accepted in
+    silence, and one missing any single field is refused with `bad_message`.
+
+    Built from the constant rather than spelled out in the fixture, so the
+    set the spec names, the set this checker holds engines to and the set the
+    sidecar is tested to send are one set. Each frame gets its own burst and
+    its own probe, so an answer is pinned to the frame that drew it; and the
+    connection has to survive every refusal.
+    """
+    name = case["name"]
+    problems: list[str] = []
+    whole = {"t": "controller", "ready": True, "driver": "check_protocol",
+             "message": "a well-formed report"}
+    if set(whole) != CONTROLLER_FIELDS:
+        return [f"{name}: the runner's frame {sorted(whole)} is not "
+                f"CONTROLLER_FIELDS {sorted(CONTROLLER_FIELDS)}"]
+
+    async with websockets.connect(url, max_queue=64) as ws:
+        _, describe = await _greet(ws, timeout)
+        epoch = describe["epoch"]
+
+        statuses, _, _, alive = await _burst(ws, [json.dumps(whole)], epoch,
+                                             timeout, settle, lambda *_: True)
+        if not alive:
+            problems.append(f"{name}: the engine stopped answering after a "
+                            f"well-formed controller report")
+        if statuses:
+            problems.append(f"{name}: a well-formed controller report drew "
+                            f"{[(s.get('code'), s.get('message')) for s in statuses]}")
+
+        for field in sorted(CONTROLLER_FIELDS - {"t"}):
+            frame = {k: v for k, v in whole.items() if k != field}
+            statuses, _, _, alive = await _burst(
+                ws, [json.dumps(frame)], epoch, timeout, settle,
+                lambda s, f, c: any(x.get("code") == "bad_message" for x in s))
+            codes = [s.get("code") for s in statuses]
+            if not alive:
+                problems.append(f"{name}: the engine stopped answering after a "
+                                f"controller report with no {field!r}")
+            if "bad_message" not in codes:
+                problems.append(f"{name}: a controller report with no {field!r} "
+                                f"drew {codes or 'nothing'}, not bad_message")
+    return problems
+
+
 #: `scenario` in the fixture -> the runner for it. A case without one is the
 #: ordinary declarative kind and goes to `_run_case`.
 _SCENARIOS = {
+    "controller_fields": _controller_fields,
     "greeting": _greeting,
     "second_client": _second_client,
     "abrupt_reconnect": _abrupt_reconnect,

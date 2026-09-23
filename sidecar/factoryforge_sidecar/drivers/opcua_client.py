@@ -135,6 +135,7 @@ class OpcUaClientDriver(Driver):
         hanging on a socket.
         """
         self._stopping = False
+        await self.link(False, f"connecting to OPC UA server {self.url}")
         self._runner = asyncio.create_task(self._connect_loop())
         self._reconciler = asyncio.create_task(self._reconcile_loop())
 
@@ -145,6 +146,7 @@ class OpcUaClientDriver(Driver):
                 task.cancel()
         self._runner = self._reconciler = None
         await self._disconnect()
+        await self.link(False, f"stopped; disconnected from {self.url}")
 
     async def _connect_loop(self) -> None:
         while not self._stopping:
@@ -160,6 +162,8 @@ class OpcUaClientDriver(Driver):
                 await self._report("warn", "plc_disconnected",
                                    f"OPC UA connection to {self.url} lost: {exc}")
                 await self._disconnect()
+                await self.link(False, f"not connected to {self.url}: {exc} -- "
+                                       f"retrying in {RECONNECT_DELAY:g}s")
                 if self._stopping:
                     return
                 await asyncio.sleep(RECONNECT_DELAY)
@@ -289,6 +293,11 @@ class OpcUaClientDriver(Driver):
                 await self._write_node(tag.id, table.visible(tag.id))
 
         log.info("bound %d/%d tags on %s", len(self._nodes), len(table), self.url)
+        # Only now, and not at connect: until the map is in, push() has no
+        # node to write a sensor edge to, so a Start press in that gap would
+        # never reach the PLC -- which is the gap IP-30 is about.
+        await self.link(True, f"connected to {self.url}; "
+                              f"{len(self._nodes)} of {len(table)} tags bound")
 
     async def _drop_subscription(self) -> None:
         """Delete the current subscription, if there is one, and forget it."""

@@ -113,6 +113,8 @@ class PLCSIMAdvancedDriver(Driver):
                 'symbols such as "FF_IO".ConveyorRotate.'
             )
 
+        await self.link(False, f"attaching to PLCSIM Advanced instance "
+                               f"{self.instance_name!r}")
         try:
             _load_runtime_api()
             from Siemens.Simatic.Simulation.Runtime import SimulationRuntimeManager  # type: ignore
@@ -147,6 +149,7 @@ class PLCSIMAdvancedDriver(Driver):
         # driver used to do exactly that, and it is the reason the pairing with
         # PowerOn/Run in start() had to go too.
         self._instance = None
+        await self.link(False, f"stopped; detached from {self.instance_name!r}")
 
     async def rebuild(self, scene: str, epoch: int, table: TagTable) -> None:
         self._table = table
@@ -172,10 +175,15 @@ class PLCSIMAdvancedDriver(Driver):
             return
         seed = {tag.id: table.visible(tag.id) for tag in table.by_kind("input")
                 if tag.id in self.mapping}
-        if not seed:
-            return
-        await self.push(seed)
-        log.info("seeded %d simulator inputs into '%s'", len(seed), self.instance_name)
+        if seed:
+            await self.push(seed)
+            log.info("seeded %d simulator inputs into '%s'", len(seed), self.instance_name)
+        # Attached *and* holding a table, with the inputs already written:
+        # the one place both halves meet, whichever came second (IP-30). This
+        # driver has no reconnect of its own -- an attach that fails raises
+        # out of start() -- so it goes back to not-ready only on stop().
+        await self.link(True, f"attached to PLCSIM Advanced instance "
+                              f"{self.instance_name!r}; {len(seed)} input(s) seeded")
 
     async def push(self, values: dict[str, TagValue]) -> None:
         if not self._instance or not self._table:

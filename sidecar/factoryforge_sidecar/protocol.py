@@ -63,6 +63,22 @@ def status(level: str, code: str, message: str) -> dict:
     return {"t": "status", "level": level, "code": code, "message": message}
 
 
+def controller(ready: bool, driver: str, message: str) -> dict:
+    """Whether the sidecar's driver has reached the controller (IP-30).
+
+    Sidecar -> engine, and optional: an engine that does not know it ignores
+    it, and a sidecar that never sends it still works. It is a message of its
+    own rather than a `status` code because something acts on it -- the grader
+    opens its window on it -- and `status` is free text for a person to read,
+    whose codes drivers have always chosen for themselves. `driver_connected`,
+    tag-bus.md's own example code, meant "a Modbus server is listening", which
+    is not this at all. See docs/tag-bus.md.
+    """
+    if not isinstance(ready, bool):
+        raise ProtocolError(f"controller: ready must be a bool, got {ready!r}")
+    return {"t": "controller", "ready": ready, "driver": driver, "message": message}
+
+
 # --- parsing ----------------------------------------------------------------
 
 
@@ -152,6 +168,29 @@ def parse_observe(msg: dict) -> tuple[dict[str, Any], list[str]]:
     if not isinstance(cleared, list):
         raise ProtocolError("'cleared' must be an array")
     return forced, cleared
+
+
+def parse_controller(msg: dict) -> tuple[bool, str, str]:
+    """`ready`, `driver` and `message` from a `controller` frame.
+
+    Strict about types, for the reason `parse_epoch` is: the engine acts on
+    this, and a frame it cannot read unambiguously draws `bad_message` rather
+    than a guess. `"ready": 1` is refused although a `bit` tag would take it --
+    this is a field of the protocol, not a tag value, and JSON has a boolean.
+    Fields the engine does not know are ignored, so a later revision can add
+    one without an older engine refusing the frame.
+    """
+    require(msg, "controller")
+    ready = msg.get("ready")
+    # bool first: it is the only type allowed, and `isinstance(1, bool)` is
+    # False, so an integer cannot slip through as it would for an epoch.
+    if not isinstance(ready, bool):
+        raise ProtocolError(f"controller: 'ready' must be true or false, got {ready!r}")
+    for key in ("driver", "message"):
+        if not isinstance(msg.get(key), str):
+            raise ProtocolError(
+                f"controller: {key!r} must be a string, got {msg.get(key)!r}")
+    return ready, msg["driver"], msg["message"]
 
 
 def parse_epoch(msg: dict) -> int:

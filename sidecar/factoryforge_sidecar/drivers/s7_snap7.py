@@ -130,6 +130,8 @@ class S7Snap7Driver(Driver):
             )
 
         self.connected.clear()
+        await self.link(False, f"connecting to S7 PLC at {self.host} "
+                               f"(rack {self.rack}, slot {self.slot})")
         # Connecting must not block start(), and a failure must not be the end
         # of it. This used to catch the exception, log it, and return -- after
         # which the CLI printed "driver 's7-snap7' started" over a driver that
@@ -148,6 +150,7 @@ class S7Snap7Driver(Driver):
                     pass
         self._runner = self._poller = None
         await self._drop(None)
+        await self.link(False, f"stopped; disconnected from {self.host}")
 
     async def _connect_loop(self) -> None:
         """Keep a session up, retrying for as long as the driver is running."""
@@ -202,6 +205,8 @@ class S7Snap7Driver(Driver):
         if why is not None:
             await self._report("warn", "plc_disconnected",
                                f"S7 connection to {self.host} lost: {why}")
+            await self.link(False, f"S7 connection to {self.host} lost: {why} -- "
+                                   f"retrying every {RECONNECT_DELAY:g}s")
 
     async def _still_connected(self) -> bool:
         """A read can fail because the mapping is wrong or because the PLC has
@@ -243,10 +248,15 @@ class S7Snap7Driver(Driver):
             return
         seed = {tag.id: table.visible(tag.id) for tag in table.by_kind("input")
                 if tag.id in self._addresses}
-        if not seed:
-            return
-        await self._write_inputs(seed)
-        log.info("seeded %d simulator inputs into DB%d", len(seed), self.db_number)
+        if seed:
+            await self._write_inputs(seed)
+            log.info("seeded %d simulator inputs into DB%d", len(seed), self.db_number)
+        # Ready here, and only here: a session *and* a table, with the inputs
+        # the PLC reads already in its DB. This is the one place both halves
+        # meet, whichever arrived second (IP-30).
+        if self._client is not None:
+            await self.link(True, f"connected to S7 PLC at {self.host}; "
+                                  f"DB{self.db_number} seeded with {len(seed)} input(s)")
 
     async def push(self, values: dict[str, TagValue]) -> None:
         await self._write_inputs(values)

@@ -37,6 +37,8 @@ drives every line of this over the wire against each of them.
   closed. It is never sent `hello`, the tag set, or an epoch. Refusing it at the socket
   instead would leave it unable to tell "another driver has this engine" from "there is no
   engine here", and the two answers call for opposite responses.
+- What a sidecar said about its controller (`controller`, below) belongs to its session.
+  The engine forgets it on disconnect, and a reconnecting sidecar says it again.
 - A sidecar that vanishes **without** closing — a crash, a killed process — does not hold
   the seat. The engine's idea of who is connected has to be refreshed before it is used to
   turn anybody away, or the first reconnect after a crash is refused as a second sidecar.
@@ -264,6 +266,82 @@ rather than the value that was in effect when the force was applied.
 
 `level` is `info` | `warn` | `error`. Surfaced in the engine's UI so a student can see why
 their PLC will not connect without reading a log file.
+
+### `controller` — sidecar → engine, optional
+
+```json
+{ "t": "controller", "ready": true, "driver": "opcua-client", "message": "connected to opc.tcp://192.168.1.20:4840; 10 of 10 tags bound" }
+```
+
+Whether the sidecar's driver has **reached the controller**: whether the PLC behind the
+sidecar can now see the tags. Having a sidecar attached is not this. `connect` starts its
+driver only after the `describe` arrives, and an OPC UA or S7 driver can take seconds to
+reach its PLC after that. The grader opens its window on this message (IP-30).
+
+| Field | Notes |
+|---|---|
+| `ready` | JSON `true` or `false`. Not `1`/`0`: this is a protocol field, not a tag value. |
+| `driver` | The reporting driver's name, e.g. `opcua-client`. With several drivers, their names joined by `, `. |
+| `message` | Human-readable detail: where it connected, or why it has not. May be empty, never absent. |
+
+`ready: true` means the following, depending on the driver:
+
+- **A client driver** (OPC UA client, S7 via snap7, PLCSIM Advanced) is connected to the PLC
+  **and** has bound the current tag set, with the simulator's inputs written into the PLC.
+  Connected alone is not enough, because until the map is in, a sensor edge has nowhere to
+  go.
+- **A server driver** (Modbus TCP, OPC UA server) has had a request from a controller that
+  it answered. For OPC UA, that means a read, a write or a subscription that touches one of
+  the scene's tags. Listening is not enough: the student's PLC may start polling seconds
+  later. A server cannot tell a controller that has gone away from one that is between two
+  polls, so once a server driver is reached it stays reached until it stops.
+- **MQTT** has connected to the broker, subscribed, and published the inputs as retained
+  messages. That is as far as this driver can see: the broker does not say who
+  subscribes.
+
+When it is sent:
+
+- Never before the sidecar's drivers have finished their first `rebuild` on the
+  connection. After that, `ready: true` is held back while a rebuild is in progress.
+- Once per change of the answer. A driver that loses its PLC sends `ready: false`, and
+  getting the PLC back sends `ready: true` again. A driver that starts connecting sends
+  `ready: false` first, which tells the engine that this sidecar reports at all.
+- On every reconnect to the engine, whatever the answer is. The engine forgets a
+  sidecar's report when that sidecar disconnects, exactly as it forgets its seat.
+- A new `describe` does not reset it. The drivers rebuild their maps, and the link to
+  the PLC is unchanged.
+
+With several drivers, the sidecar is ready only when every driver that reports is ready. A
+driver that never reports is not counted either way.
+
+The engine never replies to a well-formed `controller` message. A malformed one draws
+`status` `warn` `bad_message`, the connection stays open, and the last good report stands.
+A malformed message is one where `ready` is missing or not a boolean, or where `driver` or
+`message` is missing or not a string. The engine ignores fields it does not know, so a
+later revision can add one without an older engine refusing the frame. Both engines record
+the report: `EngineStub.controller`, and `TagBusServer.ControllerReported`, `ControllerReady`,
+`ControllerDriver` and `ControllerMessage`.
+
+It is **optional in both directions**, and adding it did not bump `protocol`:
+
+- A sidecar that never sends it still works. Its engine simply never learns when its PLC
+  arrived, and the grader falls back to opening on `describe` after a bounded wait (see
+  `docs/GRADING.md`). Hand-written clients and sidecars from before IP-30 are like this.
+- An engine that does not know it ignores it (see *Unknown messages* below). That is
+  true of every engine from before IP-30, and `server_cases.json` now pins it.
+
+It is a message of its own and not a `status` code, because something acts on it. `status`
+is free text for a person to read, and drivers have always chosen its codes for
+themselves. This document's own example code, `driver_connected`, means "a Modbus server is
+listening", which is exactly the thing that is *not* readiness.
+
+### Unknown messages
+
+A message whose `t` the receiver does not know is ignored, and nothing is sent back. This
+holds for either end and for both engines. It is what lets an optional message like
+`controller` be added without a protocol bump. An engine that one day answered unknown
+kinds with `bad_message` would break every newer sidecar, so
+`engine/fixtures/server_cases.json` checks that both engines stay silent.
 
 ## Timing
 

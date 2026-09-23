@@ -45,6 +45,11 @@ class EngineStub:
         self._last_sent: dict[str, TagValue] = {}
         self._last_forced: dict[str, TagValue] = {}
         self._stop = asyncio.Event()
+        #: What the connected sidecar last said about its controller, as
+        #: {"ready", "driver", "message"}, or None if it has said nothing --
+        #: which is also what an older sidecar or a hand-written client says.
+        #: Forgotten when the sidecar goes. See docs/tag-bus.md, `controller`.
+        self.controller: dict | None = None
 
     @property
     def actual_port(self) -> int:
@@ -116,6 +121,9 @@ class EngineStub:
         finally:
             log.info("sidecar disconnected from %s", peer)
             self._client = None
+            # A report belongs to the session that made it. The next sidecar
+            # tells the engine afresh, and until it does it has said nothing.
+            self.controller = None
 
     async def send_describe(self) -> None:
         """Publish the current tag set and bump the epoch."""
@@ -164,8 +172,23 @@ class EngineStub:
                     f"rejected bad values: {'; '.join(rejected)}"))
         elif kind == "status":
             log.info("sidecar: %s", msg.get("message"))
+        elif kind == "controller":
+            # A malformed report raises ProtocolError, which the connection
+            # handler answers with bad_message; the last good report stands.
+            ready, driver, message = proto.parse_controller(msg)
+            self.controller = {"ready": ready, "driver": driver, "message": message}
+            log.info("controller %s (%s): %s",
+                     "ready" if ready else "not ready", driver, message)
+            await self.controller_reported(ready, driver, message)
         else:
+            # Silently, on the wire: a message this engine does not know is
+            # what a newer sidecar sends, and ignoring it is what lets an
+            # optional message be added without a protocol bump.
             log.warning("ignoring unexpected message %r", kind)
+
+    async def controller_reported(self, ready: bool, driver: str, message: str) -> None:
+        """A well-formed `controller` report arrived. For subclasses; the
+        grader opens its window on one (IP-30)."""
 
     async def _apply_writes(self, values: dict[str, TagValue]) -> None:
         unknown = []

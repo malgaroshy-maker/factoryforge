@@ -105,9 +105,54 @@ class Driver(abc.ABC):
     def __init__(self, bus: TagBusClient, **config) -> None:
         self.bus = bus
         self.config = config
+        #: What this driver last said about reaching its controller, or None
+        #: if it has said nothing. See `link`.
+        self._link: tuple[bool, str] | None = None
         bus.on_describe(self._on_describe)
         bus.on_update(self._on_update)
         bus.on_disconnect(self._on_bus_disconnect)
+
+    # --- readiness (IP-30) ---
+
+    @property
+    def linked(self) -> bool:
+        """True while this driver has reached its controller. See `link`."""
+        return self._link is not None and self._link[0]
+
+    async def link(self, reached: bool, detail: str) -> None:
+        """Say whether this driver has reached its controller.
+
+        `start()` returning is not it. Most drivers connect in the background,
+        so that a PLC that is off does not hang the sidecar, which means
+        `start()` returns before anything is connected. The graded window
+        opens when the engine is told this is true, so it has to mean the one
+        thing the exam depends on: **the controller can now see the tags.**
+
+        * A *client* driver (OPC UA client, S7, PLCSIM, MQTT) has reached it
+          when it is connected **and** has bound the current tag set -- for
+          MQTT, to the broker, which is as far as that driver can see.
+        * A *server* driver (Modbus TCP, OPC UA server) has reached it when a
+          controller has made a request of it and been answered. Listening is
+          not enough: the student's PLC may not start polling for seconds.
+
+        Call it with False as `start()` begins -- that is what tells the
+        engine this sidecar reports at all -- and again whenever the link is
+        lost. A driver that never calls it is simply not counted, and the
+        grader falls back to opening its window without it.
+        """
+        if self._link == (reached, detail):
+            return
+        self._link = (reached, detail)
+        # A test's stand-in bus is often "just enough TagBusClient" and has no
+        # use for this, so its absence is not an error.
+        report = getattr(self.bus, "controller_link", None)
+        if report is None:
+            return
+        try:
+            await report(self.driver_name, reached, detail)
+        except Exception:
+            log.debug("%s: could not report readiness upstream",
+                      self.driver_name, exc_info=True)
 
     # --- to implement ---
 

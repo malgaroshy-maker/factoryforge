@@ -54,6 +54,7 @@ import hmac
 import logging
 
 from asyncua import Server, ua
+from asyncua.common.callback import CallbackType
 from asyncua.crypto.permission_rules import User, UserRole
 from asyncua.server.user_managers import UserManager
 
@@ -215,6 +216,13 @@ class OpcUaServerDriver(Driver):
                 tokens.append(ua.AnonymousIdentityToken)
             self.server.set_identity_tokens(tokens)
         self.idx = await self.server.register_namespace(NAMESPACE_URI)
+        await self.link(False, f"OPC UA server at {self.endpoint}; no client "
+                               f"has read or written a tag yet")
+        # Readiness is a client touching a tag, not the port being bound: see
+        # `_client_reached`.
+        for event in (CallbackType.PostRead, CallbackType.PostWrite,
+                      CallbackType.ItemSubscriptionCreated):
+            self.server.iserver.subscribe_server_callback(event, self._client_reached)
 
         await self.server.start()
         self._started = True
@@ -276,6 +284,41 @@ class OpcUaServerDriver(Driver):
         self.server = None
         self._nodes.clear()
         self._by_node.clear()
+        await self.link(False, f"stopped; OPC UA server at {self.endpoint} closed")
+
+    async def _client_reached(self, event, _dispatcher) -> None:
+        """A client read, wrote or subscribed to something. Ready if it was
+        one of the scene's tags and the client is outside this process.
+
+        Why not "the server is listening": a server driver's `start()` binds a
+        port and nothing else. Node-RED or a SCADA package may connect seconds
+        later, and until it reads a tag it has seen nothing -- the same gap a
+        slow OPC UA client driver has, from the other end. `is_external`
+        excludes this driver's own writes, which go through the server's
+        internal session every time a sensor changes.
+
+        It stays ready until the driver stops. A server cannot tell a client
+        that has gone from one between two reads, and the gap between a
+        client's requests is its own business.
+        """
+        if self.linked or not getattr(event, "is_external", False):
+            return
+        # This runs inside the client's own request. Nothing here may fail
+        # that request, whatever shape asyncua hands over.
+        try:
+            params = event.request_params
+            ids = ([n.NodeId for n in getattr(params, "NodesToRead", None) or []]
+                   + [n.NodeId for n in getattr(params, "NodesToWrite", None) or []]
+                   + [i.ItemToMonitor.NodeId
+                      for i in getattr(params, "ItemsToCreate", None) or []])
+            touched = [self._by_node[i.to_string()] for i in ids
+                       if i.to_string() in self._by_node]
+        except Exception:
+            log.debug("could not read a client request for readiness", exc_info=True)
+            return
+        if touched:
+            await self.link(True, f"an OPC UA client reached the tags at "
+                                  f"{self.endpoint} (first: {touched[0]})")
 
     # --- address space ---
 

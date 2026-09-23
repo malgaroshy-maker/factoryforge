@@ -48,6 +48,19 @@ public partial class TagBusServer : Node
     public bool HasClient => _client is not null &&
                              _client.GetReadyState() == WebSocketPeer.State.Open;
 
+    /// <summary>Has the connected sidecar said anything about its controller?
+    /// False for an older sidecar or a hand-written client, which is allowed:
+    /// the <c>controller</c> message is optional. Forgotten on disconnect.
+    /// See docs/tag-bus.md and IP-30. Mirrors EngineStub.controller.</summary>
+    public bool ControllerReported { get; private set; }
+    /// <summary>The sidecar's last word on whether its driver has reached the
+    /// controller -- connected and bound, or for a server driver, polled.
+    /// <c>HasClient</c> says a sidecar is attached; this says the PLC behind
+    /// it can see the tags, which can be seconds later.</summary>
+    public bool ControllerReady { get; private set; }
+    public string ControllerDriver { get; private set; } = "";
+    public string ControllerMessage { get; private set; } = "";
+
     public override void _Ready()
     {
         // Retry for a few seconds. Closing the app and reopening it is an
@@ -176,6 +189,12 @@ public partial class TagBusServer : Node
         _greeted = false;
         _lastSent.Clear();
         _lastForced.Clear();
+        // A controller report belongs to the session that made it; the next
+        // sidecar tells the engine afresh.
+        ControllerReported = false;
+        ControllerReady = false;
+        ControllerDriver = "";
+        ControllerMessage = "";
     }
 
     private void PumpClient()
@@ -378,7 +397,56 @@ public partial class TagBusServer : Node
             case "status":
                 GD.Print($"sidecar: {msg["message"]}");
                 break;
+
+            case "controller":
+                // A malformed report draws bad_message and changes nothing:
+                // the last good report stands. Mirrors
+                // protocol.parse_controller, and server_cases.json holds both
+                // engines to the same answers.
+                if (!TryController(msg, out var ready, out var driver, out var detail)) return;
+                ControllerReported = true;
+                ControllerReady = ready;
+                ControllerDriver = driver;
+                ControllerMessage = detail;
+                GD.Print($"tag bus: controller {(ready ? "ready" : "not ready")} ({driver}): {detail}");
+                break;
+
+            // Anything else is ignored, and says nothing on the wire: a
+            // message this engine does not know is what a newer sidecar
+            // sends, and ignoring it is what lets an optional message be
+            // added without bumping the protocol.
         }
+    }
+
+    /// <summary>The three fields of a <c>controller</c> report, each of the
+    /// one JSON type it may be. <c>"ready": 1</c> is refused although a bit
+    /// tag would take it: this is a protocol field and JSON has a boolean.
+    /// Fields this engine does not know are ignored.</summary>
+    private bool TryController(JsonObject msg, out bool ready, out string driver, out string detail)
+    {
+        ready = false;
+        driver = "";
+        detail = "";
+        string? problem = null;
+
+        var readyNode = msg["ready"];
+        var readyKind = readyNode?.GetValueKind();
+        if (readyKind is not (JsonValueKind.True or JsonValueKind.False))
+            problem = $"'ready' must be true or false, got {readyNode?.ToJsonString() ?? "nothing"}";
+        else if (msg["driver"] is not { } driverNode || driverNode.GetValueKind() != JsonValueKind.String)
+            problem = $"'driver' must be a string, got {msg["driver"]?.ToJsonString() ?? "nothing"}";
+        else if (msg["message"] is not { } messageNode || messageNode.GetValueKind() != JsonValueKind.String)
+            problem = $"'message' must be a string, got {msg["message"]?.ToJsonString() ?? "nothing"}";
+
+        if (problem is not null)
+        {
+            Status("warn", "bad_message", $"controller: {problem}");
+            return false;
+        }
+        ready = readyKind == JsonValueKind.True;
+        driver = msg["driver"]!.GetValue<string>();
+        detail = msg["message"]!.GetValue<string>();
+        return true;
     }
 
     private void ApplyWrites(JsonObject? values)
