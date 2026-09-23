@@ -24,6 +24,7 @@ import ast
 import asyncio
 import json
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -896,6 +897,170 @@ def test_a_lockstep_mark_does_not_move_when_the_machine_is_busy(tmp_path, monkey
     strip = lambda evidence: {k: v for k, v in evidence.items()  # noqa: E731
                               if k not in WALL_CLOCK_LABELS}
     assert strip(busy["evidence"]) == strip(calm["evidence"])
+
+
+# --- the numbers docs/GRADING.md quotes (IP-27) --------------------------
+#
+# The wrong-controller table in GRADING.md is the shape of every rubric in one
+# place, and its numbers were written by hand, before lockstep, from more than
+# one seed and window, and read by nothing. "22.1 L and then 11.0 L" stayed in
+# it after the stopwatch reference was recalibrated. A lockstep run is
+# reproducible from its seed, so the table can quote exact runs, and this reads
+# each row with a number out of the document and re-runs it. As with IP-02's
+# counts, editing any number to a wrong one fails here.
+
+#: The seed every table row is measured with. GRADING.md states the command,
+#: and `test_the_table_states_the_command_it_was_measured_with` holds the two
+#: together.
+TABLE_SEED = 5
+
+NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _phases(key: str, fmt: str):
+    return lambda e: [format(p[key], fmt) for p in e["phases"]]
+
+
+def _reset_before(e: dict, at: float) -> float:
+    return max(t for t, what in e["presses"] if what == "reset" and t <= at)
+
+
+#: (scene, controller) -> the numbers its row quotes, formatted as the row
+#: writes them, computed from that run's JSON evidence. Order does not matter;
+#: every number in the row must be one of these and every one of these must be
+#: in the row.
+TABLE_NUMBERS = {
+    ("start-stop-station", "noestop"): lambda e: [
+        f"{e['estop']['travel_while_tripped_m'] * 1000:.0f}",
+        f"{e['estop']['allowed_m'] * 1000:.0f}"],
+    ("start-stop-station", "runon"): lambda e: [
+        str(e["batch"]["made"]), str(e["batch"]["target"])],
+    ("tank-level-control", "bangbang"): _phases("settled_error", ".1f"),
+    ("tank-level-control", "fixedsp"): lambda e: [
+        f"{e['phases'][1]['final']:.0f}", f"{e['phases'][1]['setpoint']:.0f}"],
+    ("pick-and-place-cell", "timed"): lambda e: [
+        str(e["placed_before_the_axis_slowed"]),
+        f"{e['travel_speed_before']:g}", f"{e['travel_speed_after']:g}",
+        str(len(e["dropped"])),
+        *sorted({f"{d['position']:.1f}" for d in e["dropped"]})],
+    ("accumulation-buffer", "timed"): lambda e: [
+        f"{e['first_speed']['mean_cartons']:.1f}",
+        f"{e['second_speed']['mean_cartons']:.1f}"],
+    ("heat-treat-station", "ponly"): lambda e: [
+        n for p in e["phases"]
+        for n in (f"{p['settled_error']:.1f}", f"{p['setpoint']:g}")],
+    ("heat-treat-station", "thermostat"): lambda e: (
+        _phases("settled_error", ".1f")(e) + _phases("ripple", ".1f")(e)),
+    ("guarded-cell", "autostart"): lambda e: [
+        f"{e['started_without_a_press_at'][0]:.2f}",
+        f"{_reset_before(e, e['started_without_a_press_at'][0]):.2f}"],
+    ("guarded-cell", "tapedmute"): lambda e: [
+        f"{e['longest_mute_s']:.2f}", f"{e['scanner_mute_limit_s']:g}",
+        str(len(e["mute_withdrawn_at"]))],
+    ("batch-dosing", "timed"): lambda e: [
+        *(f"{b['delivered_L']:.1f}" for b in e["batches"]),
+        f"{e['pot_litres']:g}"],
+}
+
+#: The feedback excerpts under "What a student gets back": each is how one of
+#: these runs' feedback lines begins, up to the "[...]".
+EXCERPT_RUNS = [("heat-treat-station", "ponly"), ("accumulation-buffer", "timed"),
+                ("guarded-cell", "autostart"), ("roller-line-weighing", "metalonly")]
+
+
+def _grading_doc() -> str:
+    return (ROOT / "docs" / "GRADING.md").read_text(encoding="utf-8")
+
+
+def _table_rows() -> dict[tuple[str, str], str]:
+    """(scene, controller) -> 'what it fails on', read out of GRADING.md. A
+    blank scene cell continues the scene above it, as the table is written."""
+    lines = _grading_doc().splitlines()
+    start = lines.index("| scene | wrong controller | what it fails on |") + 2
+    rows: dict[tuple[str, str], str] = {}
+    scene = None
+    for line in lines[start:]:
+        if not line.startswith("|"):
+            break
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        assert len(cells) == 3, line
+        scene = cells[0].strip("`") or scene
+        rows[(scene, cells[1].strip("`"))] = cells[2]
+    return rows
+
+
+def _excerpts() -> list[str]:
+    """The four bullets in the code block after 'Every scene does the same',
+    each with its wrapping undone and its '[...]' cut off."""
+    doc = _grading_doc()
+    block = doc[doc.index("Every scene does the same"):]
+    block = block[block.index("```") + 3:]
+    block = block[:block.index("```")]
+    bullets = [" ".join(b.split()) for b in block.split("  - ")[1:]]
+    return [b[:b.index("[...]")].strip() for b in bullets]
+
+
+@pytest.fixture(scope="module")
+def table_run(tmp_path_factory):
+    """A lockstep run of one controller at TABLE_SEED in the scene's own
+    window, run once however many tests read it. Caching is sound only
+    because lockstep is reproducible from the seed, which the stalling test
+    above asserts."""
+    runs: dict[tuple[str, str], tuple[int, dict]] = {}
+    folder = tmp_path_factory.mktemp("table")
+
+    def get(scene: str, reference: str) -> tuple[int, dict]:
+        if (scene, reference) not in runs:
+            out = folder / f"{scene}-{reference}.json"
+            code = run("--scene", scene, "--reference", reference, "--seed",
+                       TABLE_SEED, "--wait", 30, "--json", out, "--quiet", LOCKSTEP)
+            runs[(scene, reference)] = (
+                code, json.loads(out.read_text(encoding="utf-8")))
+        return runs[(scene, reference)]
+    return get
+
+
+def test_the_table_states_the_command_it_was_measured_with():
+    doc = _grading_doc()
+    assert (f"python tools/grade.py --scene <scene> --reference <controller> "
+            f"--lockstep --seed {TABLE_SEED} --json out.json") in doc
+
+
+def test_every_number_in_the_table_is_one_this_file_measures():
+    """Both directions. A number added to a row that nothing measures is back
+    to being written by hand; a row measured here that the table lost is a
+    measurement of nothing."""
+    rows = _table_rows()
+    # The parser has to see the table, or everything below passes blind.
+    assert len(rows) >= 16 and ("batch-dosing", "timed") in rows, sorted(rows)
+    with_numbers = {key for key, text in rows.items() if NUMBER.search(text)}
+    assert with_numbers == set(TABLE_NUMBERS), (
+        f"quoted but not measured: {sorted(with_numbers - set(TABLE_NUMBERS))}; "
+        f"measured but not quoted: {sorted(set(TABLE_NUMBERS) - with_numbers)}")
+    for scene, reference in rows:
+        assert reference in grade.RUBRICS[scene]["references"], (scene, reference)
+
+
+@pytest.mark.parametrize("scene,reference", sorted(TABLE_NUMBERS))
+def test_the_wrong_controller_table_quotes_a_lockstep_run(scene, reference, table_run):
+    code, report = table_run(scene, reference)
+    # "What it fails on" is a claim that it fails.
+    assert code == 1 and report["verdict"] == "FAIL", (scene, reference, report["headline"])
+    row = _table_rows()[(scene, reference)]
+    quoted = sorted(NUMBER.findall(row))
+    measured = sorted(TABLE_NUMBERS[(scene, reference)](report["evidence"]))
+    assert quoted == measured, (
+        f"GRADING.md says {row!r}; the run at seed {TABLE_SEED} measured {measured}")
+
+
+@pytest.mark.parametrize("excerpt_index", range(len(EXCERPT_RUNS)))
+def test_the_feedback_excerpts_are_what_those_runs_print(excerpt_index, table_run):
+    excerpts = _excerpts()
+    assert len(excerpts) == len(EXCERPT_RUNS), excerpts
+    _, report = table_run(*EXCERPT_RUNS[excerpt_index])
+    excerpt = excerpts[excerpt_index]
+    assert any(" ".join(line.split()).startswith(excerpt)
+               for line in report["feedback"]), (excerpt, report["feedback"])
 
 
 # --- one file per scene (IP-18) -----------------------------------------

@@ -264,24 +264,28 @@ grader. A change to the line changes the advice instead of quietly making it
 wrong, and there is a test that fails if anyone hard-codes them back.
 
 Every scene does the same, in its own units, because a diagnosis is only worth
-printing when it distinguishes the ways the exercise actually goes wrong:
+printing when it distinguishes the ways the exercise actually goes wrong. These
+four come from the seed-5 lockstep runs of `ponly`, the buffer's `timed`,
+`autostart` and `metalonly`, made with the command given above the table in
+*Checking the grader itself*. A test checks that each excerpt is how a line
+of its run's feedback begins:
 
 ```
-  - At 210C it parked 16.5C off and stayed there. An error that stops closing
+  - At 200C it parked 15.7C off and stayed there. An error that stops closing
     is a controller with no way to produce output from a small error [...]
 
   - The belt ran at 0.49 m/s for the first half of this run and 1.00 m/s for
-    the second -- 2.0 times faster -- and your releases went from 5.7 cartons
+    the second -- 2.0 times faster -- and your releases went from 5.3 cartons
     to 11.0. That is a release timed in seconds. `panel.setpoint` is a window
     in ENCODER PULSES, which is a distance [...]
 
-  - The motor started at 28.18s with nobody having pressed Start since it last
+  - The motor started at 28.11s with nobody having pressed Start since it last
     stopped. That is automatic restart, and it is the failure this whole cell
     exists to prevent: the relay closing hands `starter.coil` back to your
     program, it does not command it. [...]
 
   - Every carton you got wrong is one where the scale and the inductive sensor
-    disagree -- 2 of them in this run. A tall cardboard carton weighs 2160 g
+    disagree -- 1 of them in this run. A tall cardboard carton weighs 2160 g
     and a short steel one 4320 g [...]
 ```
 
@@ -313,28 +317,46 @@ python tools/grade.py --scene <id> --reference forcer  # forces counters -> DISQ
 ```
 
 `idle` and `forcer` are shared, because a controller that does nothing and one
-that lies are wrong everywhere. The rest belong to their scene:
+that lies are wrong everywhere. The rest belong to their scene.
+
+Every number in this table comes from one lockstep run with seed 5 and the
+scene's own window:
+
+```bash
+python tools/grade.py --scene <scene> --reference <controller> --lockstep --seed 5 --json out.json
+```
+
+A lockstep run is reproducible from its seed (see below), so these are the
+numbers that command prints, not a sample of them.
+`test_the_wrong_controller_table_quotes_a_lockstep_run` in
+`tests/test_grade.py` re-runs every row that has a number and fails if any
+number here differs from its run's JSON. It also fails if a row gains a number
+it does not measure. Until IP-27 the numbers were older than lockstep, came
+from more than one seed, and were read by no check. For example, `runon` was
+quoted as counting to thirteen against a pot of four. In lockstep with seed 11,
+whose pot is four, it makes 11 in the tests' 45 s window and 21 in the
+scene's own 60 s window. Neither is thirteen.
 
 | scene | wrong controller | what it fails on |
 |---|---|---|
 | `sorting-by-height` | `blind` | pushes on a timer — misrouted cartons |
 | | `greedy` | plate held out — short cartons in the chute |
 | `start-stop-station` | `noestop` | 1500 mm of belt through a struck mushroom, where 100 mm is the limit |
-| | `runon` | counts to thirteen against a pot of four |
-| `tank-level-control` | `bangbang` | a pair of float switches parks 5.5 % off |
-| | `fixedsp` | holds 70 % while the pot says 26 |
+| | `runon` | makes 21 cartons against a pot of 5 |
+| `tank-level-control` | `bangbang` | a pair of float switches parks 5.7 % and then 5.5 % off |
+| | `fixedsp` | holds 70 % while the pot says 22 |
 | `light-curtain-sorting` | `fixed` | every misrouted carton was measured under one of the two thresholds |
 | | `everyother` | diverts on a count, never reads the height |
 | `roller-line-weighing` | `metalonly` | gets exactly the cartons the two instruments disagree about wrong |
 | | `fastfeed` | two on the deck read as one peak |
-| `pick-and-place-cell` | `timed` | correct at 80 %/s, six cartons on the floor at 48 % of the rail once it slows |
-| `accumulation-buffer` | `timed` | 5.7 cartons a release becomes 11.0 when the drive speeds up |
-| `heat-treat-station` | `ponly` | parks 8.3 °C short at one setpoint and 16.5 at the other |
-| | `thermostat` | mean error 2 °C, swing 8.8 °C |
-| `guarded-cell` | `autostart` | the motor starts at 28.18 s, the tick the relay closed on Reset |
+| `pick-and-place-cell` | `timed` | places 5 at 80 %/s; slowed to 32 %/s, it drops 7 cartons at 51.2 % and 71.8 % of the rail |
+| `accumulation-buffer` | `timed` | 5.3 cartons a release becomes 11.0 when the drive speeds up |
+| `heat-treat-station` | `ponly` | parks 10.0 °C short of 135 °C and 15.7 °C short of 200 °C |
+| | `thermostat` | mean error 2.1 °C and 2.0 °C, swinging 8.3 °C and 8.1 °C peak to peak |
+| `guarded-cell` | `autostart` | the motor starts at 28.11 s, just after the Reset at 27.99 s, with no Start pressed |
 | | `writesbelt` | writes `belt.rotate`, the motor's own tag |
-| | `tapedmute` | holds the bridge 6.1 s past a 6 s limit |
-| `batch-dosing` | `timed` | 22.1 L and then 11.0 L against the same pot |
+| | `tapedmute` | holds the bridge 6.05 s against the scanner's 6 s limit, which withdraws it 2 times |
+| `batch-dosing` | `timed` | 22.6 L and then 11.3 L against the same 22 L pot |
 | | `noreset` | the second batch is over before it starts |
 
 These are built-in controllers that connect over a real websocket through the
