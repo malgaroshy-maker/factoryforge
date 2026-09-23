@@ -358,19 +358,23 @@ async def test_a_controller_that_connects_late_is_graded_from_when_it_connected(
     assert report.evidence["sim_seconds"] >= PASS_WINDOW
 
     # The plant stood still for the whole wait, and the report says when the
-    # window opened, and that it opened on this controller.
+    # window opened, and that it opened on this controller -- on its report
+    # that it was ready, which a reference makes as soon as its scan runs
+    # (IP-30; tests/test_ready_window.py has a driver that is slow to).
     assert moved_while_nobody_was_there == 0.0
     assert window["plant_seconds_before"] == 0.0
-    assert window["opened_on"] == "controller described"
+    assert window["opened_on"] == "controller ready"
     assert window["controller_described_at"] >= LATE_BY * 0.9, window
-    assert window["opened_at"] >= window["controller_described_at"]
+    assert window["controller_ready_at"] >= window["controller_described_at"]
+    assert window["opened_at"] >= window["controller_ready_at"]
     assert report.evidence["sessions"][0]["described_at"] == window["controller_described_at"]
 
     core.print_summary(report, args)
     out = " ".join(capsys.readouterr().out.split())      # the line is wrapped
     assert (f"The controller connected {window['controller_described_at']:.1f}s "
-            f"after the grader started listening; the plant and the "
-            f"{PASS_WINDOW:g}s window started then.") in out
+            f"after the grader started listening, and its driver (reference:good) "
+            f"reported ready at {window['controller_ready_at']:.1f}s; the plant and "
+            f"the {PASS_WINDOW:g}s window started then.") in out
 
 
 # --- the other scenes, end to end -------------------------------------

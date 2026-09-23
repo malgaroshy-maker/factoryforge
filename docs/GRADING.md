@@ -128,30 +128,56 @@ connected 8 s into a 20 s batch-dosing window was graded on 12 s. It missed
 the examiner pressing Start at 1 s and scored 0.0 L on its first batch. The
 report said nothing about why. The same run now scores 22.1 L and passes.
 
-The report says when the window opened. The JSON has `evidence.window`, with
-`controller_described_at` and `opened_at` in wall seconds since the grader
-started listening, and `plant_seconds_before`, which is always 0. The printed
-report has a line under the verdict:
+The window then waits for one more thing: the student's sidecar saying its
+driver has reached the PLC (the tag bus's `controller` message, IP-30).
+`factoryforge_sidecar connect` starts its driver after the describe, and an
+OPC UA or S7 driver can take seconds to connect. In eight of the ten scenes the
+examiner presses Start 1.0 s in, for 0.15 s (`Panel.PRESS`), so a window that
+opened on the describe could be over the first Start before the PLC could see
+it. "Ready" means the PLC can see the tags. A client driver (OPC UA client, S7,
+PLCSIM) is ready once it is connected and has bound the tags. A server driver
+(Modbus TCP, OPC UA server) is ready once the student's PLC or client has made
+its first request. MQTT is ready once the broker has its subscriptions and the
+retained inputs.
+
+A controller that never sends that message, such as a hand-written client or a
+sidecar from before IP-30, is still graded. After `--ready-wait` seconds
+(default 30) the window opens on the describe instead. 30 s covers an OPC UA
+driver's failed first attempt and a slow second one (10 s timeout, 5 s retry
+delay, 10 s more). The plant is frozen until the window opens, so the wait
+costs time and never any of the window.
+
+The report says which event opened the window. The JSON has
+`evidence.window` with `opened_on` (`"controller ready"`, or `"controller
+described; no ready within 30s"`), `controller_described_at`,
+`controller_ready_at`, `driver`, `ready_wait` and `opened_at`, all in wall
+seconds since the grader started listening. It also has
+`plant_seconds_before`, which is always 0. Each entry in `evidence.sessions`
+keeps every readiness report it made. The printed report has a line under the
+verdict:
 
 ```
-  The controller connected 8.1s after the grader started listening; the
-  plant and the 24s window started then.
+  The controller connected 8.1s after the grader started listening, and its
+  driver (opcua-client) reported ready at 11.3s; the plant and the 24s window
+  started then.
 ```
 
-Why the describe and not some other moment: the protocol ends with it,
+If the window opened without the driver, the feedback says so. It also says
+whether the sidecar never reported or was still reporting "not ready". A
+driver that became ready only after the window opened is reported with how far
+into the window that was, since the PLC saw nothing before then. So is a
+driver that lost its PLC during the run. Lockstep runs are unchanged, because
+their built-in controller is attached before the plant takes a step.
+
+For a check without a PLC: `connect --driver mock -o connect_delay 3` stands
+in for a driver that takes 3 s to connect.
+
+Why the describe is the fallback and not some other moment: the protocol ends with it,
 because a sidecar does not acknowledge a describe, so it is the latest moment
 the grader can know a controller is present. Waiting for the controller's
 first write instead would let a program choose when its own exam starts. It
 would also never start the exam for a program that writes nothing, and that
 program still has to be graded, as a FAIL.
-
-**What it cannot see is the student's driver.** `factoryforge_sidecar connect`
-starts its driver after the describe arrives. So the time an OPC UA or S7
-driver takes to reach the PLC is spent inside the window, as the plant's first
-seconds. In eight of the ten scenes the examiner presses Start 1.0 s in, and
-a press lasts 0.15 s (`Panel.PRESS` in `grading/plant.py`). A driver that
-needs more than a second to connect can therefore miss the first Start press.
-This has not been measured against a real PLC.
 
 The window opens only once. A controller that drops and reconnects finds the
 plant still running, as a real line would be, and fails
