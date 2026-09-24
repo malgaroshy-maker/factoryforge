@@ -9,6 +9,19 @@ program drives the same scene over Modbus, proving the project is not
 Siemens-only."* The program is [`examples/openplc/Sorting.st`](../examples/openplc/Sorting.st),
 the line-for-line counterpart of [`examples/tia/Sorting.scl`](../examples/tia/Sorting.scl).
 
+> **Two sorting lines, two Modbus maps.** `Sorting.st` is written for the
+> ten-tag Python scene that `factoryforge-sidecar demo` runs. The line the 3D
+> engine opens, which is also the one the grader marks, has nineteen tags: an
+> operator panel and two fault contacts on top of the ten. The sidecar hands out
+> Modbus addresses in sorted tag-id order, so the extra tags **move the
+> addresses**. `pusher.extend` is coil 2 in `demo` and coil 4 on the 3D line,
+> where coil 2 is `panel.green`. `Sorting.st` against the 3D line lights a lamp
+> instead of firing the pusher. For the 3D line and the grader, start from
+> [`examples/openplc/sorting-by-height/`](../examples/openplc/sorting-by-height/).
+> The student's walk from the download to a graded program is
+> [*Your first hour*](GETTING_STARTED.md#your-first-hour-no-licence-needed) in
+> Getting Started. This file is the reference behind it.
+
 ## What was actually run
 
 | | |
@@ -27,6 +40,29 @@ shape and the first that is neither Siemens nor a flow engine.
 Both counts are the simulator's. OpenPLC's own view of them, read back out of
 the PLC over a second Modbus connection, agreed exactly: `CountShort=103
 CountTall=103`.
+
+### The 3D line's map, graded (2026-09-24, IP-09)
+
+The first-hour path in Getting Started was run on the same OpenPLC build. The
+FactoryForge side came from a release zip built from this repository.
+
+| | |
+|---|---|
+| **Program** | `examples/openplc/sorting-by-height/sorting_by_height.st`, the nineteen-tag starter, copied out of the unpacked zip together with its `mbconfig.cfg` and completed with the two blocks the guide gives |
+| **Compiled** | with `compile_program.sh`, as an ordinary user in a user-owned copy of the OpenPLC tree. The starter carries CRLF line endings from the Windows zip, and neither matiec nor the `mbconfig.cfg` parser minded |
+| **Run** | `./openplc` without `sudo`: the two real-time warnings, nothing else |
+| **Marked by** | `factoryforge_sidecar grade --scene sorting-by-height`, OpenPLC as the controller over `connect --driver modbus-tcp`, all on loopback inside WSL |
+| **Result** | the step 7 program (belt and feed only): **FAIL**, 9 tall cartons off the far end, *"The pusher never came out"*. The step 8 program: **PASS**, 8/8, 9 tall down the chute and 9 short past the end, the pusher firing 0.95 s after the beam (window 0.60–1.20 s) |
+
+The release's own sidecar, unpacked with no Python on `PATH`, connected to the
+release's engine and printed the nineteen-tag map exactly as the starter
+declares it. It graded the built-in `good` reference controller to PASS.
+
+Two parts of that path were not run. The grader and sidecar in the OpenPLC
+run were the same code from source inside WSL, rather than the frozen Windows
+binaries across the WSL boundary. Crossing that boundary needs Windows
+Firewall to allow the sidecar, and that was not done on the test machine. And
+OpenPLC did not drive the 3D window itself.
 
 ---
 
@@ -176,8 +212,11 @@ python -m factoryforge_sidecar demo --driver modbus-tcp -o port 5502
 ```
 
 `demo` runs the headless Python scene, which is the right thing for a first
-run: no Godot, no GPU, and the box counts print on stdout. Against the 3D
-engine use `connect` instead, with the engine already running — see AGENTS.md.
+run: no Godot, no GPU, and the box counts print on stdout. From the release
+download the same command is `factoryforge-sidecar demo …` (`.\factoryforge-sidecar`
+on Windows). Against the 3D engine use `connect` instead, with the engine
+already running, and the nineteen-tag starter rather than `Sorting.st`. See
+the note at the top of this file.
 
 Port 5502 rather than 502 because 502 is privileged on Linux and frequently
 already taken on Windows.
@@ -238,9 +277,11 @@ sudo ./openplc
 ```
 
 `sudo` because the runtime asks for a real-time scheduling priority. It runs
-perfectly well without: checked, and all that changes is one line —
-`WARNING: Failed to set main thread to real-time priority` — and a fatter
-jitter distribution. The 0.3 s of slack in the catch window is wide enough that
+perfectly well without: checked, and all that changes is two lines —
+`WARNING: Failed to set main thread to real-time priority` and
+`WARNING: Failed to lock memory` — and a fatter jitter distribution. The
+first-hour path in Getting Started runs it without `sudo`, from a clone the
+student owns, and was graded PASS that way. The 0.3 s of slack in the catch window is wide enough that
 this run would not have noticed either way.
 
 Within a second or two the sidecar's status line should come alive:
@@ -339,7 +380,7 @@ better than OPC UA — it is a different flavour of the same sampling problem.
 | Symptom | Cause |
 |---|---|
 | `Connection failed on MB device FactoryForge: Connection refused` in the runtime log | The sidecar is not up, or is on another port, or is bound to loopback while OpenPLC is in a VM/container/WSL. See the `-o host` note in step 1. |
-| Everything stays 0; the sidecar never logs `master connected from ...` | `mbconfig.cfg` is not in `webserver/core/`. The runtime reads it from its working directory and says `Skipping configuration of Slave Devices` when it is missing — in its internal log, which is not stdout. |
+| Everything stays 0; the sidecar never says `driver READY` | `mbconfig.cfg` is not in `webserver/core/`. The runtime reads it from its working directory and says `Skipping configuration of Slave Devices` when it is missing. Run from a terminal, `./openplc` prints that line, and every `Connection failed on MB device` retry, on its own stdout; the web UI shows the same lines in its log. |
 | `invalid located variable declaration` from matiec | matiec will not mix located and unlocated variables in one `VAR` block. Put `AT %...` declarations in their own block. The errors that follow it — "invalid variable before ':='" on perfectly good statements — are fallout from the declarations that got dropped. |
 | `rotate=0`, nothing moves | Coils are not being written. Check `Coils_Size` is not 0 and that the program really is the one that got compiled (`webserver/active_program`). |
 | `tall` climbs, `short` stays 0 | The pusher is firing on every box: `SensorHigh` is wired to the low sensor. `%IX100.2` is the *high* one. |
@@ -361,9 +402,13 @@ Worth stating plainly, because the point of the exercise was to stop assuming.
   Modbus master are all OpenPLC's; the click path around them is not covered.
   Its dependencies do install on Python 3.14 — that was checked — so this is a
   gap in coverage, not a blocked path.
-- **Against the headless Python scene, not the 3D engine.** Same tag bus, same
-  driver, same ten tags — `connect` in place of `demo` and the addresses do not
-  move — but this run did not have Godot in it.
+- **Against the headless Python scene, not the 3D engine.** Same tag bus and
+  same driver, but **not** the same tags. This file used to say that
+  `connect` in place of `demo` left the addresses where they were. It does
+  not: the 3D line has nineteen tags to `demo`'s ten, and the addresses move
+  (see the note at the top). The nineteen-tag starter was graded against the
+  grader's model of that line on 2026-09-24. No run has had OpenPLC driving
+  the Godot window.
 - **One platform.** Linux under WSL2. A native Linux install should behave
   identically; the OpenPLC Windows (Cygwin/MSYS2) build was not tried.
 - **Loopback.** No switch, no real network, no latency beyond the loopback

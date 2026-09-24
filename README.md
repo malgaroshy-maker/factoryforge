@@ -114,13 +114,22 @@ rule, and it is what makes a scene you build addressable from a PLC.
 
 ## ⚡ Quick Start
 
-### Just want to run it? Download a release
+### Just want to program a PLC? Download a release
 
 Grab the archive for your platform from
 [Releases](https://github.com/malgaroshy-maker/factoryforge/releases), extract
 it, and run `FactoryForge`. **No Godot, no .NET SDK and no Python needed** — the
-sidecar that speaks every PLC protocol ships frozen alongside the engine, and
-F5's *Apply & Connect* finds it automatically.
+sidecar that speaks every PLC protocol, and grades your program, ships frozen
+alongside the engine.
+
+**Then follow [Your first hour](docs/GETTING_STARTED.md#your-first-hour-no-licence-needed)**
+in the Getting Started guide, which is also in the download as
+`docs/GETTING_STARTED.md`. It takes you from the download to
+[OpenPLC](https://github.com/thiagoralves/OpenPLC_v3), a free IEC 61131-3
+runtime, running a Structured Text program you complete. Tall cartons go down
+the chute, and `factoryforge-sidecar grade` marks the program PASS. No licence
+is needed, and no Siemens software. If you have TIA Portal and PLCSIM
+Advanced, the same guide's second path covers them.
 
 Every release is gated on the headless self-tests in
 `tools/packaging/check_release.py` run against the **exported binary**, not
@@ -187,7 +196,7 @@ behind it.
 python run.py -- --deterministic
 ```
 
-Both scenes expose the **same 16 tags** and report the same scene name, so a PLC
+Both scenes expose the **same tags** and report the same scene name, so a PLC
 program, Node-RED flow or SCADA client drives either one unchanged. Use
 `--deterministic` whenever you need repeatable counts — CI and
 `tools/drive_engine.py` rely on it.
