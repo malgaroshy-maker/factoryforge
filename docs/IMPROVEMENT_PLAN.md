@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-31. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-34. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-14, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -509,6 +509,43 @@ and `click` assert the hold and the single edge, and shortening the hold back
 to one tick fails them.
 *Size:* M.
 
+## Added by IP-14 — IP-32 … IP-34
+
+**IP-32 — The pivot diverter's blade must physically divert** · gate
+*Files:* `engine/src/Parts/PivotDiverter.cs`, `--self-test=newparts`, the
+IP-07 probe for it.
+*Found by IP-14 in the real engine:* held at `divert`, the part reports
+`diverted` true, but its blade's collider stays parked. No carton was
+diverted in any mounting tried, and beams either side of the post never see
+the blade. The suspected cause is a rotation applied to the parent of an
+`AnimatableBody3D` with `SyncToPhysics`; that is not confirmed. The IP-07 probe
+passes because it asserts the contact, not the blade. That is the gotcha-16
+shape again: the part reports work it did not do.
+*Done when:* a carton on a running belt is deflected into the side lane with
+the blade at `divert` and carried past with it at `home`, on real physics. The
+probe asserts the blade's collider moved, not only the contact. A graded scene
+uses the part (the merge-and-divert scene IP-14 could not build).
+*Verify:* the new check fails on today's code before the fix.
+*Size:* S (M if the scene is included).
+
+**IP-33 — A turntable that can take a carton off a belt**
+*Files:* `engine/src/Parts/TurnTable.cs`.
+*Found by IP-14:* the deck has no drive of its own. A belt-fed carton stops at
+the belt/deck joint, and the queue behind it jams. IP-14's rotary-index scene
+works around this by dropping cartons onto the deck and pushing them off. A
+real transfer turntable has rollers or a belt on its deck. Add a deck-drive
+output, and a scene where a belt feeds the table.
+*Size:* M.
+
+**IP-34 — The grader's panel press matches the engine's hold**
+*Files:* `grading/plant.py` (`Panel.PRESS`, 0.15 s).
+*Why:* IP-31 made the engine hold a press for 0.2 s. The grader's examiner
+still presses for 0.15 s. Both are well above a 50 ms poll, but the grader
+marks the plant the engine runs (IP-29). Derive it from
+`ButtonPanel.DefaultPressHold` via `CSHARP_MIRRORS`, and re-run the verdict
+matrix and the IP-27 table.
+*Size:* S.
+
 ---
 
 ## Sequencing
@@ -527,6 +564,7 @@ to one tick fails them.
 | IP-25 | a student who connects late is graded on a shorter run, and can score zero |
 | IP-29 | the grader marks a plant laid out differently from the one the student sees |
 | IP-31 | a student's Start click in the 3D engine can be lost before their PLC sees it |
+| IP-32 | a shipped part whose `diverted` contact says it diverted while nothing moved |
 
 ### Order
 
@@ -578,7 +616,7 @@ to one tick fails them.
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | open |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
-| IP-14 | Three scenes for the seven parts with none | 3 | L | ● | open |
+| IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | open |
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |
 | IP-17 | Five industrial parts | 3 | XL |  | parts **done** 07fe152..67fc1f0; placing them in scenes is with IP-14 |
@@ -596,6 +634,9 @@ to one tick fails them.
 | IP-29 | The grader marks the plant the engine runs | 4 | L | ● | **done** 326248e..c740af5 |
 | IP-30 | The window opens when the student's driver is up | 2 | M |  | **done** ddc74dd, 6a0887b |
 | IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | **done** b808bdd, 15c57b1 (76 % of clicks missed at a 50 ms poll before, 0 after) |
+| IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | open |
+| IP-33 | A turntable that can take a carton off a belt | 3 | M |  | open |
+| IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | open |
 
 ## Appendix B — where the findings came from
 
