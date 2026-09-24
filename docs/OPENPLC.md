@@ -86,11 +86,22 @@ points into a block of its own address space that always starts at 100:
 That is `updateBuffersIn_MB` / `updateBuffersOut_MB` in OpenPLC v3's
 `webserver/core/modbus_master.cpp`, not a convention this project invented.
 
-The sidecar prints its half of the map, and it is the authority:
+The sidecar prints its half of the map, and it is the authority. In the
+folder FactoryForge was extracted to:
+
+```
+./factoryforge-sidecar connect --driver modbus-tcp -o port 5502
+```
+
+(`.\factoryforge-sidecar` on Windows.)
+
+<!-- from-source -->
+From a source checkout:
 
 ```bash
 python -m factoryforge_sidecar connect --driver modbus-tcp -o port 5502
 ```
+<!-- /from-source -->
 
 ```
   ADDRESS          TYPE   TAG
@@ -207,14 +218,23 @@ comes up as though nothing were wrong. Put `blank_program.st` back in
 
 ### 1. Start the simulator as a Modbus slave
 
+In the folder FactoryForge was extracted to (`.\factoryforge-sidecar` on
+Windows):
+
+```
+./factoryforge-sidecar demo --driver modbus-tcp -o port 5502
+```
+
+<!-- from-source -->
+From a source checkout, as the runs below were made:
+
 ```bash
 python -m factoryforge_sidecar demo --driver modbus-tcp -o port 5502
 ```
+<!-- /from-source -->
 
 `demo` runs the headless Python scene, which is the right thing for a first
-run: no Godot, no GPU, and the box counts print on stdout. From the release
-download the same command is `factoryforge-sidecar demo …` (`.\factoryforge-sidecar`
-on Windows). Against the 3D engine use `connect` instead, with the engine
+run: no Godot, no GPU, and the box counts print on stdout. Against the 3D engine use `connect` instead, with the engine
 already running, and the nineteen-tag starter rather than `Sorting.st`. See
 the note at the top of this file.
 
@@ -228,9 +248,14 @@ on the same machine, leave it alone. If OpenPLC is in a VM, a container or WSL
 while the simulator is on the host, it is a different machine as far as the
 socket is concerned and you have to ask:
 
-```bash
-python -m factoryforge_sidecar demo --driver modbus-tcp -o host 0.0.0.0 -o port 5502
 ```
+./factoryforge-sidecar demo --driver modbus-tcp -o host 0.0.0.0 -o port 5502
+```
+
+<!-- from-source -->
+(From a source checkout: `python -m factoryforge_sidecar demo ...` with the same
+options.)
+<!-- /from-source -->
 
 The driver logs a warning when you do, and you will also need to let the port
 through the host firewall. The simplest way to avoid all of it is to put both

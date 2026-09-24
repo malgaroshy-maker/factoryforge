@@ -1,7 +1,8 @@
 {
   "_comment": "FactoryForge tag id -> absolute S7 address inside the FF_IO datablock, for the snap7 driver. DBX<byte>.<bit> for a Bool, DBD<byte> for a DInt or Real. These are the addresses TIA shows in the DB's Offset column.",
 
-  "_usage": "cd sidecar && python -m factoryforge_sidecar connect --driver s7-snap7 -o host 192.168.1.20 -o db <FF_IO's DB number> --mapping ../examples/snap7_mapping.json",
+  "_usage": ".\\factoryforge-sidecar connect --driver s7-snap7 -o host 192.168.1.20 -o db <FF_IO's DB number> --mapping examples/snap7_mapping.json",
+  "_usage_linux": "./factoryforge-sidecar connect --driver s7-snap7 -o host 192.168.1.20 -o db <FF_IO's DB number> --mapping examples/snap7_mapping.json",
 
   "_requires": "FF_IO must have 'Optimized block access' UNCHECKED (right-click the DB -> Properties -> Attributes), then recompiled and downloaded. An optimized DB has no absolute byte addresses at all, and snap7 cannot read it however correct this file is.",
 

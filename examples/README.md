@@ -30,36 +30,70 @@ here; the reference controllers the grader checks itself with stay Python.
 | Start / stop station | `start-stop-station` | [openplc/start-stop-station/](openplc/start-stop-station/) | [tia/start-stop-station/](tia/start-stop-station/) |
 | Tank level control | `tank-level-control` | [openplc/tank-level-control/](openplc/tank-level-control/) | [tia/tank-level-control/](tia/tank-level-control/) |
 
+Every command on this page runs in the folder FactoryForge was extracted
+to. They are written for Windows; on Linux, type `./factoryforge-sidecar` where
+they say `.\factoryforge-sidecar`.
+
 **OpenPLC** -- free, no licence, IEC 61131-3 ST. Each folder has `<scene>.st`
 and the `mbconfig.cfg` that points OpenPLC's Modbus master at FactoryForge:
 
-```bash
-factoryforge-sidecar connect --driver modbus-tcp -o port 5502
+```
+.\factoryforge-sidecar connect --driver modbus-tcp -o port 5502
 ```
 
 **TIA Portal** -- an SCL source with the global DB `FF_IO` and an empty FB,
 plus a mapping file for each Siemens driver:
 
-```bash
-factoryforge-sidecar connect --driver opcua-client --mapping examples/tia/<scene>/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840
-factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <n> --mapping examples/tia/<scene>/snap7_mapping.json
-factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/<scene>/plcsim_mapping.json
+```
+.\factoryforge-sidecar connect --driver opcua-client --mapping examples/tia/<scene>/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840
+.\factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <n> --mapping examples/tia/<scene>/snap7_mapping.json
+.\factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/<scene>/plcsim_mapping.json
 ```
 
 Open the scene **before** starting the sidecar, and restart the sidecar if
 you change scene: the Modbus driver hands out addresses once, in sorted
-tag-id order, and keeps them for as long as it runs. To be marked, start
-`python tools/grade.py --scene <id>` in place of the 3D scene and add
-`--port <the port it prints>` to the connect command; the grader offers the
-same tags, so the same starter and the same addresses work against both.
-(From a source checkout, `python -m factoryforge_sidecar` stands in for
-`factoryforge-sidecar`.)
+tag-id order, and keeps them for as long as it runs.
 
-The starters are checked by `tests/test_examples.py`: each one's declarations
-against the tag set the engine registers for its scene
-(`engine/fixtures/scene_tag_sets.json`), the OpenPLC addresses against what
-the sidecar's Modbus driver really serves, and every file against a fresh
-run of the generator.
+### Getting marked
+
+The grader, `factoryforge-sidecar grade`, takes the 3D scene's place: it
+offers the same tags, so the same starter and the same addresses work
+against both. Stop the sidecar, start the grader in one terminal, and it
+prints the bus port to connect to:
+
+```
+.\factoryforge-sidecar grade --scene <id>
+```
+
+Then run your `connect` command from above in a second terminal with
+`--port <the port it printed>` added. `--list` in place of `--scene <id>`
+lists every scene id.
+
+To see the grader work before your own program is ready, have it mark one
+of its built-in controllers -- one written to the brief, one that only
+watches a stopwatch. No PLC and no second terminal, and each takes a few
+seconds:
+
+```
+.\factoryforge-sidecar grade --scene sorting-by-height --reference good --lockstep
+.\factoryforge-sidecar grade --scene sorting-by-height --reference blind --lockstep
+```
+
+The first must end `PASS` (exit code 0) and the second `FAIL` (exit code
+1). The release is checked with exactly these two before it ships.
+
+<!-- from-source -->
+(From a source checkout, `python -m factoryforge_sidecar` stands in for
+`.\factoryforge-sidecar`, and `python tools/grade.py` for `.\factoryforge-sidecar grade`.)
+<!-- /from-source -->
+
+<!-- from-source -->
+In the source repository, the starters are checked by
+`tests/test_examples.py`: each one's declarations against the tag set the
+engine registers for its scene (`engine/fixtures/scene_tag_sets.json`),
+the OpenPLC addresses against what the sidecar's Modbus driver really
+serves, and every file against a fresh run of the generator.
+<!-- /from-source -->
 
 **`sorting-by-height` has two OpenPLC programs, for two different maps.**
 `openplc/Sorting.st` is a complete, verified program for the ten-tag Python

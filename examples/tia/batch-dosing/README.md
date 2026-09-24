@@ -35,21 +35,33 @@ different about this scene.
 ## Run it
 
 Open the scene in FactoryForge first (pick "Batch dosing" on the start screen (or launch with --scene=res://templates/batch_dosing.json)), then attach
-the sidecar with whichever driver reaches your CPU:
+the sidecar with whichever driver reaches your CPU, in the folder
+FactoryForge was extracted to:
 
-```bash
-factoryforge-sidecar connect --driver opcua-client --mapping examples/tia/batch-dosing/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840
-factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <FF_IO's number> --mapping examples/tia/batch-dosing/snap7_mapping.json
-factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/batch-dosing/plcsim_mapping.json
+```
+.\factoryforge-sidecar connect --driver opcua-client --mapping examples/tia/batch-dosing/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840
+.\factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <FF_IO's number> --mapping examples/tia/batch-dosing/snap7_mapping.json
+.\factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/batch-dosing/plcsim_mapping.json
 ```
 
+On Linux it is `./factoryforge-sidecar`. To have it marked, stop the sidecar and
+start the grader in place of the 3D scene, in one terminal:
+
+```
+.\factoryforge-sidecar grade --scene batch-dosing
+```
+
+then run the same `connect` command in a second terminal with the bus port
+the grader printed added: `--port <bus port it printed>`.
+
+<!-- from-source -->
 (From a source checkout: `python -m factoryforge_sidecar` in place of
-`factoryforge-sidecar`, run from the repository root so the paths resolve.)
-To have it marked, run `python tools/grade.py --scene batch-dosing` in place
-of the 3D scene and add the `--port` it prints to the same command.
+`.\factoryforge-sidecar`, with the sidecar installed and run from the repository
+root so the paths resolve.)
+<!-- /from-source -->
 
 The OPC UA namespace index is usually 3, not always: run
-`factoryforge-sidecar browse opc.tcp://<cpu-ip>:4840` once and fix `ns=` in
+`.\factoryforge-sidecar browse opc.tcp://<cpu-ip>:4840` once and fix `ns=` in
 the mapping if yours differs.
 
 ## FF_IO

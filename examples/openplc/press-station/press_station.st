@@ -27,10 +27,12 @@
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.
      mbconfig.cfg beside this file is that Slave Device. The addresses
      below are the ones the sidecar serves for this scene when it is
-     started AFTER the scene is open:
+     started AFTER the scene is open, in the folder FactoryForge was
+     extracted to:
 
-       factoryforge-sidecar connect --driver modbus-tcp -o port 5502
+       .\factoryforge-sidecar connect --driver modbus-tcp -o port 5502
 
+     (./factoryforge-sidecar on Linux.)
      It prints its address map on startup; that map is the authority, and
      the table below must match it line for line. Change scene and the
      sidecar keeps every address it has handed out and puts new tags above

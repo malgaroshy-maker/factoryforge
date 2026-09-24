@@ -15,9 +15,13 @@ opinion. It does not scale past a small class, it is not reproducible, and two
 markers will not agree. `tools/grade.py` runs the exercise unattended and
 returns a verdict, an exit code, and the evidence behind both.
 
+<!-- from-source -->
+From a source checkout (from the download, `.\factoryforge-sidecar grade` takes the same flags; see [Grading from the download](#grading-from-the-download)):
+
 ```bash
 python tools/grade.py --scene sorting-by-height --student a.patel --json marks/a.patel.json
 ```
+<!-- /from-source -->
 
 Factory I/O has no answer to this at all, which is the reason it is worth
 building properly rather than quickly.
@@ -47,6 +51,9 @@ the engine rather than a second client. There is no seat for an observer.
 
 ### Running one
 
+<!-- from-source -->
+From a source checkout,
+
 ```bash
 python tools/grade.py --scene sorting-by-height
 ```
@@ -60,9 +67,13 @@ prints the line the student needs:
   Connect your controller with:
     python -m factoryforge_sidecar connect --driver <yours> --port 61812 -o <options>
 ```
+<!-- /from-source -->
 
-(From the release download the line reads `factoryforge-sidecar connect ...`,
-because there is no Python there to run `-m` with.)
+From the release download, `.\factoryforge-sidecar grade --scene sorting-by-height`
+prints the same, with the line reading `.\factoryforge-sidecar connect ...` --
+`./factoryforge-sidecar connect ...` on Linux -- because there is no Python
+there to run `-m` with, and neither PowerShell nor a Linux shell runs a program
+from the current folder without the path (IP-36).
 
 The port is chosen at runtime. It is not 7411, it is not configurable to a
 default, and that is deliberate: a fixed port means two graded runs cannot
@@ -92,11 +103,11 @@ prints>` to the same `factoryforge-sidecar connect` command.
 The release zip carries the grader inside `factoryforge-sidecar`, so marking
 needs neither Python nor a checkout. From the folder the zip extracts to:
 
-    factoryforge-sidecar grade --list
-    factoryforge-sidecar grade --scene sorting-by-height --student a.patel --json a.patel.json
+    .\factoryforge-sidecar grade --list
+    .\factoryforge-sidecar grade --scene sorting-by-height --student a.patel --json a.patel.json
 
 (`./factoryforge-sidecar` on Linux.) It is the same grader as
-`python tools/grade.py`: the same flags, the same report, the same JSON and the
+<!-- from-source -->`python tools/grade.py` in a source checkout<!-- /from-source -->: the same flags, the same report, the same JSON and the
 same exit codes (0 PASS, 1 FAIL, 2 ERROR, 3 DISQUALIFIED), because both run
 the one `factoryforge_sidecar.grading`. The student connects exactly as before,
 with their own `factoryforge-sidecar connect --driver … --port <the port it
@@ -104,8 +115,8 @@ prints>`.
 
 To check the grader itself on a machine you have just unpacked it on:
 
-    factoryforge-sidecar grade --scene sorting-by-height --reference good --lockstep
-    factoryforge-sidecar grade --scene sorting-by-height --reference blind --lockstep
+    .\factoryforge-sidecar grade --scene sorting-by-height --reference good --lockstep
+    .\factoryforge-sidecar grade --scene sorting-by-height --reference blind --lockstep
 
 The first must PASS (exit 0) and the second FAIL (exit 1). The release gate runs
 exactly this against every build before it ships.
@@ -244,7 +255,7 @@ nothing — `line.ran`, `plant.moved`, `dose.ran`, `cell.cycled`. A test that
 passes while the simulation does nothing is not a test (AGENTS.md gotcha 16),
 and a grader is a test with a student's mark attached to it.
 
-`tools/grade.py --list` prints the same set, with each scene's window and its
+`grade --list` prints the same set, with each scene's window and its
 reference controllers.
 
 ### The exam changes the plant while the program is running
@@ -430,11 +441,15 @@ deliberately wrong about that scene's own lesson and must fail. Every one of
 them has been watched failing — a rubric only ever seen to pass is a rubric
 nobody knows the shape of (AGENTS.md gotcha 24).
 
+<!-- from-source -->
+From a source checkout (from the download, `.\factoryforge-sidecar grade` takes the same flags; see [Grading from the download](#grading-from-the-download)):
+
 ```bash
 python tools/grade.py --scene <id> --reference good    # must PASS  (exit 0)
 python tools/grade.py --scene <id> --reference idle    # does nothing -> FAIL
 python tools/grade.py --scene <id> --reference forcer  # forces counters -> DISQUALIFIED
 ```
+<!-- /from-source -->
 
 `idle` and `forcer` are shared, because a controller that does nothing and one
 that lies are wrong everywhere. The rest belong to their scene.
@@ -442,9 +457,13 @@ that lies are wrong everywhere. The rest belong to their scene.
 Every number in this table comes from one lockstep run with seed 5 and the
 scene's own window:
 
+<!-- from-source -->
+From a source checkout (from the download, `.\factoryforge-sidecar grade` takes the same flags; see [Grading from the download](#grading-from-the-download)):
+
 ```bash
 python tools/grade.py --scene <scene> --reference <controller> --lockstep --seed 5 --json out.json
 ```
+<!-- /from-source -->
 
 A lockstep run is reproducible from its seed (see below), so these are the
 numbers that command prints, not a sample of them.
@@ -524,9 +543,13 @@ runner while the same code passed on its PR run (IP-06).
 A built-in controller runs in the grader's own process, so it *can* be made to
 wait. `--lockstep` does that:
 
+<!-- from-source -->
+From a source checkout (from the download, `.\factoryforge-sidecar grade` takes the same flags; see [Grading from the download](#grading-from-the-download)):
+
 ```bash
 python tools/grade.py --scene <id> --reference good --lockstep
 ```
+<!-- /from-source -->
 
 Each scan of the built-in controller runs in the same order. The controller
 reads its inputs and writes its outputs, and the plant applies those writes.

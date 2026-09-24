@@ -47,9 +47,11 @@ CPU **Properties → OPC UA → Server**:
 
 The namespace index is usually 3 but is **not guaranteed**. Do not guess:
 
-```bash
-python -m factoryforge_sidecar browse opc.tcp://192.168.0.1:4840
 ```
+.\factoryforge-sidecar browse opc.tcp://192.168.0.1:4840
+```
+
+in the folder FactoryForge was extracted to (`./factoryforge-sidecar` on Linux).
 
 It prints every variable with its exact NodeId string. Copy those into
 `examples/opcua_mapping.json`.

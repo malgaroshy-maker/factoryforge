@@ -29,7 +29,7 @@ the ten-tag `demo` scene, and their Modbus maps differ.
 
 **The reference walkthrough is [`docs/OPENPLC.md`](../../docs/OPENPLC.md)**:
 install, addressing, timing, troubleshooting, and what each run did and did
-not prove. It is in the repository, not in the download.
+not prove. It is in the download too, at `docs/OPENPLC.md`.
 
 Verified on 21 Sep 2026 against OpenPLC_v3 `b5d4135`, built from source on
 Ubuntu 26.04 under WSL2: **103 tall / 103 short** over a 630 s run, a perfect
@@ -40,8 +40,8 @@ will not work against the 3D line, where the addresses are different:
 
 ```bash
 # terminal 1 — the simulator, as Modbus slave on loopback
-factoryforge-sidecar demo --driver modbus-tcp -o port 5502
-# (Windows: .\factoryforge-sidecar ...; source checkout: cd sidecar && python -m factoryforge_sidecar ...)
+./factoryforge-sidecar demo --driver modbus-tcp -o port 5502
+# (Windows: .\factoryforge-sidecar ...) -- in the folder FactoryForge was extracted to
 
 # terminal 2 — compile and run the PLC
 cp Sorting.st  OpenPLC_v3/webserver/st_files/
@@ -49,6 +49,11 @@ cp mbconfig.cfg OpenPLC_v3/webserver/core/
 cd OpenPLC_v3/webserver && ./scripts/compile_program.sh Sorting.st
 cd core && ./openplc          # sudo only buys real-time priority
 ```
+
+<!-- from-source -->
+(From a source checkout: `cd sidecar && python -m factoryforge_sidecar demo ...`
+in place of terminal 1's command.)
+<!-- /from-source -->
 
 Two things that will cost you an hour if nobody tells you:
 

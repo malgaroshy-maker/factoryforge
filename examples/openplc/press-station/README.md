@@ -24,13 +24,20 @@ is only what is different about this scene.
    sidecar that was already running when you changed scene keeps its old
    addresses and puts the new tags above them.
 
-   ```bash
-   factoryforge-sidecar connect --driver modbus-tcp -o port 5502
+   In the folder FactoryForge was extracted to:
+
+   ```
+   .\factoryforge-sidecar connect --driver modbus-tcp -o port 5502
    ```
 
-   (From a source checkout: `cd sidecar && python -m factoryforge_sidecar connect ...`.
-   If OpenPLC runs in WSL or a VM, add `-o host 0.0.0.0` and read the warning
-   it prints.) Check the address map it prints against the table below.
+   On Linux it is `./factoryforge-sidecar`. If OpenPLC runs in WSL or a VM, add
+   `-o host <the address it reaches this machine on>` and read the warning
+   it prints. Check the address map it prints against the table below.
+
+   <!-- from-source -->
+   (From a source checkout: `python -m factoryforge_sidecar connect ...`
+   in `sidecar/`, in place of the command above.)
+   <!-- /from-source -->
 3. Compile `press_station.st` in OpenPLC (web UI *Programs -> Upload*, or copy it
    into `webserver/st_files/` and run `./scripts/compile_program.sh press_station.st`)
    and copy `mbconfig.cfg` to `webserver/core/`,
@@ -46,12 +53,21 @@ is only what is different about this scene.
 | Holding Registers - Write (%QW100) | 0 | 0 |
 
 4. Start the PLC. To have it marked instead, run the grader in place of the
-   3D scene -- same tags, same addresses -- and pass the port it prints:
+   3D scene -- same tags, same addresses. Stop the sidecar (Ctrl+C) first,
+   then start the grader in one terminal:
 
-   ```bash
-   python tools/grade.py --scene press-station
-   factoryforge-sidecar connect --driver modbus-tcp --port <bus port it printed> -o port 5502
    ```
+   .\factoryforge-sidecar grade --scene press-station
+   ```
+
+   and, in a second terminal, the sidecar with the bus port the grader
+   printed:
+
+   ```
+   .\factoryforge-sidecar connect --driver modbus-tcp --port <bus port it printed> -o port 5502
+   ```
+
+   (`./factoryforge-sidecar` on Linux, in both.)
 
 ## I/O
 

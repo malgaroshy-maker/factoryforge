@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "FactoryForge",
     "disabled": false,
-    "info": "Drives the FactoryForge sorting scene over OPC UA.\n\nStart the simulator first:\n\n    python -m factoryforge_sidecar demo --driver opcua-server\n\nThen deploy this flow. Node-RED takes the place of the PLC: it runs the belt,\npulses the emitter, and fires the pusher when the high sensor sees a tall box."
+    "info": "Drives the FactoryForge sorting scene over OPC UA.\n\nStart the simulator first, in the folder FactoryForge was extracted to:\n\n    .\\factoryforge-sidecar demo --driver opcua-server\n\n(./factoryforge-sidecar on Linux.)\n\nThen deploy this flow. Node-RED takes the place of the PLC: it runs the belt,\npulses the emitter, and fires the pusher when the high sensor sees a tall box."
   },
   {
     "id": "ff-endpoint",

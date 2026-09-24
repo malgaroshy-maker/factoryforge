@@ -594,7 +594,9 @@ To skip the start screen — scripting a run, or grabbing a screenshot:
 .\FactoryForge.exe -- --scene=res://templates/tank_level_control.json
 ```
 
+<!-- from-source -->
 (From a source checkout: `godot --path engine/ -- --scene=…`.)
+<!-- /from-source -->
 
 The default scene is the **physics** one: rigid-body cartons on a real conveyor.
 Useful keys straight away:
@@ -689,8 +691,8 @@ latched, and only Reset then Start bring it back.
 **Every shipped scene answers to this panel.** Start runs the line, Stop stops
 it, the mushroom latches a trip that only Reset clears, and the pot changes
 what the line is aiming at while it runs. The toolbar's **🧪 Try** button
-presses the same buttons and reports pass/fail (from a source checkout, so does
-`python tools/try_scene.py --scene <id>`), so the exercise and the regression
+presses the same buttons and reports pass/fail (<!-- from-source -->from a source checkout, so does
+`python tools/try_scene.py --scene <id>`<!-- /from-source -->), so the exercise and the regression
 test are the same sequence.
 
 If you need repeatable results, for example to compare two runs, start it as
@@ -736,7 +738,7 @@ line, force a sensor, and read your PLC's response at that exact instant.
 Not sure a scene is wired the way you expect before you write a real PLC
 program against it? Press the toolbar's **🧪 Try** button (or **🧪 Try this
 scene**, the same action offered inside the F5 dialog). It drives the open
-scene the way a PLC would and reports `PASS`/`FAIL`, and you watch it happen.
+scene the way a PLC would and reports `PASS`/`FAIL`, and you watch it happen.<!-- from-source -->
 From a source checkout the same exercise runs headless:
 
 ```bash
@@ -744,7 +746,7 @@ python tools/try_scene.py --scene tank-level-control
 ```
 
 It spawns the engine and reports in the terminal;
-`python tools/try_scene.py --list` shows every scene id. This is what to
+`python tools/try_scene.py --list` shows every scene id.<!-- /from-source --> This is what to
 reach for instead of `connect --driver mock` — the mock driver only records
 what it is told, so connecting it to a scene you have not written a program
 for yet leaves the line more dead than doing nothing at all.
@@ -777,8 +779,10 @@ or port fields, so it serves `127.0.0.1:502`. That suits a PLC on this same
 machine only. For OpenPLC in WSL, and for port 5502, use the command from
 step 5.
 
+<!-- from-source -->
 From a source checkout, `python -m factoryforge_sidecar` (run in `sidecar/`)
 stands in for `factoryforge-sidecar` in every command in this guide.
+<!-- /from-source -->
 
 ---
 
@@ -856,6 +860,7 @@ I/O list automatically, so the driver sees the new tags without a reconnect.
 
 ---
 
+<!-- from-source -->
 ## Building from source (for contributors)
 
 Everything above uses the download. Build it yourself if you intend to change
@@ -901,3 +906,4 @@ the places an extracted download actually sits — your drive roots, Downloads,
 Desktop, and the usual program directories. Only if all of that misses does it
 print what to download. To point it at a specific build, set `GODOT` to that
 executable's full path.
+<!-- /from-source -->

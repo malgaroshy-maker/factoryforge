@@ -18,11 +18,12 @@
      slave holding regs (W) -> %QW100,   %QW101,   ...
 
    The order inside each block is the order the sidecar prints, which for the
-   sorting scene is sorted tag id. Run
+   sorting scene is sorted tag id. Run, in the folder FactoryForge was
+   extracted to,
 
-     python -m factoryforge_sidecar connect --driver modbus-tcp -o port 5502
+     .\factoryforge-sidecar demo --driver modbus-tcp -o port 5502
 
-   and copy the map it prints. For this scene it is:
+   (./factoryforge-sidecar on Linux) and copy the map it prints. For this scene it is:
 
      0x0  conveyor.rotate       1x0  pusher.extended     3x0  counter.short
      0x1  emitter.emit          1x1  pusher.retracted    3x2  counter.tall

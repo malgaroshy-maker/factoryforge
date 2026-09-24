@@ -1,5 +1,5 @@
 {
-  "_comment": "Maps FactoryForge tag ids to S7-1500 OPC UA NodeIds. The namespace index is usually 3 but is NOT guaranteed - run 'python -m factoryforge_sidecar browse opc.tcp://<cpu-ip>:4840' and paste the exact strings. The double quotes are part of the Siemens identifier and must stay escaped.",
+  "_comment": "Maps FactoryForge tag ids to S7-1500 OPC UA NodeIds. The namespace index is usually 3 but is NOT guaranteed - run '.\\factoryforge-sidecar browse opc.tcp://<cpu-ip>:4840' (./factoryforge-sidecar on Linux) and paste the exact strings. The double quotes are part of the Siemens identifier and must stay escaped.",
 
   "_note_operator_tags": "The operator and fault tags (panel.start/stop/reset/estop/setpoint, <drive>.fault) are deliberately NOT mapped here. This file matches examples/tia/FF_IO_datablock.md, whose byte layout was verified against a live CPU, and the ten tags below are the reference line's original I/O. To drive the panel or raise a fault from a real PLC, add the members to FF_IO yourself and extend this file — an unmapped tag is simply not exchanged, so nothing here breaks in the meantime.",
 

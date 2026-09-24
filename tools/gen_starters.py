@@ -58,6 +58,23 @@ FIXTURE_ENV = "FACTORYFORGE_TAG_FIXTURE"
 
 GENERATED_BY = "tools/gen_starters.py"
 
+#: How someone with the release zip starts the sidecar (IP-36): from the
+#: folder the zip extracted to, and with the path spelled out, because neither
+#: PowerShell nor a Linux shell runs a program from the current folder by bare
+#: name. `.\` works in PowerShell and cmd.exe; `./` does not work in cmd.
+SIDECAR = ".\\factoryforge-sidecar"
+SIDECAR_LINUX = "./factoryforge-sidecar"
+#: `tools/packaging/release_text.py`'s marker. What sits between the two is
+#: for someone with a clone, and must say so in words (the gate checks both).
+FROM_SOURCE = "<!-- from-source -->"
+END_FROM_SOURCE = "<!-- /from-source -->"
+
+
+def _from_source(*lines: str) -> list[str]:
+    """Markdown lines a reader with only the download should skip, marked so
+    the release gate knows they are meant for a clone and not the zip."""
+    return [FROM_SOURCE, *lines, END_FROM_SOURCE]
+
 # ---------------------------------------------------------------------------
 # The sorting line is the one scene with no template: the engine builds it in
 # C# (engine/src/Editor/SceneEditor.DefaultScene.cs), so its parts are written
@@ -749,10 +766,12 @@ def render_st(scene: Scene) -> str:
         "  FactoryForge is the Modbus slave; OpenPLC is the master and polls it.",
         "  mbconfig.cfg beside this file is that Slave Device. The addresses",
         "  below are the ones the sidecar serves for this scene when it is",
-        "  started AFTER the scene is open:",
+        "  started AFTER the scene is open, in the folder FactoryForge was",
+        "  extracted to:",
         "",
-        "    factoryforge-sidecar connect --driver modbus-tcp -o port 5502",
+        f"    {SIDECAR} connect --driver modbus-tcp -o port 5502",
         "",
+        f"  ({SIDECAR_LINUX} on Linux.)",
         "  It prints its address map on startup; that map is the authority, and",
         "  the table below must match it line for line. Change scene and the",
         "  sidecar keeps every address it has handed out and puts new tags above",
@@ -1003,13 +1022,19 @@ def render_openplc_readme(scene: Scene) -> str:
         "   sidecar that was already running when you changed scene keeps its old",
         "   addresses and puts the new tags above them.",
         "",
-        "   ```bash",
-        "   factoryforge-sidecar connect --driver modbus-tcp -o port 5502",
+        "   In the folder FactoryForge was extracted to:",
+        "",
+        "   ```",
+        f"   {SIDECAR} connect --driver modbus-tcp -o port 5502",
         "   ```",
         "",
-        "   (From a source checkout: `cd sidecar && python -m factoryforge_sidecar connect ...`.",
-        "   If OpenPLC runs in WSL or a VM, add `-o host 0.0.0.0` and read the warning",
-        "   it prints.) Check the address map it prints against the table below.",
+        f"   On Linux it is `{SIDECAR_LINUX}`. If OpenPLC runs in WSL or a VM, add",
+        "   `-o host <the address it reaches this machine on>` and read the warning",
+        "   it prints. Check the address map it prints against the table below.",
+        "",
+        *["   " + line for line in _from_source(
+            "(From a source checkout: `python -m factoryforge_sidecar connect ...`",
+            "in `sidecar/`, in place of the command above.)")],
         f"3. Compile `{scene.stem}.st` in OpenPLC (web UI *Programs -> Upload*, or copy it",
         f"   into `webserver/st_files/` and run `./scripts/compile_program.sh {scene.stem}.st`)",
         "   and copy `mbconfig.cfg` to `webserver/core/`,",
@@ -1019,12 +1044,21 @@ def render_openplc_readme(scene: Scene) -> str:
         *_md_table(["Block", "Start", "Size"], ui_rows),
         "",
         "4. Start the PLC. To have it marked instead, run the grader in place of the",
-        "   3D scene -- same tags, same addresses -- and pass the port it prints:",
+        "   3D scene -- same tags, same addresses. Stop the sidecar (Ctrl+C) first,",
+        "   then start the grader in one terminal:",
         "",
-        "   ```bash",
-        f"   python tools/grade.py --scene {scene.id}",
-        "   factoryforge-sidecar connect --driver modbus-tcp --port <bus port it printed> -o port 5502",
         "   ```",
+        f"   {SIDECAR} grade --scene {scene.id}",
+        "   ```",
+        "",
+        "   and, in a second terminal, the sidecar with the bus port the grader",
+        "   printed:",
+        "",
+        "   ```",
+        f"   {SIDECAR} connect --driver modbus-tcp --port <bus port it printed> -o port 5502",
+        "   ```",
+        "",
+        f"   (`{SIDECAR_LINUX}` on Linux, in both.)",
         "",
         "## I/O",
         "",
@@ -1144,16 +1178,25 @@ def _hands_off_note(scene: Scene) -> dict:
     return notes
 
 
+def _usage(command: str) -> dict[str, str]:
+    """A mapping file's usage line, once per platform, as typed in the folder
+    FactoryForge was extracted to. Every driver skips keys that start with
+    `_`."""
+    return {"_usage": f"{SIDECAR} {command}",
+            "_usage_linux": f"{SIDECAR_LINUX} {command}"}
+
+
 def render_opcua_mapping(scene: Scene) -> str:
     folder = f"examples/tia/{scene.id}"
     data = {
         "_comment": (f"FactoryForge tag id -> S7-1500 OPC UA NodeId for the scene {scene.id}. "
                      f"Generated by {GENERATED_BY} to match {scene.stem}.scl's FF_IO DB. "
                      "The namespace index is usually 3 but is NOT guaranteed: run "
-                     "'factoryforge-sidecar browse opc.tcp://<cpu-ip>:4840' and fix ns= if "
-                     "it differs. The double quotes are part of the Siemens identifier."),
-        "_usage": (f"factoryforge-sidecar connect --driver opcua-client --mapping "
-                   f"{folder}/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840"),
+                     f"'{SIDECAR} browse opc.tcp://<cpu-ip>:4840' ({SIDECAR_LINUX} on "
+                     "Linux) and fix ns= if it differs. The double quotes are part of the "
+                     "Siemens identifier."),
+        **_usage(f"connect --driver opcua-client --mapping "
+                 f"{folder}/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840"),
         **_hands_off_note(scene),
     }
     for t in sorted(scene.wired, key=lambda t: t.id):
@@ -1169,8 +1212,8 @@ def render_snap7_mapping(scene: Scene) -> str:
                      f"driver, scene {scene.id}. Generated by {GENERATED_BY} from "
                      f"{scene.stem}.scl's member order; DBX<byte>.<bit> for a Bool, DBD<byte> "
                      "for a DInt or Real, as TIA's Offset column shows them."),
-        "_usage": (f"factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> "
-                   f"-o db <FF_IO's DB number> --mapping {folder}/snap7_mapping.json"),
+        **_usage(f"connect --driver s7-snap7 -o host <cpu-ip> "
+                 f"-o db <FF_IO's DB number> --mapping {folder}/snap7_mapping.json"),
         "_requires": ("FF_IO must NOT have optimized block access (the source sets "
                       "S7_Optimized_Access := 'FALSE'); an optimized DB has no byte "
                       f"addresses at all. FF_IO is {length} bytes."),
@@ -1190,8 +1233,8 @@ def render_plcsim_mapping(scene: Scene) -> str:
         "_comment": (f"FactoryForge tag id -> PLCSIM Advanced tag name for the native API "
                      f"driver, scene {scene.id}. Generated by {GENERATED_BY}. Dotted and "
                      "without quotes, as examples/plcsim_mapping.json has them."),
-        "_usage": (f"factoryforge-sidecar connect --driver plcsim-advanced -o instance "
-                   f"<name> --mapping {folder}/plcsim_mapping.json"),
+        **_usage(f"connect --driver plcsim-advanced -o instance "
+                 f"<name> --mapping {folder}/plcsim_mapping.json"),
         **_hands_off_note(scene),
     }
     for t in sorted(scene.wired, key=lambda t: t.id):
@@ -1250,21 +1293,32 @@ def render_tia_readme(scene: Scene) -> str:
         "## Run it",
         "",
         f"Open the scene in FactoryForge first ({_open_scene(scene)}), then attach",
-        "the sidecar with whichever driver reaches your CPU:",
+        "the sidecar with whichever driver reaches your CPU, in the folder",
+        "FactoryForge was extracted to:",
         "",
-        "```bash",
-        f"factoryforge-sidecar connect --driver opcua-client --mapping {folder}/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840",
-        f"factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <FF_IO's number> --mapping {folder}/snap7_mapping.json",
-        f"factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping {folder}/plcsim_mapping.json",
+        "```",
+        f"{SIDECAR} connect --driver opcua-client --mapping {folder}/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840",
+        f"{SIDECAR} connect --driver s7-snap7 -o host <cpu-ip> -o db <FF_IO's number> --mapping {folder}/snap7_mapping.json",
+        f"{SIDECAR} connect --driver plcsim-advanced -o instance <name> --mapping {folder}/plcsim_mapping.json",
         "```",
         "",
-        "(From a source checkout: `python -m factoryforge_sidecar` in place of",
-        "`factoryforge-sidecar`, run from the repository root so the paths resolve.)",
-        f"To have it marked, run `python tools/grade.py --scene {scene.id}` in place",
-        "of the 3D scene and add the `--port` it prints to the same command.",
+        f"On Linux it is `{SIDECAR_LINUX}`. To have it marked, stop the sidecar and",
+        "start the grader in place of the 3D scene, in one terminal:",
+        "",
+        "```",
+        f"{SIDECAR} grade --scene {scene.id}",
+        "```",
+        "",
+        "then run the same `connect` command in a second terminal with the bus port",
+        "the grader printed added: `--port <bus port it printed>`.",
+        "",
+        *_from_source(
+            "(From a source checkout: `python -m factoryforge_sidecar` in place of",
+            f"`{SIDECAR}`, with the sidecar installed and run from the repository",
+            "root so the paths resolve.)"),
         "",
         "The OPC UA namespace index is usually 3, not always: run",
-        "`factoryforge-sidecar browse opc.tcp://<cpu-ip>:4840` once and fix `ns=` in",
+        f"`{SIDECAR} browse opc.tcp://<cpu-ip>:4840` once and fix `ns=` in",
         "the mapping if yours differs.",
         "",
         "## FF_IO",
@@ -1317,36 +1371,68 @@ def render_index(scenes: list[Scene]) -> str:
         "",
         *_md_table(["Scene", "Id", "OpenPLC (Modbus TCP)", "TIA Portal (S7-1500)"], rows),
         "",
+        "Every command on this page runs in the folder FactoryForge was extracted",
+        f"to. They are written for Windows; on Linux, type `{SIDECAR_LINUX}` where",
+        f"they say `{SIDECAR}`.",
+        "",
         "**OpenPLC** -- free, no licence, IEC 61131-3 ST. Each folder has `<scene>.st`",
         "and the `mbconfig.cfg` that points OpenPLC's Modbus master at FactoryForge:",
         "",
-        "```bash",
-        "factoryforge-sidecar connect --driver modbus-tcp -o port 5502",
+        "```",
+        f"{SIDECAR} connect --driver modbus-tcp -o port 5502",
         "```",
         "",
         "**TIA Portal** -- an SCL source with the global DB `FF_IO` and an empty FB,",
         "plus a mapping file for each Siemens driver:",
         "",
-        "```bash",
-        "factoryforge-sidecar connect --driver opcua-client --mapping examples/tia/<scene>/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840",
-        "factoryforge-sidecar connect --driver s7-snap7 -o host <cpu-ip> -o db <n> --mapping examples/tia/<scene>/snap7_mapping.json",
-        "factoryforge-sidecar connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/<scene>/plcsim_mapping.json",
+        "```",
+        f"{SIDECAR} connect --driver opcua-client --mapping examples/tia/<scene>/opcua_mapping.json -o url opc.tcp://<cpu-ip>:4840",
+        f"{SIDECAR} connect --driver s7-snap7 -o host <cpu-ip> -o db <n> --mapping examples/tia/<scene>/snap7_mapping.json",
+        f"{SIDECAR} connect --driver plcsim-advanced -o instance <name> --mapping examples/tia/<scene>/plcsim_mapping.json",
         "```",
         "",
         "Open the scene **before** starting the sidecar, and restart the sidecar if",
         "you change scene: the Modbus driver hands out addresses once, in sorted",
-        "tag-id order, and keeps them for as long as it runs. To be marked, start",
-        "`python tools/grade.py --scene <id>` in place of the 3D scene and add",
-        "`--port <the port it prints>` to the connect command; the grader offers the",
-        "same tags, so the same starter and the same addresses work against both.",
-        "(From a source checkout, `python -m factoryforge_sidecar` stands in for",
-        "`factoryforge-sidecar`.)",
+        "tag-id order, and keeps them for as long as it runs.",
         "",
-        "The starters are checked by `tests/test_examples.py`: each one's declarations",
-        "against the tag set the engine registers for its scene",
-        "(`engine/fixtures/scene_tag_sets.json`), the OpenPLC addresses against what",
-        "the sidecar's Modbus driver really serves, and every file against a fresh",
-        "run of the generator.",
+        "### Getting marked",
+        "",
+        "The grader, `factoryforge-sidecar grade`, takes the 3D scene's place: it",
+        "offers the same tags, so the same starter and the same addresses work",
+        "against both. Stop the sidecar, start the grader in one terminal, and it",
+        "prints the bus port to connect to:",
+        "",
+        "```",
+        f"{SIDECAR} grade --scene <id>",
+        "```",
+        "",
+        "Then run your `connect` command from above in a second terminal with",
+        "`--port <the port it printed>` added. `--list` in place of `--scene <id>`",
+        "lists every scene id.",
+        "",
+        "To see the grader work before your own program is ready, have it mark one",
+        "of its built-in controllers -- one written to the brief, one that only",
+        "watches a stopwatch. No PLC and no second terminal, and each takes a few",
+        "seconds:",
+        "",
+        "```",
+        f"{SIDECAR} grade --scene sorting-by-height --reference good --lockstep",
+        f"{SIDECAR} grade --scene sorting-by-height --reference blind --lockstep",
+        "```",
+        "",
+        "The first must end `PASS` (exit code 0) and the second `FAIL` (exit code",
+        "1). The release is checked with exactly these two before it ships.",
+        "",
+        *_from_source(
+            "(From a source checkout, `python -m factoryforge_sidecar` stands in for",
+            f"`{SIDECAR}`, and `python tools/grade.py` for `{SIDECAR} grade`.)"),
+        "",
+        *_from_source(
+            "In the source repository, the starters are checked by",
+            "`tests/test_examples.py`: each one's declarations against the tag set the",
+            "engine registers for its scene (`engine/fixtures/scene_tag_sets.json`),",
+            "the OpenPLC addresses against what the sidecar's Modbus driver really",
+            "serves, and every file against a fresh run of the generator."),
         "",
         "**`sorting-by-height` has two OpenPLC programs, for two different maps.**",
         "`openplc/Sorting.st` is a complete, verified program for the ten-tag Python",

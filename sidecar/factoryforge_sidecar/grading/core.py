@@ -660,15 +660,30 @@ def _announce(args, engine: GradedEngine, rubric: dict, seed: int) -> None:
     print(f"  exam seed {seed}   window {args.duration:g}s")
     print()
     print("  Connect your controller with:")
-    # The release has no Python: its sidecar is one frozen program, and
-    # telling a student to type `python -m ...` there hands them a command
-    # that cannot run (found in IP-08).
-    launcher = ("factoryforge-sidecar" if getattr(sys, "frozen", False)
-                else "python -m factoryforge_sidecar")
-    print(f"    {launcher} connect --driver <yours> "
+    print(f"    {sidecar_launcher()} connect --driver <yours> "
           f"--port {engine.actual_port} -o <options>")
     print()
     print(f"  Waiting up to {args.wait:g}s ...", flush=True)
+
+
+def sidecar_launcher(frozen: bool | None = None, platform: str | None = None) -> str:
+    """How to start the sidecar, typed as it must be typed to run.
+
+    The release has no Python: its sidecar is one frozen program, and telling
+    a student to type `python -m ...` there hands them a command that cannot
+    run (found in IP-08). Nor does a bare `factoryforge-sidecar` run from the
+    folder the download extracted to: PowerShell and every Linux shell run a
+    program in the current directory only when the path says so (IP-36).
+    `.\\` is the Windows form because it is the one that works in both
+    PowerShell and cmd.exe; `./` does not work in cmd.
+    """
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if not frozen:
+        return "python -m factoryforge_sidecar"
+    platform = sys.platform if platform is None else platform
+    return (".\\factoryforge-sidecar" if platform.startswith("win")
+            else "./factoryforge-sidecar")
 
 
 # --- output ------------------------------------------------------------

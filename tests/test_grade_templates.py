@@ -1017,6 +1017,38 @@ def test_a_frozen_grader_tells_the_student_a_command_the_release_has(monkeypatch
     assert "python -m factoryforge_sidecar connect" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("platform, launcher", [
+    ("win32", ".\\factoryforge-sidecar"),
+    ("linux", "./factoryforge-sidecar"),
+])
+def test_a_frozen_grader_prints_a_connect_line_that_runs_from_the_extracted_folder(
+        monkeypatch, capsys, platform, launcher):
+    """IP-36: PowerShell and a Linux shell run a program in the current folder
+    only when the path says so, so a bare `factoryforge-sidecar connect` is
+    "not recognized" / "command not found" for someone with only the zip.
+    `.\\` rather than `./` on Windows, because cmd.exe -- which the first-hour
+    guide opens -- does not accept `./`."""
+    from types import SimpleNamespace
+    from factoryforge_sidecar.grading import core
+    args = SimpleNamespace(quiet=False, duration=60, wait=120)
+    engine = SimpleNamespace(url="ws://127.0.0.1:1/tagbus", actual_port=4242)
+    rubric = {"title": "t", "task": "t", "tags": "t"}
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", platform)
+    core._announce(args, engine, rubric, seed=1)
+    lines = [line.strip() for line in capsys.readouterr().out.splitlines()]
+    connect = [line for line in lines if " connect " in line]
+    assert connect == [f"{launcher} connect --driver <yours> --port 4242 -o <options>"], connect
+
+
+def test_the_launcher_is_python_from_a_checkout_whatever_the_platform():
+    from factoryforge_sidecar.grading import core
+    for platform in ("win32", "linux"):
+        assert core.sidecar_launcher(frozen=False, platform=platform) == \
+            "python -m factoryforge_sidecar"
+
+
 def test_a_scanner_read_is_held_the_way_the_engine_holds_it():
     """`BarcodeScanner.StepOutput` (IP-31): one read is one rising edge, held
     high for `ReadHold` and low at least as long, with the code register set

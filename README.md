@@ -51,7 +51,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 * 🛠️ **3D Scene Editor Suite**: a searchable palette that tells you what each part does and which tags it will register. **The part stays in your hand after you place it**, so a line of six conveyors is six clicks rather than six trips back to the palette — the lit palette button says what you are holding, and **`Esc`** puts it down. **`Ctrl+D`** lands its copy clear of the original and selects it, so pressing it again walks a line across the grid; the **arrow keys** nudge the selection one cell at a time. Click a placed part and **drag it** to a new cell — one gesture, one **`Ctrl+Z`** — with grid snapping, rotation (**`R`**), a selection wireframe gizmo, and undo/redo throughout. **A selection can be several parts**: **`Shift`**-click to add, **`Ctrl`**-drag a box over the floor to take everything inside it, **`Ctrl+A`** for all of them, and then move, nudge, rotate, duplicate or delete the whole group as *one* undo step. **`Ctrl+C` / `Ctrl+V`** carries a section into another scene. **`N`** floats every part's name over it — and a part's name *is* its tag prefix, so that is the list your PLC program is written against. **`1`-`4`** snap the camera to iso, top, front and side without losing what you were looking at. The property panel names what the selected part responds to, so none of it has to be guessed.
 * 🔌 **Visual I/O Driver Wiring Panel (`F4`)**: Centered split-screen modal — click a PLC address (`%I0.0`, `%Q0.0`), then click the component tag to map it to. **Auto-map** suggests an address for every tag in the loaded scene, and **Export** writes `io_mapping.json` and `io_tags.csv` for the sidecar and for whoever is building the PLC side.
 * 🏷️ **Live tag inspection and forcing**: the Tag Inspector lists every tag the loaded scene owns with its live value, and forces any of them — bit, int and float alike — with a typed value. A `🔓 N forced` chip in the toolbar shows what is being held by hand and releases it all in one click. The parts that measure something — the light curtain, the level tank, the digital display — also read out in 3D on the part itself.
-* 🧪 **A built-in exercise per scene**: `python tools/try_scene.py --scene <id>` (or the toolbar's **🧪 Try** button) spawns or attaches to the engine and drives the scene the way a PLC would — pressing the panel's own buttons, timing the E-stop against a 200 ms limit, turning the setpoint pot mid-run to prove the line follows it, and failing a drive under it to check the controller trips and refuses to reset while the fault stands — then reports pass/fail. The thing to run before writing a real program against it.
+* 🧪 **A built-in exercise per scene**: the toolbar's **🧪 Try** button (or, <!-- from-source -->from a source checkout, `python tools/try_scene.py --scene <id>`<!-- /from-source -->) spawns or attaches to the engine and drives the scene the way a PLC would — pressing the panel's own buttons, timing the E-stop against a 200 ms limit, turning the setpoint pot mid-run to prove the line follows it, and failing a drive under it to check the controller trips and refuses to reset while the fault stands — then reports pass/fail. The thing to run before writing a real program against it.
 * 🏭 **Native Siemens Integration**: **all three Siemens paths verified driving the 3D scene from a virtual S7-1500** — PLCSIM Advanced Simulation Runtime API (shared memory, no network, no OPC UA licence), OPC UA client, and Snap7 ISO-on-TCP. Belt, emitter, sensors, diverter and counters all run off the CPU's own program.
 * 📊 **Multi-Protocol SCADA Support**: Built-in OPC UA client/server, Modbus TCP server, and Node-RED integration.
 
@@ -144,6 +144,7 @@ anything is wrong with it. See
 [PACKAGING.md](docs/PACKAGING.md#code-signing--not-signed-and-the-download-page-says-so)
 for why this project does not buy one.
 
+<!-- from-source -->
 ### Or build it from source
 
 Everything below builds it yourself, the same path
@@ -200,6 +201,7 @@ Both scenes expose the **same tags** and report the same scene name, so a PLC
 program, Node-RED flow or SCADA client drives either one unchanged. Use
 `--deterministic` whenever you need repeatable counts — CI and
 `tools/drive_engine.py` rely on it.
+<!-- /from-source -->
 
 ---
 
@@ -210,6 +212,13 @@ sidecar. **`connect` attaches to a running engine — that is the one to use wit
 the 3D view.** (`demo` starts its own headless Python scene instead, which is
 for checking a driver with no Godot in the picture.) The **F5 Driver dialog**
 runs these for you and copies the command.
+
+From the download, run each one in the folder FactoryForge was extracted to,
+starting it with `.\factoryforge-sidecar` (`./factoryforge-sidecar` on Linux)
+in place of the Python command, and without the `cd`.
+
+<!-- from-source -->
+From a source checkout:
 
 ```bash
 cd sidecar
@@ -227,6 +236,7 @@ python -m factoryforge_sidecar connect --driver opcua-client \
 # OPC UA Server (exposing the scene to Node-RED / SCADA)
 python -m factoryforge_sidecar connect --driver opcua-server
 ```
+<!-- /from-source -->
 
 Building your own scene? Name your parts in the inspector, then **F4 → Export**
 writes `io_mapping.json` and `io_tags.csv` for the tags that scene actually has.

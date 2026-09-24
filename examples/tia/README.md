@@ -15,6 +15,16 @@ Siemens driver: `opcua_mapping.json`, `snap7_mapping.json`,
 [`../README.md`](../README.md). The walkthrough below uses the sorting scene's
 own `FF_IO` and applies to all of them.
 
+Every `factoryforge-sidecar` command below runs in the folder FactoryForge was
+extracted to, and is written for Windows; on Linux, type
+`./factoryforge-sidecar` where it says `.\factoryforge-sidecar`.
+
+<!-- from-source -->
+(From a source checkout: `python -m factoryforge_sidecar` in place of
+`.\factoryforge-sidecar`, run from the repository root with the sidecar
+installed.)
+<!-- /from-source -->
+
 ---
 
 ## 0. Sanity-check first, without TIA Portal
@@ -24,6 +34,10 @@ same `FF_IO` address space a real S7-1500 would. Run it first to confirm the
 driver, the mapping file, and the timings all work — then you know any later
 failure is TIA-side.
 
+<!-- from-source -->
+This check needs Python with `asyncua` installed, as a source checkout has;
+the download carries no Python. Skip to step 1 if you do not have it.
+
 ```bash
 # terminal 1
 python examples/fake_plc.py
@@ -32,6 +46,7 @@ python examples/fake_plc.py
 python -m factoryforge_sidecar demo \
     --driver opcua-client --mapping examples/opcua_mapping.json
 ```
+<!-- /from-source -->
 
 Expect roughly one box every 3 s, split evenly:
 
@@ -65,8 +80,8 @@ t=4451    belt=2 tall=6 short=7 | rotate=1 emit=0 extend=0 green=1
 
 The namespace index is usually 3 but is not guaranteed. Check, don't guess:
 
-```bash
-python -m factoryforge_sidecar browse opc.tcp://192.168.0.10:4840
+```
+.\factoryforge-sidecar browse opc.tcp://192.168.0.10:4840
 ```
 
 You should see your ten `FF_IO` variables. Copy the exact NodeId strings into
@@ -77,11 +92,8 @@ not activated, the CPU not in RUN, or Windows Firewall blocking TCP 4840.
 
 ## 4. Run the simulation
 
-```bash
-python -m factoryforge_sidecar demo \
-    --driver opcua-client \
-    --mapping examples/opcua_mapping.json \
-    -o url opc.tcp://192.168.0.10:4840
+```
+.\factoryforge-sidecar demo --driver opcua-client --mapping examples/opcua_mapping.json -o url opc.tcp://192.168.0.10:4840
 ```
 
 You should see boxes emitted every 3 s, the counters climbing, and roughly half
@@ -117,8 +129,8 @@ t=1240    belt=2 tall=3 short=3 | rotate=1 emit=0 extend=0 green=1
 
 Everything above also works with **OpenPLC over Modbus**, which is free:
 
-```bash
-python -m factoryforge_sidecar demo --driver modbus-tcp -o port 5020
+```
+.\factoryforge-sidecar demo --driver modbus-tcp -o port 5020
 ```
 
 The demo prints the Modbus address map on startup. Point OpenPLC at it as a

@@ -418,3 +418,60 @@ def test_regenerating_the_starters_changes_nothing():
 def test_the_generator_is_deterministic():
     gen = _gen()
     assert gen.render_all(FIXTURE) == gen.render_all(FIXTURE)
+
+
+# --- what a release user is told to run (IP-36) -------------------------------
+
+#: A sidecar command at the start of a line, in any of the forms a page could
+#: write it -- so the test sees the bare `factoryforge-sidecar connect` that
+#: PowerShell and a Linux shell refuse, not only the forms that work.
+_SIDECAR_COMMAND = re.compile(
+    r"^\s*(?:#\s*|\(\*\s*)?((?:\.[\\/])?factoryforge-sidecar(?:\.exe)?)\s+"
+    r"(?:connect|grade|demo|browse|drivers)\b")
+
+
+def _release_text():
+    sys.path.insert(0, str(ROOT / "tools" / "packaging"))
+    import release_text
+    return release_text
+
+
+def test_no_starter_tells_a_release_user_to_run_what_the_release_lacks():
+    """The generator used to write `python tools/grade.py` into every starter
+    README; the zip has neither Python nor tools/."""
+    rt = _release_text()
+    problems = [f"{rel}:{line}: {message}"
+                for rel, text in _gen().render_all(FIXTURE).items()
+                for line, message in rt.command_problems(rel, text)]
+    assert not problems, "\n".join(problems[:20])
+
+
+def test_every_sidecar_command_a_starter_shows_runs_from_the_extracted_folder():
+    """`.\\factoryforge-sidecar` (PowerShell and cmd.exe) or
+    `./factoryforge-sidecar` (Linux), never the bare name, which neither
+    PowerShell nor a Linux shell looks for in the current folder. The JSON
+    `_usage` strings are values, not lines, so they are read one by one."""
+    bare, seen = [], 0
+    for rel, text in _gen().render_all(FIXTURE).items():
+        lines = text.split("\n")
+        if rel.endswith(".json"):
+            lines = [v for k, v in json.loads(text).items() if k.startswith("_usage")]
+        for number, line in enumerate(lines, 1):
+            m = _SIDECAR_COMMAND.match(line)
+            if not m:
+                continue
+            seen += 1
+            if m.group(1) not in (".\\factoryforge-sidecar", "./factoryforge-sidecar"):
+                bare.append(f"{rel}:{number}: {line.strip()}")
+    assert seen > 100, f"only {seen} sidecar commands found -- is the pattern still right?"
+    assert not bare, "\n".join(bare[:20])
+
+
+def test_the_index_shows_the_grader_check_a_release_user_can_run_as_printed():
+    """The lockstep reference runs are the one grading command a user with
+    only the zip can run and see PASS and FAIL without a PLC; the release
+    gate runs exactly these (`check_release.GATE_*`)."""
+    index = _gen().render_all(FIXTURE)["examples/README.md"]
+    for reference in ("good", "blind"):
+        assert (f".\\factoryforge-sidecar grade --scene sorting-by-height "
+                f"--reference {reference} --lockstep") in index, reference
