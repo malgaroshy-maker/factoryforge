@@ -214,17 +214,18 @@ nano st_files/sorting_by_height.st
 
 You make two changes. To paste into nano, right-click in the Ubuntu window.
 
-**First change: six new variables.** Use the arrow keys to find the line that
+**First change: seven new variables.** Use the arrow keys to find the line that
 starts `PanelSetpoint : REAL;`. Put the cursor at the end of that line, press
 Enter, and paste:
 
 ```
-    Running  : BOOL;    (* the line is running *)
-    Tripped  : BOOL;    (* the E-stop has tripped; only Reset clears it *)
-    rStart   : R_TRIG;  (* the moment Start goes down *)
-    rReset   : R_TRIG;  (* the moment Reset goes down *)
-    tEmit    : TON;     (* times the feed: one carton every 3 s *)
-    EmitFlag : BOOL;
+    Running   : BOOL;    (* the line is running *)
+    Tripped   : BOOL;    (* the E-stop has tripped; only Reset clears it *)
+    EstopSeen : BOOL;    (* the E-stop has read healthy since OpenPLC started *)
+    rStart    : R_TRIG;  (* the moment Start goes down *)
+    rReset    : R_TRIG;  (* the moment Reset goes down *)
+    tEmit     : TON;     (* times the feed: one carton every 3 s *)
+    EmitFlag  : BOOL;
 ```
 
 They must end up above the `END_VAR` that follows. OpenPLC's compiler will
@@ -241,17 +242,25 @@ paste:
   rStart(CLK := PanelStart);
   rReset(CLK := PanelReset);
 
+  (* Until OpenPLC's first poll reaches the slave, every input reads
+     FALSE, and a normally closed E-stop that reads FALSE looks struck.
+     So a trip only counts once the E-stop has been seen healthy. *)
+  IF PanelEstop THEN
+    EstopSeen := TRUE;
+  END_IF;
+
   (* The E-stop trips the line, and the trip latches: releasing the
      mushroom does not clear it, and neither does Start. Only Reset does. *)
-  IF NOT PanelEstop THEN
+  IF EstopSeen AND NOT PanelEstop THEN
     Tripped := TRUE;
   ELSIF rReset.Q THEN
     Tripped := FALSE;
   END_IF;
 
-  (* Start runs the line. Stop or a trip stops it. Reset alone does not
-     start anything: after a trip it takes Reset, then Start. *)
-  IF Tripped OR PanelStop THEN
+  (* Start runs the line, and only while the E-stop reads healthy. Stop or
+     a trip stops it. Reset alone does not start anything: after a trip it
+     takes Reset, then Start. *)
+  IF Tripped OR PanelStop OR NOT PanelEstop THEN
     Running := FALSE;
   ELSIF rStart.Q THEN
     Running := TRUE;
@@ -324,7 +333,13 @@ TRUE while the circuit is healthy and FALSE when the mushroom is struck, so a
 cut wire stops the line too. *Why the latch?* A machine that restarted by
 itself the moment somebody released the mushroom, or on one press of Start,
 could start while a person is still reaching into it. That is why a trip needs
-Reset first, and a separate Start after it. *Why `R_TRIG`?* A click holds
+Reset first, and a separate Start after it. *Why `EstopSeen`?* OpenPLC runs
+its first scans before its first Modbus poll has come back, and until then
+every input reads FALSE, the E-stop included. Without `EstopSeen` the program
+would trip on its own every time OpenPLC starts, and the red lamp would be lit
+before anybody touched anything. The line still cannot run while the E-stop
+reads FALSE: that is the `NOT PanelEstop` beside `Tripped` and `PanelStop`, so
+a cut wire still stops it. *Why `R_TRIG`?* A click holds
 Start down for 0.2 s, which is about ten of this program's 20 ms scans. The
 program acts on the rising edge, once, however long the button is held. The
 grader checks all of this. It presses Start itself and strikes the mushroom
@@ -339,14 +354,14 @@ cd ..
 nano st_files/sorting_by_height.st
 ```
 
-**Four more variables**, on a new line after `EmitFlag : BOOL;`, still above
+**Four more variables**, on a new line after `EmitFlag  : BOOL;`, still above
 `END_VAR`:
 
 ```
-    HighMem  : BOOL;  (* the high beam, one scan ago *)
-    PushReq  : BOOL;  (* a tall carton is on its way to the pusher *)
-    tDelay   : TON;   (* high beam -> carton in front of the pusher *)
-    tPush    : TON;   (* how long the pusher stays out *)
+    HighMem   : BOOL;    (* the high beam, one scan ago *)
+    PushReq   : BOOL;    (* a tall carton is on its way to the pusher *)
+    tDelay    : TON;     (* high beam -> carton in front of the pusher *)
+    tPush     : TON;     (* how long the pusher stays out *)
 ```
 
 **The sorting logic**, at the very start of the line that starts
@@ -376,8 +391,10 @@ cd core
 ./openplc
 ```
 
-Tall cartons now go down the chute and short ones carry on to the end. The
-high beam sees only tall cartons, so its rising edge is the whole decision.
+A restarted program starts with the line stopped, so click **Start** in
+FactoryForge again. Tall cartons now go down the chute and short ones carry
+on to the end. The high beam sees only tall cartons, so its rising edge is
+the whole decision.
 Because the edge is gone long before the carton reaches the pusher, the
 program latches it in `PushReq`, then waits and strokes the pusher.
 
@@ -392,12 +409,25 @@ shuffles it, so a program that pushes every second carton without reading a
 sensor fails. It is also the operator: it presses Start 1 s in, and about
 16 s in it strikes the mushroom, releases it, presses Start alone, then Reset,
 then Start, exactly as you did in step 7. It offers the same 19 tags, so the
-same program and the same addresses work unchanged. **Leave OpenPLC running.** It finds the new slave on
-its own. Until it does, its window repeats `Connection failed on MB device
-FactoryForge`, which is expected.
+same program and the same addresses work unchanged.
 
-In the Command Prompt from step 5, press **Ctrl+C** to stop the sidecar, then
-start the grader:
+In the Command Prompt from step 5, press **Ctrl+C** to stop the sidecar.
+
+Then **restart OpenPLC**, so that the grader meets your program fresh, with
+the line stopped. In Ubuntu, press **Ctrl+C** and start it again:
+
+```bash
+./openplc
+```
+
+This matters. A PLC keeps its variables while it runs, and OpenPLC keeps
+writing the outputs it last had. If the line was running when you stopped the
+sidecar, it is still running when the grader connects, before anybody has
+pressed Start, and the grader fails `line.started_by_start`. Until the grader's
+sidecar is up, OpenPLC's window repeats `Connection failed on MB device
+FactoryForge`, which is expected: it finds the new slave on its own.
+
+Now start the grader:
 
 ```
 .\factoryforge-sidecar grade --scene sorting-by-height
@@ -433,11 +463,11 @@ PASS   every check met
   [ok] line.both_lanes                chute 8, far end 8 (at least 3 each)
   [ok] sort.tall_diverted             no tall carton ran off the far end
   [ok] sort.short_passed              no short carton was diverted
-  [ok] line.conservation              18 fed = 16 sorted + 2 still on the belt
+  [ok] line.conservation              17 fed = 16 sorted + 1 still on the belt
   [ok] line.started_by_start          the belt never started without somebody pressing Start
-  [ok] estop.stopped_the_belt         the belt moved 25 mm after the mushroom was struck (at most 100 mm, which is 200 ms of belt)
+  [ok] estop.stopped_the_belt         the belt moved 55 mm after the mushroom was struck (at most 100 mm, which is 200 ms of belt)
   [ok] estop.latched_until_reset      the belt stayed still from the release until Reset and then Start
-  [ok] estop.restarted_after_reset    the belt was running again 0.05s after Start at 22.01s (within 1s)
+  [ok] estop.restarted_after_reset    the belt was running again 0.10s after Start at 22.83s (within 1s)
   ...
 RESULT grade=PASS scene=sorting-by-height checks=12/12 failed=none forced=0
 ```
@@ -482,6 +512,8 @@ grade --list` shows every scene the grader can mark.
 | The compiler reports `invalid located variable declaration` | A variable of yours ended up in the first `VAR` block, among the `AT %…` lines. Move it to the second one. |
 | No cartons appear, or only one does | `EmitterEmit` makes one carton per **rising** edge, and the level has to last longer than the 50 ms poll. |
 | Some tall cartons get past the pusher | Timing. OpenPLC's polling period is paid twice, once for the sensor and once for the pusher. Keep `Polling_Period = "50"` in `mbconfig.cfg`. |
+| The red lamp lights the moment OpenPLC starts, and Start does nothing until you press Reset | Your trip logic has no `EstopSeen`. Until OpenPLC's first poll comes back every input reads FALSE, and a normally closed E-stop that reads FALSE looks struck. The grader presses Start without Reset first, so this fails `estop.stopped_the_belt`: the belt was never running to be stopped. |
+| The grader fails `line.started_by_start`, *"the belt started … at [0.01]s"* | OpenPLC was not restarted before grading, and the line was still running from before (step 9). |
 | The grader says `ERROR` and *no controller connected* | The second sidecar was not started within the grader's wait (120 s), or its `--port` is not the number the grader printed. |
 
 More on OpenPLC itself (addressing, the 32-bit register format, timing, and
@@ -501,20 +533,44 @@ the chute and 9 short past the end. OpenPLC was the controller in both runs.
 
 That run was of the program as it stood then, which ignored Start because the
 grader never pressed it. IP-35 made the grader press Start and mark the
-E-stop, and changed step 7 to the program above. **The changed program has
-not been run on OpenPLC.** What was checked instead: the four code blocks in
-steps 7 and 8, pasted into the starter where those steps say, compile with
-OpenPLC's own compiler (`iec2c`, then `g++` and the glue generator, as
-`examples/openplc/check_starters.sh` does). The same logic, translated line
-for line into a Python controller, graded **FAIL** after step 7 (*"The pusher
-never came out"*) and **PASS**, 12/12, after step 8, on five seeds. The output
-in step 9 is from that run. It scans every 50 ms, not every 20 ms like
-OpenPLC's task.
+E-stop, and step 7 was rewritten for it. On 2026-09-25 the rewritten program
+was run on OpenPLC too, and the first version of it did not work there:
+
+- **It tripped by itself at every start.** OpenPLC runs its first scans before
+  its first poll returns, so the E-stop read FALSE, the trip latched, and the
+  grader's Start 1 s in did nothing. It graded **FAIL** on
+  `estop.stopped_the_belt`, even with the sorting logic in (11/12), and it did
+  so whether OpenPLC started before the slave or 3 s after it. That is why
+  step 7 now has `EstopSeen`.
+- **Step 9 said to leave OpenPLC running.** A line still running from step 8
+  was still running when the grader connected, and the grader failed
+  `line.started_by_start` at 0.01 s (11/12). That is why step 9 now restarts
+  OpenPLC.
+
+The program as it now stands was then run on OpenPLC. The four code blocks in
+steps 7 and 8 were taken out of this file by a script and inserted into the
+starter where those steps say; the script checked that each block is in the
+program byte for byte and that the program minus the blocks is the starter.
+OpenPLC's `compile_program.sh` built it and `./openplc` ran it, with the
+starter's `mbconfig.cfg`. The grader and the second sidecar were the commands
+in step 9, run from source inside WSL, with OpenPLC restarted first:
+
+- **Step 7:** **FAIL**, 10/12. 8 tall cartons past the pusher, *"The pusher
+  never came out"*, and all four panel checks met: `line.started_by_start`,
+  `estop.stopped_the_belt` (60 mm), `estop.latched_until_reset`,
+  `estop.restarted_after_reset` (0.08 s).
+- **Step 8:** **PASS**, 12/12, on seeds 1, 2 and 3. Every tall carton down
+  the chute, every short one past the end, the belt 30 to 55 mm past the
+  mushroom and running again 0.10 to 0.11 s after Start. The output in step 9
+  is from seed 2. It also passed 12/12 with OpenPLC started 3 s after the
+  grader's sidecar (seed 4).
 
 Five things were **not** covered by those runs, and they are listed here so
 that nobody mistakes them for tested:
 
-- **The step 7 and 8 program on OpenPLC.** Compiled, not run (above).
+- **Your clicks in step 7.** The E-stop, Reset and Start sequence was pressed
+  by the grader, not in the 3D window, and the program was not run against the
+  3D window at all (see below).
 - **The crossing from WSL to Windows.** In that run OpenPLC and the grader
   shared a loopback, as on Linux, and the grader and sidecar there were the
   same code run from source inside WSL. The firewall question in step 5 was not

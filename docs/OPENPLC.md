@@ -52,7 +52,7 @@ FactoryForge side came from a release zip built from this repository.
 | **Compiled** | with `compile_program.sh`, as an ordinary user in a user-owned copy of the OpenPLC tree. The starter carries CRLF line endings from the Windows zip, and neither matiec nor the `mbconfig.cfg` parser minded |
 | **Run** | `./openplc` without `sudo`: the two real-time warnings, nothing else |
 | **Marked by** | `factoryforge_sidecar grade --scene sorting-by-height`, OpenPLC as the controller over `connect --driver modbus-tcp`, all on loopback inside WSL |
-| **Result** | the step 7 program (belt and feed only): **FAIL**, 9 tall cartons off the far end, *"The pusher never came out"*. The step 8 program: **PASS**, 8/8, 9 tall down the chute and 9 short past the end, the pusher firing 0.95 s after the beam (window 0.60–1.20 s). *That was the program before IP-35, which ignored Start. The exam now presses Start and runs the E-stop sequence (12 checks), and the guide's program honours both. The new program is compiled with OpenPLC's toolchain but has not yet been run on OpenPLC.* |
+| **Result** | the step 7 program (belt and feed only): **FAIL**, 9 tall cartons off the far end, *"The pusher never came out"*. The step 8 program: **PASS**, 8/8, 9 tall down the chute and 9 short past the end, the pusher firing 0.95 s after the beam (window 0.60–1.20 s). *That was the program before IP-35, which ignored Start. The exam now presses Start and runs the E-stop sequence (12 checks); the program written for it was run on OpenPLC on 2026-09-25, below.* |
 
 The release's own sidecar, unpacked with no Python on `PATH`, connected to the
 release's engine and printed the nineteen-tag map exactly as the starter
@@ -63,6 +63,54 @@ run were the same code from source inside WSL, rather than the frozen Windows
 binaries across the WSL boundary. Crossing that boundary needs Windows
 Firewall to allow the sidecar, and that was not done on the test machine. And
 OpenPLC did not drive the 3D window itself.
+
+### The IP-35 program, run (2026-09-25)
+
+IP-35 made the exam press Start 1 s in, strike the mushroom, release it, press
+Start alone, then Reset, then Start, and rewrote the guide's step 7 to latch the
+E-stop and wait for Start. That program had only been compiled. It was then run
+on the same OpenPLC build, and it did not survive the run as written.
+
+| | |
+|---|---|
+| **Program** | the starter plus the four code blocks of the guide's steps 7 and 8, taken out of `GETTING_STARTED.md` by a script and inserted where the guide says. The script checked that each block is in the program byte for byte and that the program minus the blocks is the starter. The files that were compiled have the same SHA-256 as the ones the final guide produces |
+| **Compiled** | with `compile_program.sh`, in a user-owned copy of `/opt/OpenPLC_v3`, with the starter's `mbconfig.cfg` unchanged in `webserver/core/` |
+| **Run** | `./openplc` without `sudo`, a fresh process for every graded run unless the table says otherwise |
+| **Marked by** | the sidecar's `grade --scene sorting-by-height` (wall clock, not `--lockstep`) and a second sidecar's `connect --driver modbus-tcp -o port 5502 --port <printed>`, the commands of the guide's step 9, run from source in a WSL venv, all on loopback inside WSL |
+
+| Program | OpenPLC | Seed | Result |
+|---|---|---|---|
+| step 7, first version | started 2 s before the grader | random | **FAIL** 9/12: `line.both_lanes`, `sort.tall_diverted`, `estop.stopped_the_belt` |
+| step 7, first version | started 3 s after the grader's sidecar | 1 | **FAIL** 9/12, the same three |
+| step 8, first version | started 2 s before the grader | 1 | **FAIL** 11/12: `estop.stopped_the_belt` |
+| step 8, first version | left running from that run, a second grader | 2 | the run was cut short, but the sidecar's first `OUT` line already said `rotate=1` before any Start |
+| step 7, as now | started 2 s before the grader | 11 | **FAIL** 10/12: `line.both_lanes`, `sort.tall_diverted`, *"The pusher never came out"*. All four panel checks met |
+| step 8, as now | started 2 s before the grader | 1, 2, 3 | **PASS** 12/12 each time: 8/7, 8/8 and 8/7 tall/short, none misrouted, the pusher 0.98–0.99 s after the beam, 30–55 mm of belt after the mushroom, running again 0.10–0.11 s after Start |
+| step 8, as now | started 3 s after the grader's sidecar | 4 | **PASS** 12/12 |
+| step 8, as now | left running from that run, a second grader | 5, 6 | first **PASS** 12/12; second **FAIL** 11/12, `line.started_by_start`, the belt started at 0.01 s |
+
+Two things were wrong, and neither shows in a compile or in a Python
+translation of the program:
+
+- **OpenPLC's inputs read FALSE until its first poll returns.** The runtime
+  scans before the Modbus master's first read lands, and the master's input
+  buffer in `modbus_master.cpp` starts at zero. The E-stop is normally closed,
+  so FALSE means struck: the first version tripped on its first scan, the red
+  lamp was lit before anything happened (the sidecar's first `OUT` line
+  already said `red=1`), and the exam's Start, which comes without a Reset,
+  did nothing. It did so even with OpenPLC started after the slave was up. The
+  guide's program now counts a trip only once the E-stop has read healthy
+  (`EstopSeen`), and still refuses Start while it reads FALSE.
+- **OpenPLC keeps its last inputs when the slave goes away.** On a failed
+  connection the master skips the device and leaves its buffer alone, so a
+  running program keeps running and writes `rotate=1` to whatever slave it
+  finds next. The guide said to leave OpenPLC running between the 3D window
+  and the grader. A line left running then started without a Start press, and
+  the exam failed it. Step 9 now restarts OpenPLC before grading.
+
+Not covered: the grader pressed the buttons, not a person in the 3D window;
+OpenPLC did not drive the 3D window; and the WSL-to-Windows crossing is still
+IP-39's.
 
 ---
 
