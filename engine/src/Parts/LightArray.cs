@@ -33,6 +33,14 @@ public partial class LightArray : Node3D, IPart
     /// Zero when the curtain is clear.</summary>
     public float MeasuredHeight { get; private set; }
 
+    /// <summary>How the curtain's analog height output reaches the PLC
+    /// (IP-28): metres as a float by default, or raw AI counts. A measuring
+    /// curtain's 4-20 mA "highest beam blocked" output is spanned at
+    /// commissioning; 0-0.5 m by default, which covers the default curtain.
+    /// Raise the curtain past it and the top beams read overrange, as they
+    /// would.</summary>
+    public AnalogSignal HeightSignal { get; } = new("height", 0.0f, 0.5f, -1.0f, 5.0f, 0.01f);
+
     /// <summary>True while anything at all is in the curtain.</summary>
     public bool IsBlocked { get; private set; }
 
@@ -175,7 +183,7 @@ public partial class LightArray : Node3D, IPart
     /// <summary>A measurement and a bit: how far up the curtain the tallest
     /// blocked beam sits, and whether anything is blocked at all.</summary>
     public void DeclareTags(PartTagBuilder tags) => tags
-        .Float("height", $"Light Array {tags.Index} Height (m)", TagKind.Input)
+        .Analog(HeightSignal, $"Light Array {tags.Index} Height", "m")
         .Bit("blocked", $"Light Array {tags.Index} Blocked", TagKind.Input);
 
     public void CaptureSettings(PartSettings settings)
@@ -183,6 +191,7 @@ public partial class LightArray : Node3D, IPart
         settings.Put("beams", BeamCount);
         settings.Put("curtain_height", CurtainHeight);
         settings.Put("range", Range);
+        HeightSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -190,11 +199,12 @@ public partial class LightArray : Node3D, IPart
         if (settings.Whole("beams") is { } beams) BeamCount = beams;
         if (settings.Number("curtain_height") is { } height) CurtainHeight = height;
         if (settings.Number("range") is { } range) Range = range;
+        HeightSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
-        tick.Write("height", (double)MeasuredHeight);
+        HeightSignal.Write(tick, MeasuredHeight);
         tick.Write("blocked", IsBlocked);
     }
 
@@ -208,6 +218,7 @@ public partial class LightArray : Node3D, IPart
                   value => { CurtainHeight = value; Rebuild(); });
         ui.Slider("Beams", BeamCount, 2, 24, 1,
                   value => { BeamCount = (int)value; Rebuild(); });
+        HeightSignal.Describe(ui);
     }
 
     /// <summary>IP-07. A tall carton (0.30 m) parked in the curtain has to

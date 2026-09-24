@@ -76,6 +76,16 @@ public sealed class PartTagBuilder
     public PartTagBuilder Analog(AnalogSignal signal, string name, string? unit) =>
         signal.Declare(this, name, unit);
 
+    /// <summary>
+    /// An analog <em>output</em> -- a command -- declared the way its
+    /// <see cref="AnalogOutput"/> is configured: a float in the actuator's
+    /// units by default, or an INT the program writes card counts into. IP-28;
+    /// see <see cref="AnalogOutput"/>.
+    /// </summary>
+    public PartTagBuilder AnalogOut(AnalogOutput output, string suffix, string name, string? unit,
+                                    double initial = 0.0) =>
+        output.Declare(this, suffix, name, unit, initial);
+
     private PartTagBuilder Add(string suffix, string name, TagType type, TagKind kind,
                                object? initial)
     {

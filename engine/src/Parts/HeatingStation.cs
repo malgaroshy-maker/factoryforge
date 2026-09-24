@@ -64,6 +64,11 @@ public partial class HeatingStation : Node3D, IPart
     /// scale.</summary>
     public AnalogSignal TemperatureSignal { get; } = new("temperature", 0.0f, 400.0f, -50.0f, 1000.0f, 5.0f);
 
+    /// <summary>How the PLC commands the element's power controller (IP-28):
+    /// percent as a float by default, or raw AO counts, 27648 = full
+    /// power.</summary>
+    public AnalogOutput PowerSignal { get; } = new(0.0f, 100.0f);
+
     /// <summary>Heater power last commanded, 0–100 %. Kept so a faulted station
     /// can show a live command next to a falling temperature, which is the
     /// whole diagnosis.</summary>
@@ -290,7 +295,7 @@ public partial class HeatingStation : Node3D, IPart
     // ---------- IPart (HP-34)
 
     public void DeclareTags(PartTagBuilder tags) => tags
-        .Float("heater", $"Heater {tags.Index} Power (%)", TagKind.Output)
+        .AnalogOut(PowerSignal, "heater", $"Heater {tags.Index} Power", "%")
         .Analog(TemperatureSignal, $"Heater {tags.Index} Temperature", "C")
         .Bit("attemp", $"Heater {tags.Index} At Temperature", TagKind.Input)
         // A failed element still accepts and reports its command; only the
@@ -306,6 +311,7 @@ public partial class HeatingStation : Node3D, IPart
         settings.Put("target_temp", TargetTemp);
         settings.Put("tolerance", Tolerance);
         TemperatureSignal.Capture(settings);
+        PowerSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -317,6 +323,7 @@ public partial class HeatingStation : Node3D, IPart
         if (settings.Number("target_temp") is { } target) TargetTemp = target;
         if (settings.Number("tolerance") is { } band) Tolerance = band;
         TemperatureSignal.Apply(settings);
+        PowerSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -328,7 +335,7 @@ public partial class HeatingStation : Node3D, IPart
         // dt is scaled simulation time, so the plant obeys pause and the time
         // scale — the same rule the tank follows, and it matters more here
         // because the time constant is a minute rather than seconds.
-        Step(tick.Number("heater"), tick.Dt);
+        Step((float)PowerSignal.Read(tick, "heater"), tick.Dt);
         TemperatureSignal.Write(tick, Temperature);
         tick.Write("attemp", AtTemperature);
     }
@@ -341,6 +348,7 @@ public partial class HeatingStation : Node3D, IPart
         ui.Slider("Target (degC)", TargetTemp, 20.0f, 400.0f, 1.0f, value => TargetTemp = value);
         ui.Slider("Tolerance (degC)", Tolerance, 0.5f, 30.0f, 0.5f, value => Tolerance = value);
         TemperatureSignal.Describe(ui);
+        PowerSignal.Describe(ui);
     }
 
     /// <summary>A run's accumulated heat, not a machine somebody built (LP-12).
@@ -358,7 +366,7 @@ public partial class HeatingStation : Node3D, IPart
     /// fully off, exactly as a click on a tank valve does.</summary>
     public PartOperation? Operation => new("heater", "heater");
 
-    public void Operate(PartOperate op) => op.ToggleAnalog("heater");
+    public void Operate(PartOperate op) => PowerSignal.Toggle(op, "heater");
 
     /// <summary>IP-07. Full power has to heat the plate: `temperature` a
     /// degree above where it rested.</summary>
@@ -366,6 +374,6 @@ public partial class HeatingStation : Node3D, IPart
         "`temperature` a degree above where it rested",
         r => r.Number("temperature") > r.AtStart("temperature") + 1.0)
     {
-        Drive = PartProbe.Drives(("heater", 100.0)),
+        Drive = PartProbe.Drives(("heater", PowerSignal.Command(100.0))),
     };
 }

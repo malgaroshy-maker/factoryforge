@@ -99,10 +99,13 @@ reason to close the connection.
 ### A tag's type belongs to a `describe`, not to its id
 
 A tag's `type` can change between two `describe`s while its `id` stays the same.
-The case that does it today is an analog input switched between engineering
-units and raw card counts in the property inspector (IP-16): `tank.level` is a
-`float` percentage by default and an `int` count in S7 raw or 4–20 mA mode, and
-at 4–20 mA the part also gains a `tank.wirebreak` bit. The engine announces the
+The case that does it today is an analog channel switched between engineering
+units and raw card counts in the property inspector: `tank.level` is a `float`
+percentage by default and an `int` count in S7 raw or 4–20 mA mode (IP-16), and
+at 4–20 mA the part also gains a `tank.wirebreak` bit. Analog *outputs* switch
+the same way (IP-28): `tank.fill` is a `float` percentage by default and an
+`int` the controller writes counts into in raw mode — a separate setting from
+the input's, and never with a wire-break bit. The engine announces the
 change the way it announces any other edit to the tag set — a fresh `describe`
 with a new `epoch` — so a driver that rebuilds its map from every `describe`, as
 the epoch rules above already require, handles it with nothing extra. A driver
@@ -113,10 +116,24 @@ inside the 32-bit range: 0 … 27648 across the measuring range, up to 32511 of
 overrange and down to -4864 of underrange, 32767 (7FFFh) for overflow and for a
 broken 4–20 mA wire, and -32768 (8000h) for underflow. Like every `int`, it is a
 JSON integer on every channel — `describe`, `update`, `observe` — and never
-`27648.0`; `engine/fixtures/server_cases.json` checks that on both engines. The
-OPC UA client writes `int` tags as Int32, so the PLC-side variable for a raw
-count is a `DInt`, not the `Int` a real AI channel's `%IW` would be; `NORM_X`
-accepts either.
+`27648.0`; `engine/fixtures/server_cases.json` checks that on both engines.
+
+A raw analog *output* is an `int` the controller writes. The engine reads the
+count the way an S7-1500 output card would treat it: 0 … 27648 across the
+actuator's span, overrange (up to 32511) holding the actuator at the top of its
+span, and anything above that — overflow, 7FFFh included — switching the
+channel off, which leaves the actuator at the bottom. Zero and below are the
+bottom too. The bus itself does not clamp: any 32-bit `int` is a legal value,
+and what it means is the part's business.
+
+The OPC UA client writes each tag as its node's own DataType, read once per bind
+(IP-28). A raw count therefore lands in an `Int` — an Int16 node, which is what a
+real `%IW` channel is — as well as in a `DInt`. A value the node's type cannot
+hold (40000 into an `Int`, a `float` tag into an integer node) is refused before
+it is sent, reported once on the bus as `value_out_of_range` or
+`node_type_mismatch` naming the tag, the node and the type, and not retried; the
+next value that fits is written as normal. A node whose DataType cannot be read
+is written as before: `bit` as Boolean, `int` as Int32, `float` as Float.
 
 ### `kind` is from the controller's point of view
 

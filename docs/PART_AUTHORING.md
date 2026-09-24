@@ -460,7 +460,7 @@ you already have:
 public AnalogSignal LevelSignal { get; } = new("level", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
 
 public void DeclareTags(PartTagBuilder tags) => tags
-    .Float("fill", $"Tank {tags.Index} Fill Valve (%)", TagKind.Output)
+    .AnalogOut(ValveSignal, "fill", $"Tank {tags.Index} Fill Valve", "%")   // an output: see below
     // Name without its unit, then the unit. In engineering mode this declares
     // exactly .Float("level", "Tank 1 Level (%)", TagKind.Input).
     .Analog(LevelSignal, $"Tank {tags.Index} Level", "%");
@@ -530,6 +530,26 @@ scene.
 | `FlowMeter` | `rate` | 0 – 50 L/min |
 | `MotorStarter` | `current` | 0 – 20 A |
 | `WeighingConveyor` | `weight` | 0 – 5000 g |
+| `DosingPump` | `flow` | 0 – 40 L/min (the default pump flat out) |
+| `CoolingFan` | `airflow` | 0 – 100 % |
+| `VariableConveyor` | `actual` | 0 – 100 % |
+| `PickPlaceArm` | `position` | 0 – 100 % of the rail |
+| `LightArray` | `height` | 0 – 0.5 m |
+| `VerticalLift` | `height` | 0 – 2 m |
+| `ButtonPanel` | `setpoint` | the scale plate — see below |
+
+The last seven are IP-28's. A span that is already another setting of the part
+is not a second setting: the panel's pot is wired 0 V at the bottom of its plate
+and 10 V at the top, so it passes `rangeSource: () => (SetpointMin, SetpointMax)`
+and gets no `range_min`/`range_max` keys and no Range rows — a second pair of
+sliders for the plate would be two settings for one number, and could disagree.
+
+Two measurements were left in engineering units on purpose, because no real
+device hands them to a PLC as an analog channel. `RotaryEncoder.rate` is a pulse
+frequency: a counting module (an S7 TM Count, a high-speed counter) measures it
+and reports hertz or a period, never 0–27648. `ArticulatedArm`'s tool height and
+joint angles are the robot controller's own computed values, which it reports
+over a fieldbus as numbers, not through an AI card.
 
 **Then add your part to `--self-test=analog`** (`engine/src/Sim/AnalogSignalSelfTest.cs`):
 its `Channels` list, its `Reading` switch, and a way to drive your process to 0 %,
@@ -538,5 +558,70 @@ own dropdown, checks the counts against its own arithmetic rather than the
 helper's constants, forces the wire break, and round-trips the setting through a
 save and a load.
 
-Analog *outputs* — valve openings, speed references — are not raw yet. That is a
-separate piece of work, and the same helper is the place for it.
+### Step 8b: Analog outputs a PLC writes as raw counts (optional)
+
+The other direction (IP-28): a valve opening, a heater's power, a drive's speed
+reference, a positioner's target, a panel meter's value. By default the output
+is the float in the actuator's units it always was; in `s7_raw` or `ma_4_20` it
+is an `int` the program writes counts into, as an S7 program writes a `%QW`
+after `NORM_X`/`SCALE_X`. The helper is `engine/src/Parts/AnalogOutput.cs`;
+`LevelTank`'s two valves are the worked example, and the heater, the pump, the
+fan, the VFD belt, the gantry and the gauge use it too.
+
+```csharp
+// The actuator's span: engineering value at 0 and at 27648 counts.
+public AnalogOutput ValveSignal { get; } = new(0.0f, 100.0f);
+
+public void DeclareTags(PartTagBuilder tags) => tags
+    // In engineering mode exactly .Float("fill", "Tank 1 Fill Valve (%)", TagKind.Output).
+    .AnalogOut(ValveSignal, "fill", $"Tank {tags.Index} Fill Valve", "%")
+    .AnalogOut(ValveSignal, "drain", $"Tank {tags.Index} Drain Valve", "%");
+
+public void StepPart(PartTick tick) =>
+    Step((float)ValveSignal.Read(tick, "fill"), (float)ValveSignal.Read(tick, "drain"), tick.Dt);
+
+// Capture / Apply / Describe as for an input. The setting is `output_signal`
+// (the inspector row "Output Signal"), so a part can have an analog input and
+// analog outputs configured separately -- a pump has both.
+public void Operate(PartOperate op) => ValveSignal.Toggle(op, op.Region);
+public PartProbe? Probe => new(...) { Drive = PartProbe.Drives(("fill", ValveSignal.Command(100.0))) };
+```
+
+**Read every output through the helper, and write every output the engine
+itself forces through `Command` or `Toggle`** — a click, the IP-07 probe. In a
+raw mode the tag is an `int`, and forcing `100.0` into it throws. One instance
+may serve several suffixes when they share a setting, as the tank's two valves
+(one positioner model, one card) do.
+
+**What a count does**, per the S7-1500 output tables (0–10 V, 0–20 mA and
+4–20 mA share the counts), and then per the actuator:
+
+| Count written | Card | Actuator |
+|---|---|---|
+| 0 … 27648 | 0 … 100 % of the output range | straight line across its span |
+| 27649 … 32511 | overrange, up to 117.6 % (23.52 mA) | at its end stop: the top of its span |
+| 32512 and up (7FFFh included) | overflow: the channel is switched off, 0 V / 0 mA | loses its signal: the bottom of its span |
+| -1 and below | 4–20 mA: underrange down to 0 mA; unipolar: limited to 0 | below its zero: the bottom of its span |
+
+Overflow is the one surprise, and it is real: a program that writes 40000 into
+a `%QW` without clamping gets a *shut* valve, not a full one.
+
+**No wire break on an output.** A broken 4–20 mA output wire is a channel
+diagnostic on the card (diagnostic buffer, interrupt, value status), never a
+value in the word the program writes, and the actuator losing its signal is
+already what each part's `.fault` models. So `s7_raw` and `ma_4_20` take the
+same counts and differ only in the tag's name, which says how the channel is
+wired.
+
+**No range setting either.** A transmitter's span is configured in the
+transmitter, so an input has one. An actuator's span is its full scale, and each
+part already has that as a setting: a fully open valve, full heater power, the
+pump's rated flow and the drive's maximum speed at 100 %, the far end of the
+gantry's rail. The gauge passes its plate (`new AnalogOutput(() => (ScaleMin,
+ScaleMax))`), because a 4–20 mA panel meter is calibrated to its own face.
+
+Then add the output to `--self-test=analog` (`AnalogSignalSelfTest.Outputs.cs`):
+its `Outputs` row, its `Observed` switch — what the actuator is doing, not what
+the tag says — and, if it is a new part, its `OutputParts` row. The test writes
+0, 50 and 100 % of span in each mode, then every region of the table above, and
+round-trips the setting through a save and a load.

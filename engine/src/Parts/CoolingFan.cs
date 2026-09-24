@@ -62,6 +62,15 @@ public partial class CoolingFan : Node3D, IPart
     /// reference still reads.</summary>
     public float Airflow { get; private set; }
 
+    /// <summary>How the PLC commands the fan's drive (IP-28): percent as a
+    /// float by default, or raw AO counts, 27648 = full speed.</summary>
+    public AnalogOutput SpeedSignal { get; } = new(0.0f, 100.0f);
+
+    /// <summary>How the airflow transmitter reaches the PLC (IP-28): percent of
+    /// full airflow as a float by default, or raw AI counts across
+    /// 0-100 %.</summary>
+    public AnalogSignal AirflowSignal { get; } = new("airflow", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
+
     /// <summary>Motor failed. The reference is still accepted and still
     /// reported; no air arrives, the blade coasts down, and the only honest
     /// reading is the airflow — and, further downstream, the temperature that
@@ -351,8 +360,8 @@ public partial class CoolingFan : Node3D, IPart
 
     public void DeclareTags(PartTagBuilder tags) => tags
         .Bit("run", $"Fan {tags.Index} Run", TagKind.Output)
-        .Float("speed", $"Fan {tags.Index} Speed Ref (%)", TagKind.Output)
-        .Float("airflow", $"Fan {tags.Index} Airflow (%)", TagKind.Input)
+        .AnalogOut(SpeedSignal, "speed", $"Fan {tags.Index} Speed Ref", "%")
+        .Analog(AirflowSignal, $"Fan {tags.Index} Airflow", "%")
         .Bit("fault", $"Fan {tags.Index} Motor Fault", TagKind.Input);
 
     public void CaptureSettings(PartSettings settings)
@@ -360,6 +369,8 @@ public partial class CoolingFan : Node3D, IPart
         settings.Put("reach", Reach);
         settings.Put("cooling_rate", CoolingRate);
         settings.Put("spin_up_rate", SpinUpRate);
+        AirflowSignal.Capture(settings);
+        SpeedSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -367,14 +378,16 @@ public partial class CoolingFan : Node3D, IPart
         if (settings.Number("reach") is { } reach) Reach = reach;
         if (settings.Number("cooling_rate") is { } rate) CoolingRate = rate;
         if (settings.Number("spin_up_rate") is { } spinUp) SpinUpRate = spinUp;
+        AirflowSignal.Apply(settings);
+        SpeedSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
         if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
 
-        Step(tick.Bit("run"), tick.Number("speed"), tick.Dt);
-        tick.Write("airflow", (double)Airflow);
+        Step(tick.Bit("run"), (float)SpeedSignal.Read(tick, "speed"), tick.Dt);
+        AirflowSignal.Write(tick, Airflow);
     }
 
     public void DescribeControls(IPartInspector ui)
@@ -383,12 +396,14 @@ public partial class CoolingFan : Node3D, IPart
         ui.Slider("Cooling (/s/degC)", CoolingRate, 0.05f, 3.0f, 0.05f,
                   value => CoolingRate = value);
         ui.Slider("Spin-up (%/s)", SpinUpRate, 5.0f, 200.0f, 5.0f, value => SpinUpRate = value);
+        AirflowSignal.Describe(ui);
+        SpeedSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
     {
         ResetFan();
-        reset.Write("airflow", 0.0);
+        AirflowSignal.Reset(reset, 0.0);
     }
 
     public PartOperation? Operation => new("fan", "run");
@@ -401,7 +416,7 @@ public partial class CoolingFan : Node3D, IPart
         if (!op.TryBit("run", out bool running)) return;
         bool on = !running;
         op.Force("run", on);
-        op.Force("speed", on ? 100.0 : 0.0);
+        op.Force("speed", SpeedSignal.Command(on ? 100.0 : 0.0));
     }
 
     /// <summary>IP-07. Run at full reference, the fan has to spin up and
@@ -410,6 +425,6 @@ public partial class CoolingFan : Node3D, IPart
         "`airflow` above 10 %",
         r => r.Number("airflow") > 10.0)
     {
-        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+        Drive = PartProbe.Drives(("run", true), ("speed", SpeedSignal.Command(100.0))),
     };
 }

@@ -251,9 +251,13 @@ public partial class PartPropertyInspectorUI : Control, IPartInspector
         }
         else if (tag.Type == TagType.Int)
         {
+            // The tag's whole range, for the reason the input override gives:
+            // a raw analog output (IP-28) takes 0-27648, and the codes above
+            // and below it are exactly what a student needs to try. A 0-9999
+            // box could command a raw valve to 36 % and no further.
             var spin = new SpinBox
             {
-                MinValue = 0, MaxValue = 9999, Step = 1,
+                MinValue = Tag.IntMin, MaxValue = Tag.IntMax, Step = 1,
                 CustomMinimumSize = new Vector2(90, 0),
             };
             _initializing = true;

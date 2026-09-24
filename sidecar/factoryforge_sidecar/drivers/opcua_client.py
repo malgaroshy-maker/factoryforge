@@ -50,6 +50,93 @@ CONNECT_TIMEOUT = 10.0
 #: of them is something whoever is watching the scene should be told about.
 POLL_FAILURES_BEFORE_REPORTING = 20
 
+#: What a tag is written as when the node's DataType could not be read, or is
+#: not a scalar built-in type: the variant every write used before IP-28. An
+#: `int` here is an Int32, which only a `DInt` accepts.
+_DEFAULT_VARIANT = {
+    "bit": ua.VariantType.Boolean,
+    "int": ua.VariantType.Int32,
+    "float": ua.VariantType.Float,
+}
+
+#: The integer DataTypes an `int` tag can be written into, with what each can
+#: hold. The S7 names, for reading an error against a TIA project: SInt,
+#: USInt/Byte, Int, UInt/Word, DInt, UDInt/DWord, LInt, ULInt/LWord.
+_INT_RANGES = {
+    ua.VariantType.SByte: (-(2 ** 7), 2 ** 7 - 1),
+    ua.VariantType.Byte: (0, 2 ** 8 - 1),
+    ua.VariantType.Int16: (-(2 ** 15), 2 ** 15 - 1),
+    ua.VariantType.UInt16: (0, 2 ** 16 - 1),
+    ua.VariantType.Int32: (-(2 ** 31), 2 ** 31 - 1),
+    ua.VariantType.UInt32: (0, 2 ** 32 - 1),
+    ua.VariantType.Int64: (-(2 ** 63), 2 ** 63 - 1),
+    ua.VariantType.UInt64: (0, 2 ** 64 - 1),
+}
+
+#: Real and LReal.
+_FLOATS = {ua.VariantType.Float, ua.VariantType.Double}
+
+
+class Unwritable(Exception):
+    """A value this node cannot hold, known before anything is sent.
+
+    Not a transient failure, so never retried: a retry would send the same
+    value to the same node and be refused the same way, once a second, for
+    ever. *code* is the status code it is reported under.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def encode_for_node(tag_type: str, value, node_type: ua.VariantType | None) -> ua.Variant:
+    """The variant that writes *value* into a node of DataType *node_type*.
+
+    A real S7 refuses a write whose variant type is not the variable's own
+    (BadTypeMismatch), so an Int32 never lands in an `Int` -- the 16-bit type
+    of a real `%IW` analog channel (IP-28). Written as the node's own type, a
+    raw analog count lands in an `Int`, a `DInt` counter in a `DInt`, and a
+    float in a `Real` or an `LReal`. What cannot be represented is refused here,
+    with a message that names both sides, rather than truncated: 40000 is not
+    an `Int`, and wrapping it to -25536 would hand the program a lie.
+
+    *node_type* None means the DataType is unknown, and the tag is written as it
+    always was.
+    """
+    if node_type is None:
+        return ua.Variant(value, _DEFAULT_VARIANT[tag_type])
+
+    if tag_type == "bit":
+        if node_type is ua.VariantType.Boolean:
+            return ua.Variant(bool(value), node_type)
+    elif tag_type == "int":
+        if node_type in _INT_RANGES:
+            low, high = _INT_RANGES[node_type]
+            count = int(value)
+            if not low <= count <= high:
+                raise Unwritable(
+                    "value_out_of_range",
+                    f"{count} does not fit the node's DataType {node_type.name} "
+                    f"({low}..{high}); not written. A raw analog count always fits "
+                    f"an Int; a larger number needs a DInt on the PLC side")
+            return ua.Variant(count, node_type)
+        if node_type in _FLOATS:
+            return ua.Variant(float(value), node_type)
+    elif tag_type == "float":
+        if node_type in _FLOATS:
+            return ua.Variant(float(value), node_type)
+        if node_type in _INT_RANGES:
+            raise Unwritable(
+                "node_type_mismatch",
+                f"a float tag cannot be written into a {node_type.name} node without "
+                f"rounding it; not written. Switch the part's signal to raw counts, "
+                f"or declare the PLC variable Real")
+
+    raise Unwritable(
+        "node_type_mismatch",
+        f"a {tag_type} tag cannot be written into a {node_type.name} node; not written")
+
 
 class _SubHandler:
     """Receives data changes for PLC-written (sim output) nodes."""
@@ -114,6 +201,14 @@ class OpcUaClientDriver(Driver):
         self.connected = asyncio.Event()
         self._by_node: dict[str, str] = {}      # nodeid string -> tag_id
         self._nodes: dict[str, object] = {}     # tag_id -> asyncua Node
+        #: tag_id -> the DataType of the node it writes, None where unknown.
+        #: Only for the tags we write (inputs); read at bind, swapped in with
+        #: the node map.
+        self._node_types: dict[str, ua.VariantType | None] = {}
+        #: Tags whose value the node refused before sending, by status code,
+        #: so a sensor sitting at an unrepresentable value is reported once
+        #: rather than on every change.
+        self._refused: dict[str, str] = {}
         self._subscription = None
         self._runner: asyncio.Task | None = None
         self._poller: asyncio.Task | None = None
@@ -185,6 +280,8 @@ class OpcUaClientDriver(Driver):
         await self._drop_subscription()
         self._nodes.clear()
         self._by_node.clear()
+        self._node_types.clear()
+        self._refused.clear()
         self._last_read.clear()
         # Not carried across: the next _bind() rewrites every input from the
         # table, which is a better source of truth than a value that failed
@@ -264,10 +361,18 @@ class OpcUaClientDriver(Driver):
             nodes[tag.id] = node
             by_node[node.nodeid.to_string()] = tag.id
 
-        # No await between these two: the swap is atomic to everything else on
+        # What each node we write actually is, so a count lands in an `Int`
+        # as an Int16 (IP-28). Read before the swap, so the types always
+        # belong to the map they are swapped in with.
+        written = [t.id for t in table.by_kind("input") if t.id in nodes]
+        node_types = await self._read_node_types(written, nodes)
+
+        # No await between these: the swap is atomic to everything else on
         # the loop, so no reader ever sees one map with the other's contents.
         self._nodes = nodes
         self._by_node = by_node
+        self._node_types = node_types
+        self._refused.clear()
 
         if missing:
             await self._report("warn", "unmapped_tags",
@@ -298,6 +403,42 @@ class OpcUaClientDriver(Driver):
         # never reach the PLC -- which is the gap IP-30 is about.
         await self.link(True, f"connected to {self.url}; "
                               f"{len(self._nodes)} of {len(table)} tags bound")
+
+    async def _read_node_types(self, tag_ids: list[str],
+                               nodes: dict[str, object]) -> dict[str, ua.VariantType | None]:
+        """Each node's DataType as a variant type, one round trip for all.
+
+        A built-in scalar type (ns=0, i=1..25) maps straight onto its variant
+        type: the numbering is the same by design of the standard. Anything
+        else -- an enumeration, a subtype -- is asked of the server, which walks
+        the type hierarchy. What cannot be resolved is None, and that tag is
+        written as it was before IP-28 rather than not at all.
+        """
+        types: dict[str, ua.VariantType | None] = {t: None for t in tag_ids}
+        if not tag_ids:
+            return types
+        assert self.client is not None
+        try:
+            values = await self.client.read_attributes(
+                [nodes[t] for t in tag_ids], ua.AttributeIds.DataType)
+        except Exception as exc:
+            log.warning("could not read the DataType of the nodes we write (%s); "
+                        "writing each tag as its default type", exc)
+            return types
+
+        for tag_id, value in zip(tag_ids, values):
+            data_type = getattr(getattr(value, "Value", None), "Value", None)
+            if not isinstance(data_type, ua.NodeId):
+                continue
+            if (data_type.NamespaceIndex == 0 and isinstance(data_type.Identifier, int)
+                    and 1 <= data_type.Identifier <= 25):
+                types[tag_id] = ua.VariantType(data_type.Identifier)
+                continue
+            try:
+                types[tag_id] = await nodes[tag_id].read_data_type_as_variant_type()
+            except Exception:
+                log.debug("%s: DataType %s is not a built-in type", tag_id, data_type)
+        return types
 
     async def _drop_subscription(self) -> None:
         """Delete the current subscription, if there is one, and forget it."""
@@ -411,19 +552,31 @@ class OpcUaClientDriver(Driver):
         tag = self._table.get(tag_id)
         if tag is None:
             return False
-        variant_type = {
-            "bit": ua.VariantType.Boolean,
-            "int": ua.VariantType.Int32,
-            "float": ua.VariantType.Float,
-        }[tag.type]
         try:
-            await node.write_value(ua.DataValue(ua.Variant(value, variant_type)))
+            variant = encode_for_node(tag.type, value, self._node_types.get(tag_id))
+        except Unwritable as exc:
+            # Not held: see Unwritable. And an older value still held for
+            # retry is dropped too, or the reconciler would land a stale
+            # reading after the PLC had been told the current one cannot be
+            # written.
+            self._unacked.pop(tag_id, None)
+            if self._refused.get(tag_id) != exc.code:
+                self._refused[tag_id] = exc.code
+                node_id = getattr(node, "nodeid", None)
+                await self._report("warn", exc.code,
+                                   f"{tag_id} -> {node_id.to_string() if node_id else node}: {exc}")
+            else:
+                log.debug("%s still unwritable: %s", tag_id, exc)
+            return False
+        try:
+            await node.write_value(ua.DataValue(variant))
         except Exception as exc:
             # Held, not dropped. See _reconcile_loop.
             self._unacked[tag_id] = value
             log.warning("write %s failed: %s — will retry", tag_id, exc)
             return False
         self._unacked.pop(tag_id, None)
+        self._refused.pop(tag_id, None)
         return True
 
     async def _reconcile_loop(self) -> None:

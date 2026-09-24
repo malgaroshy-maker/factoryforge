@@ -114,6 +114,17 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
     /// [<see cref="SetpointMin"/>, <see cref="SetpointMax"/>].</summary>
     public float Setpoint { get; private set; } = 50.0f;
 
+    /// <summary>How the pot reaches the PLC (IP-28). Engineering units by
+    /// default, as OP-01 decided; or the raw count of the AI channel a real
+    /// trainer's pot is wired to -- 0 V at <see cref="SetpointMin"/>, 10 V
+    /// (27648) at <see cref="SetpointMax"/>. The plate is the span: the pot has
+    /// no range of its own to configure, so none is offered.</summary>
+    public AnalogSignal SetpointSignal { get; }
+
+    public ButtonPanel() =>
+        SetpointSignal = new AnalogSignal("setpoint", 0.0f, 100.0f, 0.0f, 100.0f, 1.0f,
+                                          rangeSource: () => (SetpointMin, SetpointMax));
+
     /// <summary>Sweep of a real panel pot: 270°, not a full turn, so the
     /// pointer's angle is unambiguous about which end it is at.</summary>
     private const float DialSweepDegrees = 270.0f;
@@ -641,7 +652,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         .Bit("estop", $"Panel {tags.Index} E-Stop OK (NC)", TagKind.Input, initial: true)
         // The setpoint pot, in the scene's own engineering units -- the
         // template owns the range, not the controller (OP-01).
-        .Float("setpoint", $"Panel {tags.Index} Setpoint", TagKind.Input)
+        .Analog(SetpointSignal, $"Panel {tags.Index} Setpoint", null)
         .Bit("green", $"Panel {tags.Index} Green Lamp", TagKind.Output)
         .Bit("red", $"Panel {tags.Index} Red Lamp", TagKind.Output);
 
@@ -656,6 +667,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         settings.Put("setpoint_unit", SetpointUnit);
         settings.Put("setpoint", Setpoint);
         settings.Put("press_hold", PressHold);
+        SetpointSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -664,6 +676,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         if (settings.Number("setpoint_max") is { } max) SetpointMax = max;
         if (settings.Text("setpoint_unit") is { } unit) SetpointUnit = unit;
         if (settings.Number("press_hold") is { } hold) PressHold = hold;
+        SetpointSignal.Apply(settings);
         // Last, so the clamp sees the range this template asked for rather than
         // the default 0-100 one.
         if (settings.Number("setpoint") is { } value) SetSetpoint(value);
@@ -735,10 +748,19 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         if (tick.IdFor("setpoint") is not { } setpointId) return;
         if (!tick.Tags.Contains(setpointId)) return;
 
+        // In raw mode the force is a count, and the knob turns to the value
+        // that count stands for on the plate (IP-28).
         if (tick.Tags.IsForced(setpointId))
-            SetSetpoint((float)System.Convert.ToDouble(tick.Tags.Visible(setpointId)));
+        {
+            double forced = System.Convert.ToDouble(tick.Tags.Visible(setpointId));
+            SetSetpoint((float)(SetpointSignal.IsRaw
+                ? SetpointSignal.Decode((long)System.Math.Round(forced))
+                : forced));
+        }
         else
-            tick.Tags.Set(setpointId, (double)Setpoint);
+        {
+            SetpointSignal.Write(tick, Setpoint);
+        }
     }
 
     /// <summary>Move one momentary contact on by a tick. See
@@ -788,6 +810,7 @@ public partial class ButtonPanel : Node3D, IPart, IDialPart
         // How long a click holds Start/Stop/Reset closed (IP-31). Raise it for
         // a link that samples slower than 200 ms.
         ui.Slider("Press Hold (s)", PressHold, 0.05f, 2.0f, 0.05f, value => PressHold = value);
+        SetpointSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)

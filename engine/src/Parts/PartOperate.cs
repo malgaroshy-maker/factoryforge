@@ -52,6 +52,20 @@ public sealed class PartOperate
         return false;
     }
 
+    /// <summary>A number tag as it reads now, int or float. For an analog
+    /// output that has to toggle from where it really is (IP-28).</summary>
+    public bool TryNumber(string suffix, out double value)
+    {
+        if (_ids.TryGetValue(suffix, out var id) && _tags.TryGetVisible(id, out var raw)
+            && raw is not bool)
+        {
+            value = Convert.ToDouble(raw);
+            return true;
+        }
+        value = 0.0;
+        return false;
+    }
+
     public void ToggleBit(string suffix)
     {
         if (!TryBit(suffix, out bool current)) return;

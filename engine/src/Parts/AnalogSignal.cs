@@ -115,19 +115,37 @@ public sealed class AnalogSignal
     /// <param name="wireBreakSuffix">The wire-break contact's suffix. Plain
     /// <c>wirebreak</c> for a part with one analog input, which is every part
     /// today; a part with two channels names each one's contact itself.</param>
+    /// <param name="rangeSource">For a channel whose span is already another
+    /// setting of the part -- the panel's setpoint pot, whose 0 and 10 V are
+    /// the two ends of its own scale plate (IP-28). The range then follows that
+    /// setting, is not saved a second time, and is not offered as a second pair
+    /// of sliders that could disagree with the plate. Null, the default, makes
+    /// the range this channel's own setting, which is what a transmitter with
+    /// a configurable span is.</param>
     public AnalogSignal(string suffix, float rangeMin, float rangeMax,
                         float sliderLow, float sliderHigh, float sliderStep,
-                        bool engineeringIsInt = false, string wireBreakSuffix = "wirebreak")
+                        bool engineeringIsInt = false, string wireBreakSuffix = "wirebreak",
+                        Func<(float Min, float Max)>? rangeSource = null)
     {
         Suffix = suffix;
         WireBreakSuffix = wireBreakSuffix;
-        RangeMin = rangeMin;
-        RangeMax = rangeMax;
+        _rangeMin = rangeMin;
+        _rangeMax = rangeMax;
         _sliderLow = sliderLow;
         _sliderHigh = sliderHigh;
         _sliderStep = sliderStep;
         EngineeringIsInt = engineeringIsInt;
+        _rangeSource = rangeSource;
     }
+
+    private readonly Func<(float Min, float Max)>? _rangeSource;
+    private float _rangeMin;
+    private float _rangeMax;
+
+    /// <summary>Is the span this channel's own setting (saved, offered as
+    /// Range Min/Max), or does it follow another setting of the part? See the
+    /// constructor's <c>rangeSource</c>.</summary>
+    public bool RangeIsSetting => _rangeSource is null;
 
     public string Suffix { get; }
 
@@ -139,11 +157,22 @@ public sealed class AnalogSignal
 
     public AnalogSignalMode Mode { get; set; } = AnalogSignalMode.Engineering;
 
-    /// <summary>Engineering value at 0 counts. A setting.</summary>
-    public float RangeMin { get; set; }
+    /// <summary>Engineering value at 0 counts. A setting, unless the part
+    /// supplies the span (<see cref="RangeIsSetting"/>); assigning it then
+    /// changes nothing.</summary>
+    public float RangeMin
+    {
+        get => _rangeSource is { } source ? source().Min : _rangeMin;
+        set => _rangeMin = value;
+    }
 
-    /// <summary>Engineering value at 27648 counts. A setting.</summary>
-    public float RangeMax { get; set; }
+    /// <summary>Engineering value at 27648 counts. See
+    /// <see cref="RangeMin"/>.</summary>
+    public float RangeMax
+    {
+        get => _rangeSource is { } source ? source().Max : _rangeMax;
+        set => _rangeMax = value;
+    }
 
     public bool IsRaw => Mode != AnalogSignalMode.Engineering;
 
@@ -184,6 +213,16 @@ public sealed class AnalogSignal
     /// <summary>What this channel would publish for
     /// <paramref name="engineering"/> right now, ignoring a wire break.</summary>
     public int Encode(double engineering) => ToRaw(engineering, RangeMin, RangeMax);
+
+    /// <summary>
+    /// A count -> the engineering value it stands for on this channel's span,
+    /// straight-line and unclamped. Only for a count that was put <em>onto</em>
+    /// an input from outside -- the setpoint pot's tag forced over the wire, so
+    /// the knob can turn to match (IP-28) -- where the part applies its own
+    /// limits. A measurement the part publishes never comes back this way.
+    /// </summary>
+    public double Decode(long counts) =>
+        RangeMin + (RangeMax - RangeMin) * counts / (double)NominalFullScale;
 
     // ---------- IPart plumbing, one call each
 
@@ -256,31 +295,45 @@ public sealed class AnalogSignal
     public void Capture(PartSettings settings)
     {
         settings.Put("signal", ModeKeys[(int)Mode]);
+        if (!RangeIsSetting) return;
         settings.Put("range_min", RangeMin);
         settings.Put("range_max", RangeMax);
     }
 
     public void Apply(PartSettings settings)
     {
-        if (settings.Text("signal") is { } key)
-        {
-            int index = Array.IndexOf(ModeKeys, key);
-            // An unknown mode from a newer build keeps the default rather than
-            // guessing: publishing counts a program is not expecting is worse
-            // than publishing the engineering value it always got.
-            if (index >= 0) Mode = (AnalogSignalMode)index;
-        }
+        // An unknown mode from a newer build keeps the default rather than
+        // guessing: publishing counts a program is not expecting is worse than
+        // publishing the engineering value it always got.
+        if (ParseKey(settings.Text("signal")) is { } mode) Mode = mode;
+        if (!RangeIsSetting) return;
         if (settings.Number("range_min") is { } min) RangeMin = min;
         if (settings.Number("range_max") is { } max) RangeMax = max;
     }
 
+    /// <summary>A saved <c>signal</c> value -> its mode, or null for an
+    /// absent or unknown one. Shared with <see cref="AnalogOutput"/>, whose
+    /// setting uses the same three strings.</summary>
+    internal static AnalogSignalMode? ParseKey(string? key)
+    {
+        if (key is null) return null;
+        int index = Array.IndexOf(ModeKeys, key);
+        return index >= 0 ? (AnalogSignalMode)index : null;
+    }
+
+    /// <summary>Every dropdown label, in <see cref="AnalogSignalMode"/>
+    /// order.</summary>
+    internal static IReadOnlyList<string> Labels => ModeLabels;
+
     /// <summary>The inspector rows. The range is only offered once the channel
     /// is raw: in engineering mode it changes nothing, and a row that changes
-    /// nothing is worse than no row (gotcha 11).</summary>
+    /// nothing is worse than no row (gotcha 11). Nor when the part supplies the
+    /// span: a second pair of sliders for the plate the part already shows
+    /// would be two settings for one number.</summary>
     public void Describe(IPartInspector ui)
     {
         ui.Choice("Signal", ModeLabels, (int)Mode, index => Mode = (AnalogSignalMode)index);
-        if (!IsRaw) return;
+        if (!IsRaw || !RangeIsSetting) return;
         ui.Slider("Range Min", RangeMin, _sliderLow, _sliderHigh, _sliderStep, value => RangeMin = value);
         ui.Slider("Range Max", RangeMax, _sliderLow, _sliderHigh, _sliderStep, value => RangeMax = value);
     }

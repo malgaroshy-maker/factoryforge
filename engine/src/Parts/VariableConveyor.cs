@@ -44,6 +44,16 @@ public partial class VariableConveyor : ConveyorBelt
     /// readout and the property panel can show both numbers.</summary>
     public float ReferencePercent { get; private set; }
 
+    /// <summary>How the PLC writes the speed reference (IP-28): percent as a
+    /// float by default, or raw AO counts, 27648 = <see cref="MaxSpeed"/> --
+    /// what the drive's analog reference input is scaled to.</summary>
+    public AnalogOutput SpeedSignal { get; } = new(0.0f, 100.0f);
+
+    /// <summary>How the drive's actual-speed output reaches the PLC (IP-28):
+    /// percent as a float by default, or raw AI counts across 0-100 %. The
+    /// analog output a real drive offers for exactly this.</summary>
+    public AnalogSignal ActualSignal { get; } = new("actual", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
+
     private Label3D _readout = null!;
     private MeshInstance3D _fan = null!;
     private float _fanSpin;
@@ -198,8 +208,8 @@ public partial class VariableConveyor : ConveyorBelt
     /// different numbers for as long as the ramp is running.</summary>
     public override void DeclareTags(PartTagBuilder tags) => tags
         .Bit("run", $"VFD Conveyor {tags.Index} Run", TagKind.Output)
-        .Float("speed", $"VFD Conveyor {tags.Index} Speed Ref (%)", TagKind.Output)
-        .Float("actual", $"VFD Conveyor {tags.Index} Actual Speed (%)", TagKind.Input)
+        .AnalogOut(SpeedSignal, "speed", $"VFD Conveyor {tags.Index} Speed Ref", "%")
+        .Analog(ActualSignal, $"VFD Conveyor {tags.Index} Actual Speed", "%")
         .Bit("fault", $"VFD Conveyor {tags.Index} Drive Fault", TagKind.Input);
 
     public override void CaptureSettings(PartSettings settings)
@@ -207,6 +217,8 @@ public partial class VariableConveyor : ConveyorBelt
         base.CaptureSettings(settings);
         settings.Put("max_speed", MaxSpeed);
         settings.Put("accel_rate", AccelRate);
+        ActualSignal.Capture(settings);
+        SpeedSignal.Capture(settings);
     }
 
     public override void ApplySettings(PartSettings settings)
@@ -214,6 +226,8 @@ public partial class VariableConveyor : ConveyorBelt
         base.ApplySettings(settings);
         if (settings.Number("max_speed") is { } maxSpeed) MaxSpeed = maxSpeed;
         if (settings.Number("accel_rate") is { } accel) AccelRate = accel;
+        ActualSignal.Apply(settings);
+        SpeedSignal.Apply(settings);
     }
 
     public override void StepPart(PartTick tick)
@@ -223,8 +237,8 @@ public partial class VariableConveyor : ConveyorBelt
         // stopped again next tick.
         if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
 
-        StepDrive(tick.Bit("run"), tick.Number("speed"), tick.Dt);
-        tick.Write("actual", (double)ActualPercent);
+        StepDrive(tick.Bit("run"), (float)SpeedSignal.Read(tick, "speed"), tick.Dt);
+        ActualSignal.Write(tick, ActualPercent);
         tick.Host.NoteTransportSpeed(tick.InstanceId, Speed);
     }
 
@@ -233,6 +247,8 @@ public partial class VariableConveyor : ConveyorBelt
         ui.Slider("Max Speed (m/s @100%)", MaxSpeed, 0.1f, 3.0f, 0.05f,
                   value => MaxSpeed = value);
         ui.Slider("Ramp Rate (%/s)", AccelRate, 2.0f, 400.0f, 2.0f, value => AccelRate = value);
+        ActualSignal.Describe(ui);
+        SpeedSignal.Describe(ui);
         // The base adds the friction row; its speed row is suppressed by
         // SpeedIsSetting above, for the reason given there.
         base.DescribeControls(ui);
@@ -248,6 +264,6 @@ public partial class VariableConveyor : ConveyorBelt
         "`actual` ramping above 5 % and a moving deck surface",
         r => r.Number("actual") > 5.0 && ConstantLinearVelocity.Length() > 0.01f)
     {
-        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+        Drive = PartProbe.Drives(("run", true), ("speed", SpeedSignal.Command(100.0))),
     };
 }

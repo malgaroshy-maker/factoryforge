@@ -36,6 +36,14 @@ public partial class AnalogGauge : Node3D, IPart
 
     private float _value;
 
+    /// <summary>How the PLC drives the meter (IP-28): a float in the plate's
+    /// units by default, or raw AO counts, 0 at <see cref="ScaleMin"/> and
+    /// 27648 at <see cref="ScaleMax"/> -- a 4-20 mA panel meter is calibrated
+    /// to its own face, so the plate <em>is</em> the span.</summary>
+    public AnalogOutput ValueSignal { get; }
+
+    public AnalogGauge() => ValueSignal = new AnalogOutput(() => (ScaleMin, ScaleMax));
+
     /// <summary>The displayed reading, in the gauge's own units.</summary>
     public float Value
     {
@@ -281,7 +289,7 @@ public partial class AnalogGauge : Node3D, IPart
     // ---------- IPart (HP-34)
 
     public void DeclareTags(PartTagBuilder tags) =>
-        tags.Float("value", $"Gauge {tags.Index} Value", TagKind.Output);
+        tags.AnalogOut(ValueSignal, "value", $"Gauge {tags.Index} Value", null);
 
     public void CaptureSettings(PartSettings settings)
     {
@@ -289,6 +297,7 @@ public partial class AnalogGauge : Node3D, IPart
         settings.Put("scale_max", ScaleMax);
         settings.Put("alarm_at", AlarmAt);
         settings.Put("unit", Unit);
+        ValueSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -297,11 +306,12 @@ public partial class AnalogGauge : Node3D, IPart
         if (settings.Number("scale_max") is { } max) ScaleMax = max;
         if (settings.Number("alarm_at") is { } alarm) AlarmAt = alarm;
         if (settings.Text("unit") is { } unit) Unit = unit;
+        ValueSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
-        if (tick.Has("value")) Value = tick.Number("value");
+        if (tick.Has("value")) Value = (float)ValueSignal.Read(tick, "value");
     }
 
     public void DescribeControls(IPartInspector ui)
@@ -316,6 +326,7 @@ public partial class AnalogGauge : Node3D, IPart
         ui.Slider("Alarm At", AlarmAt, -10000.0f, 10000.0f, 1.0f,
                   value => ConfigureScale(ScaleMin, ScaleMax, value, Unit));
         ui.Text("Unit", Unit, 8, text => ConfigureScale(ScaleMin, ScaleMax, AlarmAt, text));
+        ValueSignal.Describe(ui);
     }
 
     /// <summary>IP-07. A gauge shows; it reports nothing. Driven to mid-scale,
@@ -325,7 +336,7 @@ public partial class AnalogGauge : Node3D, IPart
         "the needle straight up at mid-scale (pivot within a degree of 0)",
         _ => Mathf.Abs(RotationOfNeedleDegrees) < 1.0f)
     {
-        Drive = PartProbe.Drives(("value", (double)((ScaleMin + ScaleMax) / 2.0f))),
+        Drive = PartProbe.Drives(("value", ValueSignal.Command((ScaleMin + ScaleMax) / 2.0))),
         WithinTicks = 10,
     };
 }

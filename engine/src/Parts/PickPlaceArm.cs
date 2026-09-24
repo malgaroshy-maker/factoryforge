@@ -76,6 +76,16 @@ public partial class PickPlaceArm : Node3D, IPart
     /// show the pair and the lag between them.</summary>
     public float Target { get; private set; }
 
+    /// <summary>How the PLC writes the target (IP-28): percent of the rail as
+    /// a float by default, or raw AO counts, 27648 = the far end.</summary>
+    public AnalogOutput TargetSignal { get; } = new(0.0f, 100.0f);
+
+    /// <summary>How the axis position transmitter reaches the PLC (IP-28):
+    /// percent of the rail as a float by default, or raw AI counts across
+    /// 0-100 % -- a linear transducer along the rail, wired to an AI
+    /// card.</summary>
+    public AnalogSignal PositionSignal { get; } = new("position", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
+
     public bool InPosition => Mathf.Abs(_position - Target) <= PositionTolerance;
     public bool IsLowered => _extension >= StrokeLength - 0.01f;
     public bool IsRaised => _extension <= 0.01f;
@@ -392,10 +402,10 @@ public partial class PickPlaceArm : Node3D, IPart
     // ---------- IPart (HP-34)
 
     public void DeclareTags(PartTagBuilder tags) => tags
-        .Float("target", $"Gantry {tags.Index} Target (%)", TagKind.Output)
+        .AnalogOut(TargetSignal, "target", $"Gantry {tags.Index} Target", "%")
         .Bit("lower", $"Gantry {tags.Index} Lower", TagKind.Output)
         .Bit("grip", $"Gantry {tags.Index} Vacuum", TagKind.Output)
-        .Float("position", $"Gantry {tags.Index} Position (%)", TagKind.Input)
+        .Analog(PositionSignal, $"Gantry {tags.Index} Position", "%")
         .Bit("inposition", $"Gantry {tags.Index} In Position", TagKind.Input, initial: true)
         .Bit("lowered", $"Gantry {tags.Index} Lowered", TagKind.Input)
         .Bit("raised", $"Gantry {tags.Index} Raised", TagKind.Input, initial: true)
@@ -409,6 +419,8 @@ public partial class PickPlaceArm : Node3D, IPart
         settings.Put("stroke", StrokeLength);
         settings.Put("lower_speed", LowerSpeed);
         settings.Put("tolerance", PositionTolerance);
+        PositionSignal.Capture(settings);
+        TargetSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -418,15 +430,17 @@ public partial class PickPlaceArm : Node3D, IPart
         if (settings.Number("stroke") is { } stroke) StrokeLength = stroke;
         if (settings.Number("lower_speed") is { } lower) LowerSpeed = lower;
         if (settings.Number("tolerance") is { } tolerance) PositionTolerance = tolerance;
+        PositionSignal.Apply(settings);
+        TargetSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
         if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
 
-        Step(tick.Number("target"), tick.Bit("lower"), tick.Bit("grip"), tick.Dt);
+        Step((float)TargetSignal.Read(tick, "target"), tick.Bit("lower"), tick.Bit("grip"), tick.Dt);
 
-        tick.Write("position", (double)AxisPosition);
+        PositionSignal.Write(tick, AxisPosition);
         tick.Write("inposition", InPosition);
         tick.Write("lowered", IsLowered);
         tick.Write("raised", IsRaised);
@@ -440,6 +454,8 @@ public partial class PickPlaceArm : Node3D, IPart
         ui.Slider("Lower Speed (m/s)", LowerSpeed, 0.1f, 3.0f, 0.05f, value => LowerSpeed = value);
         ui.Slider("In-Position Window (%)", PositionTolerance, 0.2f, 10.0f, 0.1f,
                   value => PositionTolerance = value);
+        PositionSignal.Describe(ui);
+        TargetSignal.Describe(ui);
     }
 
     public PartOperation? Operation => new("gantry", "lower");
@@ -453,7 +469,7 @@ public partial class PickPlaceArm : Node3D, IPart
         "`position` 10 % along the rail and `lowered` made",
         r => r.Number("position") > r.AtStart("position") + 10.0 && r.Bit("lowered"))
     {
-        Drive = PartProbe.Drives(("target", 100.0), ("lower", true)),
+        Drive = PartProbe.Drives(("target", TargetSignal.Command(100.0)), ("lower", true)),
         WithinTicks = 120,
     };
 }

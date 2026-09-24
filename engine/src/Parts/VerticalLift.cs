@@ -525,12 +525,18 @@ public partial class VerticalLift : Node3D, IPart
 
     // ---------- IPart
 
+    /// <summary>How the carriage position transducer (a draw-wire encoder
+    /// on the mast, 4-20 mA) reaches the PLC (IP-28): metres as a float by
+    /// default, or raw AI counts. Spanned 0-2 m by default, which covers the
+    /// default three-level mast.</summary>
+    public AnalogSignal HeightSignal { get; } = new("height", 0.0f, 2.0f, -1.0f, 20.0f, 0.05f);
+
     public void DeclareTags(PartTagBuilder tags) => tags
         .Int("target", $"Lift {tags.Index} Call Level", TagKind.Output)
         .Bit("transfer", $"Lift {tags.Index} Deck Transfer", TagKind.Output)
         .Int("level", $"Lift {tags.Index} At Level", TagKind.Input)
         .Bit("atlevel", $"Lift {tags.Index} In Position", TagKind.Input, initial: true)
-        .Float("height", $"Lift {tags.Index} Height (m)", TagKind.Input)
+        .Analog(HeightSignal, $"Lift {tags.Index} Height", "m")
         .Bit("occupied", $"Lift {tags.Index} Carriage Occupied", TagKind.Input)
         .Bit("ready", $"Lift {tags.Index} Ready To Accept", TagKind.Input)
         .Bit("fault", $"Lift {tags.Index} Drive Fault", TagKind.Input);
@@ -543,6 +549,7 @@ public partial class VerticalLift : Node3D, IPart
         settings.Put("infeed_level", InfeedLevel);
         settings.Put("transfer_speed", TransferSpeed);
         settings.Put("tolerance", LevelTolerance);
+        HeightSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -555,6 +562,7 @@ public partial class VerticalLift : Node3D, IPart
         if (settings.Whole("infeed_level") is { } infeed) InfeedLevel = Mathf.Max(0, infeed);
         if (settings.Number("transfer_speed") is { } transfer) TransferSpeed = transfer;
         if (settings.Number("tolerance") is { } tolerance) LevelTolerance = tolerance;
+        HeightSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -565,7 +573,7 @@ public partial class VerticalLift : Node3D, IPart
 
         tick.Write("level", NearestLevel);
         tick.Write("atlevel", IsAtLevel);
-        tick.Write("height", (double)_height);
+        HeightSignal.Write(tick, _height);
         tick.Write("occupied", IsOccupied);
         tick.Write("ready", IsReady);
     }
@@ -581,6 +589,7 @@ public partial class VerticalLift : Node3D, IPart
                   value => TransferSpeed = value);
         ui.Slider("Level Window (m)", LevelTolerance, 0.005f, 0.2f, 0.005f,
                   value => LevelTolerance = value);
+        HeightSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
@@ -588,7 +597,7 @@ public partial class VerticalLift : Node3D, IPart
         ResetLift();
         reset.Write("level", 0);
         reset.Write("atlevel", true);
-        reset.Write("height", 0.0);
+        HeightSignal.Reset(reset, 0.0);
         reset.Write("occupied", false);
         reset.Write("ready", false);
     }

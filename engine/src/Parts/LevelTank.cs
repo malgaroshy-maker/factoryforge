@@ -46,6 +46,11 @@ public partial class LevelTank : Node3D, IPart
     /// which is a transmitter calibrated to the tank it is fitted to.</summary>
     public AnalogSignal LevelSignal { get; } = new("level", 0.0f, 100.0f, -50.0f, 200.0f, 1.0f);
 
+    /// <summary>How the PLC commands the two valves (IP-28): percent as a
+    /// float by default, or raw AO counts, 27648 = fully open. One setting for
+    /// both, because they are the same positioner on the same card.</summary>
+    public AnalogOutput ValveSignal { get; } = new(0.0f, 100.0f);
+
     /// <summary>True when the tank has run dry or brimmed over — the states an
     /// interlock is supposed to prevent.</summary>
     /// <summary>True while the valves are seized. Nothing here computes it —
@@ -54,6 +59,15 @@ public partial class LevelTank : Node3D, IPart
 
     private float _heldFill;
     private float _heldDrain;
+
+    /// <summary>The fill valve's opening on the last step, percent, as the
+    /// valve itself has it -- after a raw count has been converted, after the
+    /// end stops, after a seized valve has held (IP-28). What the tank actually
+    /// integrated, which is not always what the tag says.</summary>
+    public float FillOpening => _heldFill;
+
+    /// <summary>The drain valve's, likewise.</summary>
+    public float DrainOpening => _heldDrain;
     private StandardMaterial3D? _faultLampMat;
 
     /// <summary>Freeze or release the valves. Freezing keeps whatever opening
@@ -355,8 +369,8 @@ public partial class LevelTank : Node3D, IPart
     /// <summary>The library's first analog part: valve openings and a level
     /// transmitter, all in percent, all Float.</summary>
     public void DeclareTags(PartTagBuilder tags) => tags
-        .Float("fill", $"Tank {tags.Index} Fill Valve (%)", TagKind.Output)
-        .Float("drain", $"Tank {tags.Index} Drain Valve (%)", TagKind.Output)
+        .AnalogOut(ValveSignal, "fill", $"Tank {tags.Index} Fill Valve", "%")
+        .AnalogOut(ValveSignal, "drain", $"Tank {tags.Index} Drain Valve", "%")
         .Analog(LevelSignal, $"Tank {tags.Index} Level", "%")
         // A seized valve holds its opening (FI-01) -- the analog failure, and a
         // nastier one to diagnose than a stopped drive.
@@ -368,6 +382,7 @@ public partial class LevelTank : Node3D, IPart
         settings.Put("drain_rate", DrainRate);
         settings.Put("capacity", CapacityLitres);
         LevelSignal.Capture(settings);
+        ValveSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -376,6 +391,7 @@ public partial class LevelTank : Node3D, IPart
         if (settings.Number("drain_rate") is { } drain) DrainRate = drain;
         if (settings.Number("capacity") is { } capacity) CapacityLitres = capacity;
         LevelSignal.Apply(settings);
+        ValveSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
@@ -386,7 +402,7 @@ public partial class LevelTank : Node3D, IPart
 
         // dt is scaled simulation time, so the tank obeys pause and the
         // time-scale control like everything else.
-        Step(tick.Number("fill"), tick.Number("drain"), tick.Dt);
+        Step((float)ValveSignal.Read(tick, "fill"), (float)ValveSignal.Read(tick, "drain"), tick.Dt);
         LevelSignal.Write(tick, Level);
     }
 
@@ -395,6 +411,7 @@ public partial class LevelTank : Node3D, IPart
         ui.Slider("Fill Rate (%/s)", FillRate, 1.0f, 60.0f, 1.0f, value => FillRate = value);
         ui.Slider("Drain Rate (%/s)", DrainRate, 1.0f, 60.0f, 1.0f, value => DrainRate = value);
         LevelSignal.Describe(ui);
+        ValveSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
@@ -408,7 +425,7 @@ public partial class LevelTank : Node3D, IPart
 
     public string? HitTestRegion(Vector3 from, Vector3 direction) => HitTest(from, direction);
 
-    public void Operate(PartOperate op) => op.ToggleAnalog(op.Region);
+    public void Operate(PartOperate op) => ValveSignal.Toggle(op, op.Region);
 
     /// <summary>IP-07. The fill valve wide open has to raise the level.
     /// </summary>
@@ -416,6 +433,6 @@ public partial class LevelTank : Node3D, IPart
         "`level` up by more than 1 %",
         r => r.Number("level") > r.AtStart("level") + 1.0)
     {
-        Drive = PartProbe.Drives(("fill", 100.0)),
+        Drive = PartProbe.Drives(("fill", ValveSignal.Command(100.0))),
     };
 }

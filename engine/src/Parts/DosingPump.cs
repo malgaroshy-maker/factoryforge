@@ -44,6 +44,16 @@ public partial class DosingPump : Node3D, IPart
     /// <summary>What the pump is actually delivering, litres per minute.</summary>
     public float Flow { get; private set; }
 
+    /// <summary>How the PLC commands the pump's drive (IP-28): percent as a
+    /// float by default, or raw AO counts, 27648 = full speed.</summary>
+    public AnalogOutput SpeedSignal { get; } = new(0.0f, 100.0f);
+
+    /// <summary>How the discharge flow transmitter reaches the PLC (IP-28): L/min
+    /// as a float by default, or raw AI counts. Spanned 0-40 L/min by default,
+    /// which is the default pump flat out; a transmitter's span is its own
+    /// setting, so a pump re-rated past it reads overrange, as it would.</summary>
+    public AnalogSignal FlowSignal { get; } = new("flow", 0.0f, 40.0f, -50.0f, 1000.0f, 1.0f);
+
     /// <summary>A failed pump reports its command and delivers nothing; only
     /// the flow measurement gives it away. That is the analog failure and it is
     /// nastier to diagnose than a stopped motor, which is the point of having
@@ -270,10 +280,10 @@ public partial class DosingPump : Node3D, IPart
 
     public void DeclareTags(PartTagBuilder tags) => tags
         .Bit("run", $"Pump {tags.Index} Run", TagKind.Output)
-        .Float("speed", $"Pump {tags.Index} Speed Ref (%)", TagKind.Output)
+        .AnalogOut(SpeedSignal, "speed", $"Pump {tags.Index} Speed Ref", "%")
         // The measurement, not the command. A failed pump reports the command
         // it was given and delivers nothing; this is the tag that disagrees.
-        .Float("flow", $"Pump {tags.Index} Flow (L/min)", TagKind.Input)
+        .Analog(FlowSignal, $"Pump {tags.Index} Flow", "L/min")
         .Bit("fault", $"Pump {tags.Index} Motor Fault", TagKind.Input);
 
     public void CaptureSettings(PartSettings settings)
@@ -281,6 +291,8 @@ public partial class DosingPump : Node3D, IPart
         settings.Put("rated_flow", RatedFlow);
         settings.Put("reach", Reach);
         settings.Put("ramp_rate", RampRate);
+        FlowSignal.Capture(settings);
+        SpeedSignal.Capture(settings);
     }
 
     public void ApplySettings(PartSettings settings)
@@ -288,14 +300,16 @@ public partial class DosingPump : Node3D, IPart
         if (settings.Number("rated_flow") is { } rated) RatedFlow = rated;
         if (settings.Number("reach") is { } reach) Reach = reach;
         if (settings.Number("ramp_rate") is { } ramp) RampRate = ramp;
+        FlowSignal.Apply(settings);
+        SpeedSignal.Apply(settings);
     }
 
     public void StepPart(PartTick tick)
     {
         if (tick.TryBit("fault", out bool faulted)) SetFaulted(faulted);
 
-        Step(tick.Bit("run"), tick.Number("speed"), tick.Dt);
-        tick.Write("flow", (double)Flow);
+        Step(tick.Bit("run"), (float)SpeedSignal.Read(tick, "speed"), tick.Dt);
+        FlowSignal.Write(tick, Flow);
     }
 
     public void DescribeControls(IPartInspector ui)
@@ -303,12 +317,14 @@ public partial class DosingPump : Node3D, IPart
         ui.Slider("Rated Flow (L/min)", RatedFlow, 1.0f, 300.0f, 1.0f, value => RatedFlow = value);
         ui.Slider("Reach (m)", Reach, 0.3f, 5.0f, 0.1f, value => Reach = value);
         ui.Slider("Ramp (%/s)", RampRate, 5.0f, 400.0f, 5.0f, value => RampRate = value);
+        FlowSignal.Describe(ui);
+        SpeedSignal.Describe(ui);
     }
 
     public void ResetPart(PartReset reset)
     {
         ResetPump();
-        reset.Write("flow", 0.0);
+        FlowSignal.Reset(reset, 0.0);
     }
 
     public PartOperation? Operation => new("dosing pump", "run");
@@ -321,7 +337,7 @@ public partial class DosingPump : Node3D, IPart
         if (!op.TryBit("run", out bool running)) return;
         bool on = !running;
         op.Force("run", on);
-        op.Force("speed", on ? 100.0 : 0.0);
+        op.Force("speed", SpeedSignal.Command(on ? 100.0 : 0.0));
     }
 
     /// <summary>IP-07. Run at full reference, the pump has to deliver: `flow`
@@ -330,6 +346,6 @@ public partial class DosingPump : Node3D, IPart
         "`flow` above 1 L/min",
         r => r.Number("flow") > 1.0)
     {
-        Drive = PartProbe.Drives(("run", true), ("speed", 100.0)),
+        Drive = PartProbe.Drives(("run", true), ("speed", SpeedSignal.Command(100.0))),
     };
 }
