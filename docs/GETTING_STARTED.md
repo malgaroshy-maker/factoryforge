@@ -407,7 +407,7 @@ It prints the port it is listening on:
 
 ```
   Connect your controller with:
-    factoryforge-sidecar connect --driver <yours> --port 61507 -o <options>
+    .\factoryforge-sidecar connect --driver <yours> --port 61507 -o <options>
 ```
 
 Open a **second** Command Prompt in `C:\FactoryForge\windows` (address bar,
