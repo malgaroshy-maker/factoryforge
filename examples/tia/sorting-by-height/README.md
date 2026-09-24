@@ -87,7 +87,7 @@ names.
 | `panel.setpoint` | PLC reads | `PanelSetpoint` | Real | DBD10 | the operator's pot, 0.3..1.8 s (starts at 0.9) |  |
 | `conveyor.fault` | PLC reads | `ConveyorFault` | Bool | DBX14.0 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX14.1 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX14.2 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX14.2 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX14.3 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX14.4 | Stop button, momentary: a short pulse per press | yes |
 | `pusher.extended` | PLC reads | `PusherExtended` | Bool | DBX14.5 | pusher fully out | yes |

@@ -52,7 +52,7 @@ FactoryForge side came from a release zip built from this repository.
 | **Compiled** | with `compile_program.sh`, as an ordinary user in a user-owned copy of the OpenPLC tree. The starter carries CRLF line endings from the Windows zip, and neither matiec nor the `mbconfig.cfg` parser minded |
 | **Run** | `./openplc` without `sudo`: the two real-time warnings, nothing else |
 | **Marked by** | `factoryforge_sidecar grade --scene sorting-by-height`, OpenPLC as the controller over `connect --driver modbus-tcp`, all on loopback inside WSL |
-| **Result** | the step 7 program (belt and feed only): **FAIL**, 9 tall cartons off the far end, *"The pusher never came out"*. The step 8 program: **PASS**, 8/8, 9 tall down the chute and 9 short past the end, the pusher firing 0.95 s after the beam (window 0.60–1.20 s) |
+| **Result** | the step 7 program (belt and feed only): **FAIL**, 9 tall cartons off the far end, *"The pusher never came out"*. The step 8 program: **PASS**, 8/8, 9 tall down the chute and 9 short past the end, the pusher firing 0.95 s after the beam (window 0.60–1.20 s). *That was the program before IP-35, which ignored Start. The exam now presses Start and runs the E-stop sequence (12 checks), and the guide's program honours both. The new program is compiled with OpenPLC's toolchain but has not yet been run on OpenPLC.* |
 
 The release's own sidecar, unpacked with no Python on `PATH`, connected to the
 release's engine and printed the nineteen-tag map exactly as the starter

@@ -7,7 +7,7 @@
     "scene": "sorting-by-height",
     "brief": {
       "task": "Run the belt, feed cartons, and push the tall ones down the chute while the short ones carry on. Two sensors at two heights are all you get: a carton that breaks the high beam is tall, one that breaks only the low beam is short.",
-      "uses": "panel.start · panel.stop · panel.estop · conveyor.rotate · emitter.emit · sensor_low.detect · sensor_high.detect · pusher.extend · pusher.extended · pusher.retracted",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · conveyor.rotate · emitter.emit · sensor_low.detect · sensor_high.detect · pusher.extend · pusher.extended · pusher.retracted",
       "done": "Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it."
     }
   },

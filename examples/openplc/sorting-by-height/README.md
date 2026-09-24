@@ -88,7 +88,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x1 | `PanelEstop` %IX100.1 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x2 | `PanelGreen` %QX100.2 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x3 | `PanelRed` %QX100.3 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x2 | `PanelReset` %IX100.2 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x2 | `PanelReset` %IX100.2 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x4 + 3x5 | `PanelSetpointHi` %IW104 + `PanelSetpointLo` %IW105 -> `PanelSetpoint` : REAL | the operator's pot, 0.3..1.8 s (starts at 0.9) |  |
 | `panel.start` | PLC reads | bit | 1x3 | `PanelStart` %IX100.3 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x4 | `PanelStop` %IX100.4 | Stop button, momentary: a short pulse per press | yes |
