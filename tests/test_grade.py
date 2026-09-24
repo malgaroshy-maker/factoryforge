@@ -36,9 +36,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 import grade                                      # noqa: E402
 import scene as scene_model                       # noqa: E402
 
-#: Long enough for a correct controller to clear MIN_SORTED with headroom:
-#: one carton every 1.8s, and six seconds of belt before the first one lands.
-PASS_WINDOW = 24.0
+from factoryforge_sidecar.grading.scenes import sorting_by_height as sorting  # noqa: E402
+
+#: Long enough for the examiner's whole sheet -- Start, the mushroom, Start
+#: alone, Reset, Start (IP-35) -- and for a correct controller to clear
+#: MIN_SORTED with headroom: one carton every 1.8s, six seconds of belt before
+#: the first one lands, and six seconds stopped for the E-stop.
+PASS_WINDOW = sorting.SORT_EXAM_ENDS_BY + 5.0
 
 
 def run(*args) -> int:
@@ -129,8 +133,10 @@ def test_the_watcher_measures_how_long_an_output_was_held():
 
 
 def _settled(ticks: int = 20):
-    """A scene run forward far enough for its counters to mean something."""
-    sim = scene_model.SortingScene()
+    """A scene run forward far enough for its counters to mean something --
+    the scene the rubric builds, examiner and all, since that is what
+    `grade_sorting` marks."""
+    sim = grade.RUBRICS["sorting-by-height"]["build"](11)
     watched = grade.Watched(sim, observe=grade.observe_sorting)
     for _ in range(ticks):
         watched.tick(0.01)
@@ -268,6 +274,65 @@ def test_holding_the_pusher_out_fails_on_the_short_cartons(tmp_path):
     assert code == 1 and report["verdict"] == "FAIL"
     assert "sort.short_passed" in {c["id"] for c in report["checks"] if not c["ok"]}
     assert any("held out" in line for line in report["feedback"])
+
+
+# --- the sorting line's operator contract (IP-35) ------------------------
+#
+# The brief promises that the mushroom stops the line inside 200 ms and that
+# Start alone will not restart it. Until IP-35 the exam never pressed Start,
+# so a program written to the brief never ran its belt here.
+
+def test_the_sorting_pass_sat_the_whole_e_stop_test(good_run):
+    """Gotcha 16: the contract checks pass because the examiner really struck
+    a running line and really restarted it, not because nothing happened."""
+    panel = good_run["report"]["evidence"]["panel"]
+    trip, exam = panel["trip"], panel["exam"]
+    assert [what for _, what in panel["presses"]] == ["start", "start", "reset", "start"]
+    assert trip["moving_at_strike"] and 0 < trip["struck_travel_m"] <= panel["allowed_m"]
+    assert trip["latched_travel_m"] == 0.0
+    assert trip["cleared_at"] >= exam["restart_at"] and trip["restarted_at"] is not None
+    assert exam["waited_for_a_clear_plate"] is True
+
+
+def test_a_line_that_runs_before_start_fails_on_the_start(tmp_path):
+    """The program the first-hour guide taught before IP-35: the belt runs
+    whenever the mushroom is out. It sorts perfectly and is still wrong."""
+    code, report = graded(tmp_path, "sorting-by-height", "nostart", 60)
+    assert code == 1
+    assert "line.started_by_start" in failed_ids(report)
+    assert not failed_ids(report) & {"sort.tall_diverted", "sort.short_passed"}
+    assert report["evidence"]["panel"]["started_without_a_press_at"][0] < 1.0
+    assert any("before anybody pressed Start" in line for line in report["feedback"])
+
+
+def test_a_line_that_restarts_on_start_alone_fails_the_latch(tmp_path):
+    """It stops on the mushroom and waits for Start -- and takes the Start the
+    examiner presses with no Reset. Exactly one check, and it is the latch."""
+    code, report = graded(tmp_path, "sorting-by-height", "startalone", 60)
+    assert code == 1 and failed_ids(report) == {"estop.latched_until_reset"}
+    trip = report["evidence"]["panel"]["trip"]
+    assert trip["latched_moved_at"] >= report["evidence"]["panel"]["exam"]["start_alone_at"]
+    assert any("on Start alone" in line for line in report["feedback"])
+
+
+def test_a_window_too_short_for_the_e_stop_test_does_not_pass_it(tmp_path):
+    """A contract check the exam never reached is not a check that passed."""
+    code, report = graded(tmp_path, "sorting-by-height", "good", 20)
+    assert code == 1
+    assert {"estop.latched_until_reset", "estop.restarted_after_reset"} <= failed_ids(report)
+
+
+def test_the_examiner_strikes_only_with_no_tall_carton_committed_to_the_plate(
+        tmp_path, monkeypatch):
+    """Why the strike waits (gotcha 24, for the examiner's own rule). `good`
+    times its push on a clock, as the brief allows; a strike that stranded a
+    tall carton between the beam and the plate would fail it for a carton
+    the E-stop missorted. Seed 2 is one of 21 in 1..40 that do, unwaited."""
+    code, report = graded(tmp_path, "sorting-by-height", "good", 60, seed=2)
+    assert code == 0, failed_ids(report)
+    monkeypatch.setattr(sorting.SortingExam, "_plate_is_clear", lambda self: True)
+    code, report = graded(tmp_path, "sorting-by-height", "good", 60, seed=2)
+    assert code == 1 and failed_ids(report) == {"sort.tall_diverted"}
 
 
 # `idle` and `forcer` stay on the wall clock, deliberately. They are the only
@@ -425,6 +490,16 @@ def test_a_station_that_ignores_the_mushroom_fails_on_belt_travel(tmp_path):
     estop = report["evidence"]["estop"]
     assert estop["travel_while_tripped_m"] > estop["allowed_m"]
     assert any("NORMALLY CLOSED" in line for line in report["feedback"])
+
+
+def test_a_station_that_restarts_on_start_alone_fails_on_belt_travel(tmp_path):
+    """IP-35: the station used to end its trip on any Start after the strike,
+    so this passed with 5 mm of belt -- the stop lag. The latch lasts until
+    Reset and then Start, and the belt that ran in between is counted."""
+    code, report = graded(tmp_path, "start-stop-station", "startalone", 45)
+    assert code == 1 and failed_ids(report) == {"estop.stopped_the_belt"}
+    estop = report["evidence"]["estop"]
+    assert estop["travel_while_tripped_m"] > 10 * estop["allowed_m"]
 
 
 def test_a_station_that_never_stops_at_the_target_fails_the_batch(tmp_path):
@@ -1192,6 +1267,14 @@ TABLE_NUMBERS = {
     ("start-stop-station", "noestop"): lambda e: [
         f"{e['estop']['travel_while_tripped_m'] * 1000:.0f}",
         f"{e['estop']['allowed_m'] * 1000:.0f}"],
+    ("start-stop-station", "startalone"): lambda e: [
+        f"{e['estop']['travel_while_tripped_m'] * 1000:.0f}",
+        f"{e['estop']['allowed_m'] * 1000:.0f}"],
+    ("sorting-by-height", "nostart"): lambda e: [
+        f"{at:.2f}" for at in e["panel"]["started_without_a_press_at"]],
+    ("sorting-by-height", "startalone"): lambda e: [
+        f"{e['panel']['exam']['start_alone_at']:.2f}",
+        f"{e['panel']['trip']['latched_travel_m'] * 1000:.0f}"],
     ("start-stop-station", "runon"): lambda e: [
         str(e["batch"]["made"]), str(e["batch"]["target"])],
     ("tank-level-control", "bangbang"): _phases("settled_error", ".1f"),

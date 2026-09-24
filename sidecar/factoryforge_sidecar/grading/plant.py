@@ -447,6 +447,101 @@ def shuffled_cycle(rng: random.Random, values: list, repeats: int) -> list:
 ESTOP_LIMIT = 0.200
 
 
+class TripLedger:
+    """The operator contract, measured as belt travel (IP-35).
+
+    One ledger for every scene whose panel stops a belt, so "the mushroom
+    stops it, only Reset *then* Start restarts it" is measured the same way
+    wherever it is marked. Ticked once per plant step, after the panel, with
+    the metres the belt really moved that tick. It reads the panel's contacts
+    -- the edges a program sees -- not the examiner's intentions.
+
+    A trip runs through three phases, and the travel in each is kept apart
+    because each is a different mistake:
+
+    * **struck** -- mushroom in. Belt here beyond `ESTOP_LIMIT` of travel is a
+      program that did not stop, or stopped too slowly.
+    * **latched** -- mushroom out, no Reset yet; then **reset** -- Reset seen,
+      no Start yet. Any belt here is a program whose trip did not latch: it
+      restarted on the release, on Start alone, or on Reset alone.
+    * cleared by the first Start edge after a Reset edge after the release.
+
+    It also keeps every moment the belt began moving with no Start edge since
+    it last stopped -- the guarded cell's "started without a press", for a
+    belt rather than a contactor.
+
+    Until IP-35 the start / stop station ended its trip on *any* Start after
+    the strike, so a program that restarted on Start alone, with no Reset,
+    passed it: 5 mm of belt, all of it the stop lag.
+    """
+
+    def __init__(self, panel: "Panel") -> None:
+        self.panel = panel
+        self.phase = "clear"
+        #: One record per trip: when it was struck, released, reset and
+        #: cleared, how far the belt moved in each phase, how long it took
+        #: to stop, and whether the belt was moving at the strike.
+        self.trips: list[dict] = []
+        self.started_without_a_press: list[float] = []
+        self._moving = False
+        self._start_since_stop = False
+        self._edge = {"start": False, "reset": False}
+
+    def _rising(self, name: str) -> bool:
+        now = bool(self.panel.tags.visible(f"{self.panel.prefix}.{name}"))
+        rose = now and not self._edge[name]
+        self._edge[name] = now
+        return rose
+
+    def step(self, now: float, moved: float) -> None:
+        start, reset = self._rising("start"), self._rising("reset")
+        healthy = self.panel.healthy
+        moving = moved > 0.0
+        if start:
+            self._start_since_stop = True
+
+        trip = self.trips[-1] if self.trips else None
+        if not healthy and self.phase != "struck":
+            trip = {"struck_at": round(now, 2), "moving_at_strike": self._moving,
+                    "released_at": None, "reset_at": None, "cleared_at": None,
+                    "stop_lag_s": None, "struck_travel_m": 0.0,
+                    "latched_travel_m": 0.0, "latched_moved_at": None,
+                    "restarted_at": None}
+            self.trips.append(trip)
+            self.phase = "struck"
+        elif self.phase == "struck" and healthy:
+            trip["released_at"] = round(now, 2)
+            self.phase = "latched"
+        elif self.phase == "latched" and reset:
+            trip["reset_at"] = round(now, 2)
+            self.phase = "reset"
+        elif self.phase == "reset" and start:
+            trip["cleared_at"] = round(now, 2)
+            self.phase = "cleared"
+
+        if self.phase == "struck":
+            trip["struck_travel_m"] += moved
+            if trip["stop_lag_s"] is None and not moving:
+                trip["stop_lag_s"] = round(now - trip["struck_at"], 3)
+        elif self.phase in ("latched", "reset"):
+            trip["latched_travel_m"] += moved
+            if moving and trip["latched_moved_at"] is None:
+                trip["latched_moved_at"] = round(now, 2)
+        elif self.phase == "cleared" and moving and trip["restarted_at"] is None:
+            trip["restarted_at"] = round(now, 2)
+
+        if moving and not self._moving and not self._start_since_stop:
+            self.started_without_a_press.append(round(now, 2))
+        if self._moving and not moving:
+            self._start_since_stop = start      # it stopped: a new start is owed
+        self._moving = moving
+
+    @property
+    def tripped_travel(self) -> float:
+        """Metres of belt while any trip was struck or latched."""
+        return sum(t["struck_travel_m"] + t["latched_travel_m"] for t in self.trips)
+
+
 # --- tags the engine declares and no rubric reads -------------------------
 #
 # A student is handed the scene's tag list and writes a mapping against it, so

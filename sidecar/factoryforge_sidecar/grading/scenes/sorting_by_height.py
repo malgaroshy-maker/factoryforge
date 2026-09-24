@@ -12,7 +12,7 @@ import random
 from factoryforge_sidecar import sorting_scene as scene_model
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import Panel, fault_input
+from ..plant import ESTOP_LIMIT, Panel, Script, TripLedger, fault_input
 
 
 SCENE = "sorting-by-height"
@@ -75,23 +75,135 @@ def feed_pattern(seed: int) -> list[bool]:
 SORTING_PANEL_SETPOINT = 0.90
 
 
-def build_sorting_scene(seed: int):
+# --- the operator contract (IP-35) --------------------------------------
+#
+# The brief says "the mushroom stops the line inside 200 ms and Start alone
+# will not restart it". Until IP-35 this exam never pressed Start at all, so a
+# program written to the brief -- one that waits for Start -- never ran its belt
+# here, and the first-hour guide taught a program that ignored Start to fit the
+# grader. Now the examiner runs the same sheet the start / stop station does:
+# Start to begin, the mushroom mid-run, released, Start alone (must do
+# nothing), Reset, then Start (must restart). It is measured as belt travel in
+# `plant.TripLedger`, the ledger that station uses too.
+#
+# One thing is particular to this line. The pusher's timing is a delay after
+# the high beam, and a correct program times that delay on a clock, not on
+# belt travel -- the brief asks for nothing else. A strike that caught a tall
+# carton between the beam and the plate would stop it there while the clock
+# ran on, and the carton would be missorted by the E-stop rather than by the
+# program. So the examiner waits, as an operator testing a line would, for a
+# moment when no tall carton is committed to the plate: none between the high
+# beam and the far edge of the pusher's catch. On a feed of one carton every
+# 1.8 s that comes round within a second or two; if it never does, the
+# mushroom is struck anyway after SORT_STRIKE_WAIT.
+
+#: Start, as on eight of the other scenes.
+SORT_START_AT = 1.0
+#: The examiner reaches for the mushroom from here...
+SORT_STRIKE_FROM = 16.0
+#: ...and strikes it when the belt is running and no tall carton is committed
+#: to the plate, or after this long regardless.
+SORT_STRIKE_WAIT = 4.0
+#: The rest of the sheet, timed from the strike.
+SORT_RELEASE_AFTER = 2.0
+SORT_START_ALONE_AFTER = 3.0      # must not restart: the trip is latched
+SORT_RESET_AFTER = 4.5            # must not restart either: Reset starts nothing
+SORT_RESTART_AFTER = 6.0          # this Start must
+#: How soon after that last Start the belt has to be moving again.
+SORT_RESTART_WITHIN = 1.0
+#: Belt the strike may still cost: `plant.ESTOP_LIMIT` of it.
+SORT_ESTOP_ALLOWED = scene_model.BELT_SPEED * ESTOP_LIMIT
+#: The shortest window the whole sheet fits in, strike wait included.
+SORT_EXAM_ENDS_BY = (SORT_STRIKE_FROM + SORT_STRIKE_WAIT + SORT_RESTART_AFTER
+                     + SORT_RESTART_WITHIN)
+
+
+class SortingExam(scene_model.SortingScene):
     """The sorting line, with the tags the engine's line has and
-    `sorting_scene.py` does not.
+    `sorting_scene.py` does not, and the examiner at its panel.
 
     `sorting_scene.py` is the deterministic scene and declares the ten tags
     `SortingTags` does. The line the engine opens is the rigid-body one, and it
     also has an operator panel and a drive fault on the conveyor and the
     pusher (`engine/fixtures/scene_tag_sets.json`). A student's mapping is
-    written against that line, so the exam has to offer the same list. None of
-    the nine is read by this rubric: the panel is not pressed and no fault is
+    written against that line, so the exam has to offer the same list. The
+    panel is pressed (see above); the two faults are declared and never
     raised, so each holds the value an untouched engine shows.
+
+    A subclass rather than a change to `sorting_scene.py`, which is also the
+    tag-bus regression scene and has no operator in it.
     """
-    sim = scene_model.SortingScene(emit_pattern=feed_pattern(seed))
-    Panel(sim.tags, setpoint=SORTING_PANEL_SETPOINT).declare(sim.tags)
-    sim.tags.add(fault_input("conveyor", "Conveyor Drive Fault"))
-    sim.tags.add(fault_input("pusher", "Pusher Drive Fault"))
-    return sim
+
+    def __init__(self, seed: int) -> None:
+        super().__init__(emit_pattern=feed_pattern(seed))
+        self.t = 0.0
+        self.panel = Panel(self.tags, setpoint=SORTING_PANEL_SETPOINT)
+        self.panel.declare(self.tags)
+        self.tags.add(fault_input("conveyor", "Conveyor Drive Fault"))
+        self.tags.add(fault_input("pusher", "Pusher Drive Fault"))
+        #: Ground truth for the contract: belt travel against the panel.
+        self.trip = TripLedger(self.panel)
+        #: What the examiner did and when. None until it happens.
+        self.exam: dict = {"reached_for_the_mushroom_at": None, "struck_at": None,
+                           "waited_for_a_clear_plate": None, "start_alone_at": None,
+                           "reset_at": None, "restart_at": None}
+        self._strike_deadline: float | None = None
+        self.script = Script([
+            (SORT_START_AT, self.panel.press("start")),
+            (SORT_STRIKE_FROM, self._reach_for_the_mushroom),
+        ])
+
+    # --- the examiner ---
+
+    def _reach_for_the_mushroom(self) -> None:
+        self.exam["reached_for_the_mushroom_at"] = round(self.t, 2)
+        self._strike_deadline = self.t + SORT_STRIKE_WAIT
+
+    def _plate_is_clear(self) -> bool:
+        beam = scene_model.SENSOR_HIGH_POS - scene_model.SENSOR_WINDOW / 2
+        far = scene_model.PUSHER_POS + scene_model.PUSHER_CATCH
+        return not any(box.is_tall and beam <= box.position <= far
+                       for box in self.boxes)
+
+    def _maybe_strike(self) -> None:
+        if self._strike_deadline is None:
+            return
+        clear = self._plate_is_clear() and bool(self.tags.visible("conveyor.rotate"))
+        if not clear and self.t < self._strike_deadline:
+            return
+        self._strike_deadline = None
+        self.exam["struck_at"] = round(self.t, 2)
+        self.exam["waited_for_a_clear_plate"] = clear
+        self.panel.strike()()
+        at = self.t
+        self.script.at(at + SORT_RELEASE_AFTER, self.panel.release())
+        self.script.at(at + SORT_START_ALONE_AFTER, self._note("start_alone_at", "start"))
+        self.script.at(at + SORT_RESET_AFTER, self._note("reset_at", "reset"))
+        self.script.at(at + SORT_RESTART_AFTER, self._note("restart_at", "start"))
+
+    def _note(self, key: str, button: str):
+        press = self.panel.press(button)
+
+        def do() -> None:
+            press()
+            self.exam[key] = round(self.t, 2)
+        do.__name__ = press.__name__
+        return do
+
+    # --- the loop ---
+
+    def tick(self, dt: float) -> None:
+        self.t += dt
+        self.script.run(self.t)
+        self._maybe_strike()
+        self.panel.tick(dt, self.t)
+        running = bool(self.tags.visible("conveyor.rotate"))
+        super().tick(dt)
+        self.trip.step(self.t, scene_model.BELT_SPEED * dt if running else 0.0)
+
+
+def build_sorting_scene(seed: int) -> SortingExam:
+    return SortingExam(seed)
 
 
 def observe_sorting(watched: Watched, dt: float) -> None:
@@ -191,8 +303,94 @@ def grade_sorting(watched: Watched, engine: GradedEngine, report: Report,
                emitted == sorted_count + on_belt,
                f"{emitted} fed = {sorted_count} sorted + {on_belt} still on the belt")
 
+    contract = _grade_contract(sim, report, watched.sim_time)
+
     _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
                       emitted, sorted_count, mean_delay, low, high)
+    _contract_feedback(report, sim, contract)
+
+
+def _grade_contract(sim: SortingExam, report: Report, window: float) -> dict:
+    """The operator contract, marked as the start / stop station marks it:
+    metres of belt, from `plant.TripLedger`. Four checks, because the four
+    ways to get it wrong are four different programs."""
+    ledger, exam = sim.trip, sim.exam
+    trip = ledger.trips[0] if ledger.trips else None
+    allowed = SORT_ESTOP_ALLOWED
+    #: The sheet ran to its end: the last Start was pressed, and the window
+    #: lasted long enough after it to see whether the belt came back.
+    finished = (exam["restart_at"] is not None
+                and window >= exam["restart_at"] + SORT_RESTART_WITHIN)
+    short = (f"the {window:g}s window ended before the examiner finished the "
+             f"E-stop test, which needs about {SORT_EXAM_ENDS_BY:g}s")
+
+    report.evidence["panel"] = {
+        "presses": sim.panel.presses,
+        "exam": dict(exam),
+        "trip": None if trip is None else {
+            k: (round(v, 3) if isinstance(v, float) else v) for k, v in trip.items()},
+        "allowed_m": round(allowed, 3),
+        "started_without_a_press_at": ledger.started_without_a_press[:10],
+    }
+
+    unpressed = ledger.started_without_a_press
+    report.add("line.started_by_start",
+               not unpressed,
+               "the belt never started without somebody pressing Start"
+               if not unpressed else
+               f"the belt started {len(unpressed)} time(s) with no Start press "
+               f"since it last stopped, at {unpressed[:5]}s")
+
+    if trip is None:
+        report.add("estop.stopped_the_belt", False,
+                   short if not finished else "the mushroom was never struck")
+    elif not trip["moving_at_strike"]:
+        report.add("estop.stopped_the_belt", False,
+                   f"the belt was not running when the mushroom was struck at "
+                   f"{trip['struck_at']:g}s, so the strike stopped nothing")
+    else:
+        report.add("estop.stopped_the_belt",
+                   trip["struck_travel_m"] <= allowed,
+                   f"the belt moved {trip['struck_travel_m'] * 1000:.0f} mm after the "
+                   f"mushroom was struck (at most {allowed * 1000:.0f} mm, which is "
+                   f"{ESTOP_LIMIT * 1000:.0f} ms of belt)")
+
+    if not finished or trip is None:
+        report.add("estop.latched_until_reset", False, short)
+        report.add("estop.restarted_after_reset", False, short)
+        return {"trip": trip, "finished": False}
+
+    latched = trip["latched_travel_m"]
+    report.add("estop.latched_until_reset",
+               latched <= 1e-9,
+               "the belt stayed still from the release until Reset and then Start"
+               if latched <= 1e-9 else
+               f"the belt moved {latched * 1000:.0f} mm between the mushroom's "
+               f"release at {trip['released_at']:g}s and Reset-then-Start -- "
+               f"{_restarted_on(trip, exam)}")
+    back = trip["restarted_at"]
+    report.add("estop.restarted_after_reset",
+               trip["cleared_at"] is not None and back is not None
+               and back - trip["cleared_at"] <= SORT_RESTART_WITHIN + 1e-9,
+               f"the belt was running again {back - trip['cleared_at']:.2f}s after "
+               f"Start at {trip['cleared_at']:g}s (within {SORT_RESTART_WITHIN:g}s)"
+               if back is not None and trip["cleared_at"] is not None else
+               f"the belt did not run again after Reset at {exam['reset_at']:g}s "
+               f"and Start at {exam['restart_at']:g}s")
+    return {"trip": trip, "finished": True}
+
+
+def _restarted_on(trip: dict, exam: dict) -> str:
+    """Which of the examiner's moves the belt came back on, from when it
+    first moved while the trip was still latched."""
+    moved = trip.get("latched_moved_at")
+    if moved is None:
+        return "it restarted while the trip was latched"
+    if exam["reset_at"] is not None and moved >= exam["reset_at"]:
+        return f"it restarted at {moved:g}s on Reset alone"
+    if exam["start_alone_at"] is not None and moved >= exam["start_alone_at"]:
+        return f"it restarted at {moved:g}s on Start alone, with no Reset"
+    return f"it restarted at {moved:g}s, when the mushroom was released"
 
 
 def _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
@@ -211,7 +409,7 @@ def _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
     if belt == 0.0:
         say("The belt never ran. Nothing you do downstream matters until "
             "`conveyor.rotate` is true -- it is a PLC output, so your program "
-            "has to write it.")
+            "has to write it, from the moment the examiner presses Start.")
     elif belt < 0.5:
         say(f"The belt ran for only {belt * 100:.0f}% of the window. If that is "
             f"deliberate you will need a longer run to reach {MIN_SORTED} cartons.")
@@ -254,6 +452,37 @@ def _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
             f"{len(sim.sorted_short)} short past the end, none misrouted.")
 
 
+def _contract_feedback(report, sim: SortingExam, contract: dict) -> None:
+    """The operator contract, in terms of what the operator did."""
+    say = report.feedback.append
+    trip = contract["trip"]
+    unpressed = sim.trip.started_without_a_press
+    if unpressed and unpressed[0] < SORT_START_AT + 0.5:
+        say(f"The belt was running at {unpressed[0]:g}s, before anybody pressed "
+            f"Start. The line waits for its operator: latch the RISING edge of "
+            f"`panel.start` into a run flag and drive `conveyor.rotate` from "
+            f"that, not from `panel.estop` alone.")
+    elif unpressed:
+        say(f"The belt started at {unpressed[0]:g}s with nobody having pressed "
+            f"Start since it last stopped.")
+
+    if trip is None:
+        return
+    if trip["moving_at_strike"] and trip["struck_travel_m"] > SORT_ESTOP_ALLOWED:
+        say(f"The belt kept moving {trip['struck_travel_m'] * 1000:.0f} mm after "
+            f"the mushroom was struck. `panel.estop` is NORMALLY CLOSED: true "
+            f"means healthy, so a struck mushroom reads FALSE, and the belt has "
+            f"to stop on it within {ESTOP_LIMIT * 1000:.0f} ms.")
+    if contract["finished"] and trip["latched_travel_m"] > 1e-9:
+        say(f"The trip did not latch: {_restarted_on(trip, sim.exam)}. Releasing "
+            f"the mushroom must not restart anything, and neither may Start or "
+            f"Reset alone -- only Reset and THEN Start.")
+    if (contract["finished"] and trip["latched_travel_m"] <= 1e-9
+            and trip["restarted_at"] is None):
+        say("After Reset and then Start the belt stayed stopped. The latch has to "
+            "clear on Reset, and the next Start has to run the line again.")
+
+
 def _summary_sorting(evidence: dict, out) -> None:
     pusher = evidence["pusher"]
     out(f"fed {evidence['emitted']}, sorted {evidence['sorted']}, "
@@ -272,21 +501,31 @@ def _summary_sorting(evidence: dict, out) -> None:
         for entry in evidence["misrouted"][:8]:
             out(f"  carton {entry['carton']:>3} ({entry['height']}) "
                 f"-> {entry['lane']} at {entry['at']:.1f}s")
+    trip = evidence.get("panel", {}).get("trip")
+    if trip is not None:
+        out(f"mushroom at {trip['struck_at']:g}s: {trip['struck_travel_m'] * 1000:.0f} mm "
+            f"of belt after it (at most {evidence['panel']['allowed_m'] * 1000:.0f} mm), "
+            f"{trip['latched_travel_m'] * 1000:.0f} mm while latched")
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
 #: files it under `SCENE`.
 RUBRIC = {
     "title": "Sorting by height",
-    "task": ("Run the belt, feed cartons, and push the tall ones down the "
-             "chute while the short ones carry on."),
+    "task": ("Run the belt when Start is pressed, feed cartons, and push the "
+             "tall ones down the chute while the short ones carry on. The "
+             "mushroom is normally closed and stops the line within 200 ms; "
+             "its trip latches, so Start alone will not restart the line -- "
+             "Reset, then Start."),
     "build": build_sorting_scene,
     "observe": observe_sorting,
     "grade": grade_sorting,
     "summary": _summary_sorting,
     "duration": 60.0,
-    "references": ("good", "blind", "greedy"),
-    "tags": ("conveyor.rotate, emitter.emit, pusher.extend are yours to write; "
-             "sensor_low.detect, sensor_high.detect, pusher.extended, "
-             "pusher.retracted, counter.tall, counter.short are the line's."),
+    "references": ("good", "blind", "greedy", "nostart", "startalone"),
+    "tags": ("conveyor.rotate, emitter.emit, pusher.extend, panel.green, "
+             "panel.red are yours to write; panel.start, panel.stop, "
+             "panel.reset, panel.estop, sensor_low.detect, sensor_high.detect, "
+             "pusher.extended, pusher.retracted, counter.tall, counter.short "
+             "are the line's."),
 }

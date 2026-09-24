@@ -214,12 +214,16 @@ nano st_files/sorting_by_height.st
 
 You make two changes. To paste into nano, right-click in the Ubuntu window.
 
-**First change: two new variables.** Use the arrow keys to find the line that
+**First change: six new variables.** Use the arrow keys to find the line that
 starts `PanelSetpoint : REAL;`. Put the cursor at the end of that line, press
 Enter, and paste:
 
 ```
-    tEmit    : TON;   (* times the feed: one carton every 3 s *)
+    Running  : BOOL;    (* the line is running *)
+    Tripped  : BOOL;    (* the E-stop has tripped; only Reset clears it *)
+    rStart   : R_TRIG;  (* the moment Start goes down *)
+    rReset   : R_TRIG;  (* the moment Reset goes down *)
+    tEmit    : TON;     (* times the feed: one carton every 3 s *)
     EmitFlag : BOOL;
 ```
 
@@ -232,18 +236,46 @@ addresses, and that is why the starter has a second one.
 paste:
 
 ```
-  (* Run the belt while the E-stop circuit is healthy. *)
-  ConveyorRotate  := PanelEstop;
-  StackLightGreen := PanelEstop;
+  (* The operator panel. Start and Reset are momentary: act on the scan
+     the button goes down, not for as long as it is held. *)
+  rStart(CLK := PanelStart);
+  rReset(CLK := PanelReset);
 
-  (* Feed: a square wave, 1.5 s high and 1.5 s low. One carton per rising
-     edge. A short pulse would be missed: OpenPLC polls every 50 ms. *)
-  tEmit(IN := TRUE, PT := T#1500ms);
-  IF tEmit.Q THEN
-    EmitFlag := NOT EmitFlag;
-    tEmit(IN := FALSE, PT := T#1500ms);
+  (* The E-stop trips the line, and the trip latches: releasing the
+     mushroom does not clear it, and neither does Start. Only Reset does. *)
+  IF NOT PanelEstop THEN
+    Tripped := TRUE;
+  ELSIF rReset.Q THEN
+    Tripped := FALSE;
   END_IF;
-  EmitterEmit := EmitFlag AND PanelEstop;
+
+  (* Start runs the line. Stop or a trip stops it. Reset alone does not
+     start anything: after a trip it takes Reset, then Start. *)
+  IF Tripped OR PanelStop THEN
+    Running := FALSE;
+  ELSIF rStart.Q THEN
+    Running := TRUE;
+  END_IF;
+
+  ConveyorRotate  := Running;
+  StackLightGreen := Running;
+  PanelGreen      := Running;
+  PanelRed        := Tripped;
+
+  (* Feed while the line runs: a square wave, 1.5 s high and 1.5 s low,
+     one carton per rising edge. A short pulse would be missed: OpenPLC
+     polls every 50 ms. *)
+  IF Running THEN
+    tEmit(IN := TRUE, PT := T#1500ms);
+    IF tEmit.Q THEN
+      EmitFlag := NOT EmitFlag;
+      tEmit(IN := FALSE, PT := T#1500ms);
+    END_IF;
+  ELSE
+    tEmit(IN := FALSE, PT := T#1500ms);
+    EmitFlag := FALSE;
+  END_IF;
+  EmitterEmit := EmitFlag;
 
 ```
 
@@ -271,16 +303,32 @@ memory are harmless. After that it prints nothing while all is well. If it
 repeats `Connection failed on MB device FactoryForge`, it cannot reach the
 sidecar: see the table at the end of this section.
 
-Within a second the sidecar's window shows `driver READY` and its `OUT` line
-shows `rotate=1`. In FactoryForge the belt runs and a carton appears every
-3 s. Every carton runs to the far end, tall or short: nothing tells the pusher
-to move yet.
+Within a second the sidecar's window shows `driver READY`. Nothing moves yet,
+and that is correct: the line waits for its operator. In FactoryForge press
+**F1** for Run mode and click the green **Start** button on the panel. The
+sidecar's `OUT` line shows `rotate=1`, the belt runs and a carton appears
+every 3 s. Every carton runs to the far end, tall or short: nothing tells the
+pusher to move yet.
 
-*Why `PanelEstop` and not `NOT PanelEstop`?* The E-stop on the panel is wired
-**normally closed**: the tag is TRUE while the circuit is healthy and FALSE
-when the mushroom is struck. Strike it in FactoryForge (press **F1** for Run
-mode and click the red mushroom) and the belt stops. Click it again to
-release.
+Now try the E-stop, because this is the part that matters on a real line:
+
+1. Click the red mushroom. The belt stops at once and the red lamp lights.
+2. Click it again to release it. The belt stays stopped.
+3. Click **Start**. Still nothing: the trip is latched.
+4. Click the blue **Reset**. The red lamp goes out, and the belt stays
+   stopped, because Reset clears the trip and starts nothing.
+5. Click **Start**. The line runs again.
+
+*Why `NOT PanelEstop`?* The E-stop is wired **normally closed**: the tag is
+TRUE while the circuit is healthy and FALSE when the mushroom is struck, so a
+cut wire stops the line too. *Why the latch?* A machine that restarted by
+itself the moment somebody released the mushroom, or on one press of Start,
+could start while a person is still reaching into it. That is why a trip needs
+Reset first, and a separate Start after it. *Why `R_TRIG`?* A click holds
+Start down for 0.2 s, which is about ten of this program's 20 ms scans. The
+program acts on the rising edge, once, however long the button is held. The
+grader checks all of this. It presses Start itself and strikes the mushroom
+halfway through the run, then presses the buttons in the order above.
 
 ### Step 8: Make it sort
 
@@ -341,8 +389,10 @@ tutorial. The starters for every other scene are empty.
 The grader replaces FactoryForge's window with a copy of the same line that it
 watches and marks. It sets the order of tall and short cartons itself and
 shuffles it, so a program that pushes every second carton without reading a
-sensor fails. It offers the same 19 tags, so the same program and the same
-addresses work unchanged. **Leave OpenPLC running.** It finds the new slave on
+sensor fails. It is also the operator: it presses Start 1 s in, and about
+16 s in it strikes the mushroom, releases it, presses Start alone, then Reset,
+then Start, exactly as you did in step 7. It offers the same 19 tags, so the
+same program and the same addresses work unchanged. **Leave OpenPLC running.** It finds the new slave on
 its own. Until it does, its window repeats `Connection failed on MB device
 FactoryForge`, which is expected.
 
@@ -379,13 +429,17 @@ PASS   every check met
   [ok] controller.stayed_connected    1 session(s), 0 of them dropped before the end
   [ok] integrity.no_forced_tags       no tag was forced
   [ok] integrity.no_input_writes      no writes aimed at simulator-owned tags
-  [ok] line.ran                       18 cartons reached a lane (at least 8 needed in the 60s window)
-  [ok] line.both_lanes                chute 9, far end 9 (at least 3 each)
+  [ok] line.ran                       16 cartons reached a lane (at least 8 needed in the 60s window)
+  [ok] line.both_lanes                chute 8, far end 8 (at least 3 each)
   [ok] sort.tall_diverted             no tall carton ran off the far end
   [ok] sort.short_passed              no short carton was diverted
-  [ok] line.conservation              20 fed = 18 sorted + 2 still on the belt
+  [ok] line.conservation              18 fed = 16 sorted + 2 still on the belt
+  [ok] line.started_by_start          the belt never started without somebody pressing Start
+  [ok] estop.stopped_the_belt         the belt moved 25 mm after the mushroom was struck (at most 100 mm, which is 200 ms of belt)
+  [ok] estop.latched_until_reset      the belt stayed still from the release until Reset and then Start
+  [ok] estop.restarted_after_reset    the belt was running again 0.05s after Start at 22.01s (within 1s)
   ...
-RESULT grade=PASS scene=sorting-by-height checks=8/8 failed=none forced=0
+RESULT grade=PASS scene=sorting-by-height checks=12/12 failed=none forced=0
 ```
 
 Your counts can differ by a carton or two. The verdict is what matters. Press
@@ -409,9 +463,10 @@ grade --list` shows every scene the grader can mark.
   the sidecar whenever you change scene, because it hands out Modbus addresses
   once, for the scene that was open when it started. `examples\README.md` lists
   the scenes.
-- **The operator contract.** This program ignores Start and Stop, which the
-  sorting line's grader does not press. The *Start / stop station* scene is
-  where Start, Stop, Reset and the latching E-stop are marked.
+- **The operator contract.** This program already honours Start, Stop, the
+  latching E-stop and Reset. The sorting grader marks all of it except Stop,
+  which it never presses. The *Start / stop station* scene adds a batch
+  counted against the pot, which the line has to stop by itself.
 - **32-bit values.** An Int or Float tag is two Modbus registers, high word
   first. The starter's first and last sections join and split them for you, so
   your logic only ever sees plain `DINT` and `REAL` variables.
@@ -422,7 +477,7 @@ grade --list` shows every scene the grader can mark.
 |---|---|
 | The sidecar says `no engine listening on ws://127.0.0.1:7411` | FactoryForge is not running. Step 3. |
 | The sidecar says a number other than 19 tags | Another scene is open. Open *Sorting by height* and restart the sidecar. |
-| `rotate=0` forever, the sidecar never says `driver READY`, and OpenPLC repeats `Connection failed on MB device FactoryForge` | OpenPLC is not reaching the slave. On Windows: `core/mbconfig.cfg` still says `127.0.0.1`, or your WSL address changed (step 4 again, then the `sed` in step 6 with the new one, and restart both), or the firewall question was answered without **Public networks**. Everywhere: `mbconfig.cfg` must be in `webserver/core/`, the folder you start `./openplc` from. |
+| `rotate=0` forever even after you press Start, the sidecar never says `driver READY`, and OpenPLC repeats `Connection failed on MB device FactoryForge` | OpenPLC is not reaching the slave. On Windows: `core/mbconfig.cfg` still says `127.0.0.1`, or your WSL address changed (step 4 again, then the `sed` in step 6 with the new one, and restart both), or the firewall question was answered without **Public networks**. Everywhere: `mbconfig.cfg` must be in `webserver/core/`, the folder you start `./openplc` from. |
 | `./openplc` exits at once | Another OpenPLC runtime is already running. If you pressed *Start PLC* in OpenPLC's web interface, press *Stop PLC* there first. |
 | The compiler reports `invalid located variable declaration` | A variable of yours ended up in the first `VAR` block, among the `AT %…` lines. Move it to the second one. |
 | No cartons appear, or only one does | `EmitterEmit` makes one carton per **rising** edge, and the level has to last longer than the 50 ms poll. |
@@ -444,9 +499,22 @@ program graded **FAIL**: 9 tall cartons past the pusher, *"The pusher never
 came out"*. The step 8 program graded **PASS**, 8/8 checks, with 9 tall down
 the chute and 9 short past the end. OpenPLC was the controller in both runs.
 
-Four things were **not** covered by that run, and they are listed here so that
-nobody mistakes them for tested:
+That run was of the program as it stood then, which ignored Start because the
+grader never pressed it. IP-35 made the grader press Start and mark the
+E-stop, and changed step 7 to the program above. **The changed program has
+not been run on OpenPLC.** What was checked instead: the four code blocks in
+steps 7 and 8, pasted into the starter where those steps say, compile with
+OpenPLC's own compiler (`iec2c`, then `g++` and the glue generator, as
+`examples/openplc/check_starters.sh` does). The same logic, translated line
+for line into a Python controller, graded **FAIL** after step 7 (*"The pusher
+never came out"*) and **PASS**, 12/12, after step 8, on five seeds. The output
+in step 9 is from that run. It scans every 50 ms, not every 20 ms like
+OpenPLC's task.
 
+Five things were **not** covered by those runs, and they are listed here so
+that nobody mistakes them for tested:
+
+- **The step 7 and 8 program on OpenPLC.** Compiled, not run (above).
 - **The crossing from WSL to Windows.** In that run OpenPLC and the grader
   shared a loopback, as on Linux, and the grader and sidecar there were the
   same code run from source inside WSL. The firewall question in step 5 was not

@@ -11,8 +11,8 @@ from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
 from ..plant import (CARTON_LENGTH, ESTOP_LIMIT, EngineFeed, Item, PlantScene,
-                     Script, declare_stack_light, fault_input, pot_start,
-                     remover_catch)
+                     Script, TripLedger, declare_stack_light, fault_input,
+                     pot_start, remover_catch)
 from ..templates import template
 
 
@@ -92,10 +92,10 @@ class StartStopScene(PlantScene):
         #: batch can be counted from the Start press that began it.
         self.crossings: list[float] = []
         #: Metres the belt moved while the station was tripped -- struck
-        #: mushroom, or latched after one.
-        self.travel_while_tripped = 0.0
-        self.tripped_since: float | None = None
-        self.stop_lag: float | None = None
+        #: mushroom, or latched after one until Reset *and then* Start
+        #: (`plant.TripLedger`). Until IP-35 any Start after the strike ended
+        #: the trip, so Start alone restarting the belt went unmarked.
+        self.trip = TripLedger(self.panel)
         #: The batch the examiner asked for, and when it asked.
         self.batches: list[dict] = []
 
@@ -122,14 +122,15 @@ class StartStopScene(PlantScene):
 
     # --- the plant ---
 
-    def step(self, dt: float) -> None:
-        tripped = not self.panel.healthy
-        if tripped and self.tripped_since is None:
-            self.tripped_since = self.t
-        elif not tripped and self.tripped_since is not None and self.panel.started_since(
-                self.tripped_since):
-            self.tripped_since = None
+    @property
+    def travel_while_tripped(self) -> float:
+        return self.trip.tripped_travel
 
+    @property
+    def stop_lag(self) -> float | None:
+        return self.trip.trips[0]["stop_lag_s"] if self.trip.trips else None
+
+    def step(self, dt: float) -> None:
         emit = self.bit("emitter.emit")
         if emit and not self._emit_edge:
             height, metal = self._feed.next()
@@ -139,19 +140,14 @@ class StartStopScene(PlantScene):
         self._emit_edge = emit
 
         running = self.bit("belt.rotate")
+        moved = SS_BELT_SPEED * dt if running else 0.0
+        self.trip.step(self.t, moved)
         if running:
-            moved = SS_BELT_SPEED * dt
-            if self.tripped_since is not None:
-                self.travel_while_tripped += moved
-                if self.stop_lag is None and not self.panel.healthy:
-                    self.stop_lag = self.t - self.tripped_since
             for item in self.items:
                 before = item.position
                 item.position += moved
                 if before < SS_EYE_BREAK <= item.position:
                     self.crossings.append(self.t)
-        elif self.tripped_since is not None and self.stop_lag is None and not self.panel.healthy:
-            self.stop_lag = self.t - self.tripped_since
 
         still = []
         for item in self.items:
@@ -272,7 +268,7 @@ RUBRIC = {
     "grade": grade_start_stop,
     "summary": _summary_start_stop,
     "duration": 60.0,
-    "references": ("good", "noestop", "runon"),
+    "references": ("good", "noestop", "runon", "startalone"),
     "tags": ("belt.rotate, emitter.emit, produced.value, panel.green, "
              "panel.red are yours to write; panel.start, panel.stop, "
              "panel.reset, panel.estop, panel.setpoint, part_present.detect, "

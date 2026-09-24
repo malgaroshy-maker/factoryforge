@@ -69,9 +69,15 @@ class Scanner:
     reference is wrong about its scene's lesson, not about the panel.
     """
 
-    def __init__(self, bus, latch_estop: bool = True) -> None:
+    def __init__(self, bus, latch_estop: bool = True,
+                 start_clears_trip: bool = False) -> None:
+        """`latch_estop=False` never reads the mushroom as a trip at all.
+        `start_clears_trip=True` latches it but lets Start alone clear it once
+        the mushroom is out -- the wrong answer to "only Reset clears it",
+        for the references whose lesson is exactly that."""
         self.bus = bus
         self.latch_estop = latch_estop
+        self.start_clears_trip = start_clears_trip
         self.running = False
         self.tripped = False
         self._prev = {"start": False, "stop": False, "reset": False}
@@ -96,7 +102,7 @@ class Scanner:
         healthy = self.bit("panel.estop")
         if self.latch_estop and not healthy:
             self.tripped = True
-        elif edges["reset"]:
+        elif edges["reset"] or (self.start_clears_trip and edges["start"]):
             self.tripped = False
 
         if self.tripped or edges["stop"]:

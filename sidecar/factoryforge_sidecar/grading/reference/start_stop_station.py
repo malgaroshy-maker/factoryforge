@@ -17,10 +17,12 @@ SCENE = "start-stop-station"
 
 # --- start / stop station references ------------------------------------
 
-async def _ss_body(bus, stop, latch_estop: bool, stop_at_target: bool) -> None:
-    """One implementation, three behaviours, so the two wrong ones differ from
+async def _ss_body(bus, stop, latch_estop: bool, stop_at_target: bool,
+                   start_clears_trip: bool = False) -> None:
+    """One implementation, four behaviours, so the wrong ones differ from
     the right one in exactly one place and nothing else."""
-    scanner = Scanner(bus, latch_estop=latch_estop)
+    scanner = Scanner(bus, latch_estop=latch_estop,
+                      start_clears_trip=start_clears_trip)
     state = {"made": 0, "present": False, "feed": 0.0, "emit": False}
 
     async def body(dt: float) -> None:
@@ -70,5 +72,13 @@ async def _ss_runon(bus, stop):
     await _ss_body(bus, stop, latch_estop=True, stop_at_target=False)
 
 
+async def _ss_startalone(bus, stop):
+    """Stops on the mushroom and latches it, but lets Start alone clear the
+    latch once the mushroom is out. Until IP-35 this passed: the station
+    ended its trip on any Start after the strike, Reset or no Reset."""
+    await _ss_body(bus, stop, latch_estop=True, stop_at_target=True,
+                   start_clears_trip=True)
+
+
 REFERENCES = {"good": _ss_good, "noestop": _ss_noestop,
-              "runon": _ss_runon}
+              "runon": _ss_runon, "startalone": _ss_startalone}

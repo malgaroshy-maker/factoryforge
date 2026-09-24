@@ -230,8 +230,8 @@ reads and the fake it shuts.
 
 | scene | the fact that decides the mark | how a program would fake it, and what stops that |
 |---|---|---|
-| `sorting-by-height` | which lane each carton ended in, against the height the scene gave it | pushing every second carton — the feed is shuffled pairs |
-| `start-stop-station` | cartons that broke the eye between the Start press and the line stopping itself; millimetres of belt that moved while tripped | running for about the right length of time — the batch size is drawn from the seed and set twice |
+| `sorting-by-height` | which lane each carton ended in, against the height the scene gave it; millimetres of belt that moved before Start, after the mushroom, and between its release and Reset-then-Start | pushing every second carton — the feed is shuffled pairs |
+| `start-stop-station` | cartons that broke the eye between the Start press and the line stopping itself; millimetres of belt that moved while tripped, which lasts until Reset and then Start | running for about the right length of time — the batch size is drawn from the seed and set twice |
 | `tank-level-control` | the level trace: settled error, ripple and overshoot | "it reached the setpoint", true of float switches and of a valve slammed open — ripple and overshoot grade those, and the pot moves to a second level |
 | `light-curtain-sorting` | each carton's measured height and the lane it ended in, against the rule in force when it was measured | a threshold written into the program — the pot is set twice, and the feed is eight shuffled heights rather than two |
 | `roller-line-weighing` | each carton's true mass, whether it was weighed alone, and whether the program flagged it | rejecting on the inductive sensor — the limit moves below a tall cardboard carton, where metal and heavy stop agreeing |
@@ -289,6 +289,45 @@ out by measuring — the encoder counting slower, the flow meter reading less,
 the axis taking longer to arrive — which is exactly the difference between a
 program written on feedback and one written on a stopwatch. A rubric that never
 moved anything would mark both the same.
+
+The operator panel is pressed the way a click presses it in the engine: each
+button is held closed for 0.2 s, and then stays open at least as long before
+the next press on it can close it again (`Panel.PRESS`, which is
+`ButtonPanel.DefaultPressHold`, IP-34). Until IP-34 the examiner held 0.15 s,
+against a click the engine had since raised to 0.2 s (IP-31).
+
+**The operator contract, as belt travel.** Three scenes mark what the panel's buttons do to a belt: the start / stop
+station, the sorting line and the guarded cell (which marks it on its motor
+contactor instead). The first two share one ledger, `plant.TripLedger`, ticked
+with the metres the belt really moved. It splits a trip into the time the
+mushroom is in and the time after its release until a Reset edge and then a
+Start edge. It also records every time the belt began to move with no Start
+edge since it last stopped.
+
+The sorting line's examiner presses Start at 1 s. From 16 s it strikes the
+mushroom, releases it 2 s later, presses Start alone at 3 s, Reset at 4.5 s
+and Start at 6 s, all timed from the strike. The strike waits, for up to 4 s,
+until the belt is running and no tall carton is between the high beam and the
+pusher. The brief allows a push timed on a clock after the beam, and a strike
+that stopped such a carton in front of the plate would fail a correct program
+for a carton the E-stop stranded. Without the wait, `good` fails
+`sort.tall_diverted` on 21 of seeds 1–40; with it, it passes all 40. Four
+checks:
+
+* `line.started_by_start`: the belt never began to move without a Start
+  edge since it last stopped. It catches a line that runs from power-up.
+* `estop.stopped_the_belt`: at most 200 ms of belt (100 mm) after the strike,
+  on a belt that was running when it came.
+* `estop.latched_until_reset`: no belt at all between the release and Reset
+  followed by Start. It catches a restart on the release, on Start alone and
+  on Reset alone.
+* `estop.restarted_after_reset`: the belt runs again within 1 s of that Start.
+
+A window too short for the whole sheet, about 27 s, fails the last two rather
+than passing them unexamined. The start / stop station keeps its single
+`estop.stopped_the_belt` over both phases. Until IP-35 its trip ended on any
+Start after the strike, so a station that restarted on Start alone passed
+with 5 mm of belt, all of it the stop lag. It now fails with 1745 mm.
 
 Everything else the exam changes, it changes the way the engine would. The
 gate is the case worth spelling out. Its leaves have solenoid locks
@@ -480,7 +519,10 @@ scene's own 60 s window. Neither is thirteen.
 |---|---|---|
 | `sorting-by-height` | `blind` | pushes on a timer — misrouted cartons |
 | | `greedy` | plate held out — short cartons in the chute |
-| `start-stop-station` | `noestop` | 1500 mm of belt through a struck mushroom, where 100 mm is the limit |
+| | `nostart` | runs whenever the mushroom is out: the belt starts at 0.01 s with nobody having pressed Start, and again at 18.21 s when the mushroom is released |
+| | `startalone` | the Start pressed at 20.17 s with no Reset restarts the line: 1480 mm of belt while the trip was latched |
+| `start-stop-station` | `noestop` | 3245 mm of belt through a struck mushroom and its latch, where 100 mm is the limit |
+| | `startalone` | 1745 mm of belt after Start alone cleared the latch, where 100 mm is the limit |
 | | `runon` | makes 21 cartons against a pot of 5 |
 | `tank-level-control` | `bangbang` | a pair of float switches parks 5.7 % and then 5.5 % off |
 | | `fixedsp` | holds 70 % while the pot says 22 |
@@ -652,12 +694,13 @@ declared so the tag list matches the scene a student is handed; no exam script
 raises one. `tools/try_scene.py` exercises all of them against the real engine
 and is the right place to look for how each check should be written.
 
-**The operator panel is graded on two scenes out of ten.** Every model has a
-panel and the grader presses its buttons, but only `start-stop-station` and
-`guarded-cell` mark the operator contract itself — the latching trip, Start
-that will not clear it, the relay that starts nothing. On the other eight the
-panel is how the exam turns the pot and starts the line, and a program that
-ignored Stop entirely would still pass them. `tools/try_scene.py` checks the
+**The operator panel is graded on three scenes out of ten.** Every model has
+a panel and the grader presses its buttons, but only `start-stop-station`,
+`sorting-by-height` (since IP-35) and `guarded-cell` mark the operator
+contract itself — the latching trip, Start that will not clear it, the relay
+that starts nothing. On the other seven the panel is how the exam turns the pot and
+starts the line, and a program that ignored Stop entirely would still pass
+them. `tools/try_scene.py` checks the
 full contract on all ten.
 
 **One window is a sample, not a proof.** The windows run 60–80 seconds, which
