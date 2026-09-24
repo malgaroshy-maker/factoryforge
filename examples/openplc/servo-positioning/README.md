@@ -95,9 +95,10 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
   compiles the helpers with OpenPLC's own matiec and checks them against two
   million bit patterns.
 - **Anything polled can be missed if it is short.** OpenPLC's master reads
-  every 50 ms. A button press in the 3D scene is one physics tick (about 17 ms)
-  on the tag bus, so a click can fall between two polls; the grader holds each
-  press for 0.15 s. The same goes the other way: hold an output you want the
-  scene to see for well over one polling period.
+  every 50 ms. A button click in the 3D scene holds its tag for 0.2 s (the
+  panel's Press Hold setting) and then leaves it off for at least as long, so
+  every click is read several times: act on its rising edge, not its level.
+  The grader holds each press for 0.15 s. The same goes the other way: hold an
+  output you want the scene to see for well over one polling period.
 - **An output you never write is FALSE.** The master rewrites the whole coil
   block on every poll, including coils your program does not touch.
