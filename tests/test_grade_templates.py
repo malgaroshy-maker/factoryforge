@@ -55,7 +55,7 @@ from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E40
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, air_receiver as ar, batch_dosing as bd, cooling_tunnel as ct,
     guarded_cell as gc,
-    light_curtain_sorting as lc, pick_and_place_cell as pp,
+    light_curtain_sorting as lc, pick_and_place_cell as pp, pivot_divert as pv,
     press_station as ps, roller_line_weighing as rw, rotary_index as ri, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
 
@@ -306,6 +306,8 @@ CSHARP_MIRRORS = [
     (ps.PS_STANDARD_BELT_WIDTH, "Parts/PartLayout.cs", r"StandardBeltWidth = ([\d.]+)f"),
     (ri.RI_LIMIT_BAND, "Parts/TurnTable.cs", r"IsHome => _angle <= ([\d.]+)f"),
     (ri.RI_LIMIT_BAND, "Parts/TurnTable.cs", r"IsAtIndex => _angle >= IndexAngle - ([\d.]+)f"),
+    (pv.PD_LIMIT_BAND, "Parts/PivotDiverter.cs", r"IsDiverted => _angle >= DivertAngle - ([\d.]+)f"),
+    (pv.PD_LIMIT_BAND, "Parts/PivotDiverter.cs", r"IsHome => _angle <= ([\d.]+)f"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
@@ -571,6 +573,9 @@ EXAM_NOT_ENGINE = {
                             "the template's emitter makes every third steel and "
                             "alternates heights, which need not produce the "
                             "carton the two instruments disagree about",
+    "pivot-divert": "feeds tall and short two of each, shuffled in blocks; the "
+                    "template's emitter alternates, so diverting every second "
+                    "carton would pass without reading an eye",
 }
 
 
@@ -822,6 +827,60 @@ def test_the_deck_turns_its_carton_and_the_pusher_sweeps_it_to_the_remover():
     assert not sim.tags.value("deck_eye.detect")
     _step(sim, 5.0, {"table.index": True, "pusher.retract": True, "outfeed.rotate": True})
     assert sim.tags.value("done.count") == 1 and sim.turned_under_the_plate == 0.0
+
+
+def _pd_carton(tall: bool, blade: str, seconds: float = 14.0):
+    """One carton through the pivot-divert model at the rated speed.
+
+    `blade` is when `gate.divert` is on: "held" (from the drop to the end),
+    "early_home" (from the drop until the carton is 0.5 m short of where it
+    is off the belt), "late" (from the moment it passes the post) or "never".
+    Returns its ledger entry."""
+    sim = _quiet(pv.PivotDivertScene(1))
+    sim.feed = [tall]
+    _step(sim, 0.05, {"belt.rotate": True, "emitter.emit": True})
+    item_id = 1
+    off = pv.PD_RELEASE[tall] - 0.5
+    for _ in range(int(seconds / 0.01)):
+        record = sim.ledger[item_id]
+        position = next((i.position for i in sim.items if i.id == item_id), None)
+        divert = {"held": True, "never": False,
+                  "early_home": position is not None and position < off,
+                  "late": position is not None and position >= pv.PD_GATE_AT}[blade]
+        _step(sim, 0.01, {"belt.rotate": True, "gate.divert": divert})
+        if record["lane"] is not None:
+            break
+    return sim.ledger[item_id]
+
+
+def test_the_pivot_diverter_turns_a_carton_only_if_it_is_across_first_and_held():
+    """The four things the blade can do to a carton, as measured in the
+    engine (IP-32; the offsets and how they were measured are in
+    `grading/scenes/pivot_divert.py`): across before it arrives and held --
+    the chute, cleanly; homed before the carton is off -- let go, the far
+    end; swung out as it passes the post -- the chute, by being hit; never
+    out -- the far end. And the eyes: the high beam sees only a tall one."""
+    held = _pd_carton(True, "held")
+    assert held["lane"] == "chute" and held["struck_at"] is None
+    assert held["blade_at_meet"] == pytest.approx(pv.PD_DIVERT_ANGLE)
+    early = _pd_carton(True, "early_home")
+    assert early["lane"] == "far" and early["released_at"] is not None
+    late = _pd_carton(False, "late")
+    assert late["lane"] == "chute" and late["struck_at"] is not None
+    assert _pd_carton(True, "never")["lane"] == "far"
+
+    sim = _quiet(pv.PivotDivertScene(1))
+    sim.feed = [False, True]
+    seen = {"entry_eye.detect": 0, "tall_eye.detect": 0}
+    for i in range(2):
+        _step(sim, 0.05, {"belt.rotate": True, "emitter.emit": True})
+        for _ in range(300):
+            _step(sim, 0.01, {"belt.rotate": True, "emitter.emit": False})
+            for tag in seen:
+                seen[tag] += bool(sim.tags.value(tag))
+        if i == 0:
+            assert seen["entry_eye.detect"] and not seen["tall_eye.detect"]
+    assert seen["tall_eye.detect"]
 
 
 def test_a_solenoid_valve_travels_and_a_seized_one_does_not():

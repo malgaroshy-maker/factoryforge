@@ -2029,6 +2029,98 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "pivot-divert": [
+      {
+        "id": "belt.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "belt.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "emitter.emit",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "entry_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "gate.divert",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "gate.diverted",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "gate.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "gate.home",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "short_count.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "tall_count.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "tall_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      }
     ]
   }
 }

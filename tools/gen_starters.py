@@ -218,6 +218,10 @@ _MEANINGS: dict[tuple[str, str], str] = {
     ("TurnTable", "atindex"): "deck square at its {index_angle} deg index; between the two neither is made",
     ("TurnTable", "fault"): "TRUE = the deck has seized where it is",
     ("RetroreflectiveSensor", "detect"): "TRUE while anything breaks the beam to the reflector",
+    ("PivotDiverter", "divert"): "swing the blade across the lane ({divert_angle} deg); FALSE parks it along the edge",
+    ("PivotDiverter", "diverted"): "blade fully across -- a carton meeting it now is turned, not hit",
+    ("PivotDiverter", "home"): "blade parked along the belt edge",
+    ("PivotDiverter", "fault"): "drive fault: TRUE = seized; the blade stays where it is, at neither limit mid-swing",
 }
 
 #: Tag-specific meanings where the part type alone says too little -- today only

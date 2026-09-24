@@ -898,6 +898,51 @@ def test_turning_the_deck_on_not_extended_turns_it_under_the_plate(tmp_path):
     assert any("`not extended` is" in line for line in report["feedback"])
 
 
+def test_the_pivot_diverter_passes_a_blade_held_until_the_chute_counts(tmp_path):
+    code, report = graded(tmp_path, "pivot-divert", "good", 75, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: cartons really went both ways, on both belt speeds.
+    assert evidence["chute"] >= 2 and evidence["far_end"] >= 2
+    assert evidence["judged_after_the_slowdown"] >= 2
+    assert evidence["belt_speed_then"] < evidence["belt_speed_first"]
+
+
+def test_a_blade_held_on_a_stopwatch_lets_cartons_go_once_the_belt_slows(tmp_path):
+    code, report = graded(tmp_path, "pivot-divert", "timed", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"divert.sorted"}
+    misrouted = report["evidence"]["misrouted"]
+    assert misrouted and all(m["tall"] and m["lane"] == "far" and m["released_at"] is not None
+                             and m["released_at"] >= 24.0 for m in misrouted)
+
+
+def test_a_blade_wired_to_the_eye_is_home_before_the_carton_arrives(tmp_path):
+    code, report = graded(tmp_path, "pivot-divert", "unlatched", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "divert.sorted" in failed_ids(report)
+    misrouted = report["evidence"]["misrouted"]
+    assert misrouted and all(m["tall"] and m["released_at"] is None for m in misrouted)
+    assert any("latch the decision" in line for line in report["feedback"])
+
+
+def test_a_blade_fired_like_a_pusher_hits_the_carton(tmp_path):
+    """Every carton still lands in the right lane -- the lesson is how."""
+    code, report = graded(tmp_path, "pivot-divert", "late", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"divert.blade_ready"}
+    assert report["evidence"]["struck"] and not report["evidence"]["misrouted"]
+
+
+def test_turning_every_second_carton_fails_the_shuffled_feed(tmp_path):
+    """Perfect against the template's own emitter, which alternates: the
+    reason the exam's feed is not the engine's (docs/GRADING.md)."""
+    code, report = graded(tmp_path, "pivot-divert", "everyother", 75, seed=5)
+    assert code == 1 and failed_ids(report) == {"divert.sorted"}
+    misrouted = report["evidence"]["misrouted"]
+    assert any(m["tall"] for m in misrouted) and any(not m["tall"] for m in misrouted)
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1194,6 +1239,10 @@ TABLE_NUMBERS = {
         str(len(e["skewed"])), f"{e['skewed'][0]['turned_deg']:.0f}",
         f"{e['index_speed_then']:g}"],
     ("rotary-index", "notretracted"): lambda e: [f"{e['turned_under_the_plate_deg']:.0f}"],
+    ("pivot-divert", "timed"): lambda e: [
+        str(len(e["misrouted"])), f"{e['belt_speed_then']:g}"],
+    ("pivot-divert", "late"): lambda e: [
+        str(len(e["struck"])), f"{e['belt_speed_first']:g}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

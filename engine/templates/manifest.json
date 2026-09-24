@@ -202,5 +202,17 @@
       "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · emitter.emit · table.index · table.athome · table.atindex · table.fault · pusher.extend · pusher.retract · pusher.extended · pusher.retracted · deck_eye.detect · outfeed.rotate · done.count · tower.green · tower.yellow · tower.red",
       "done": "Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made."
     }
+  },
+  {
+    "id": "pivot-divert",
+    "title": "Pivot diverter line",
+    "blurb": "A blade on a post that turns tall cartons off a running belt into a chute, without the line ever stopping. The blade has to be across before a carton reaches it and stay across until it has gone.",
+    "path": "res://templates/pivot_divert.json",
+    "scene": "pivot-divert",
+    "brief": {
+      "task": "Run the belt and emit a carton every panel.setpoint seconds. Two beams cross the belt at the same place: entry_eye, low, sees every carton, and tall_eye, high, sees only the tall ones. Every tall carton goes into the chute and every short one runs on to the end. Swing the blade across (gate.divert) as soon as tall_eye sees a tall carton, and hold it there until tall_count.count says the carton has arrived in the chute -- then home it for the short one behind. A turned carton slides along the blade, driven only by the belt under it: it is off the belt after about two metres of belt travel past the eyes, which at a slower belt takes longer.",
+      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · belt.rotate · belt.fault · emitter.emit · entry_eye.detect · tall_eye.detect · gate.divert · gate.diverted · gate.home · gate.fault · tall_count.count · short_count.count",
+      "done": "Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made."
+    }
   }
 ]

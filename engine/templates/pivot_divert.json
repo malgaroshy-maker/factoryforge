@@ -1,0 +1,69 @@
+{
+  "name": "pivot-divert",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "belt",
+      "type": "ConveyorBelt",
+      "position": [2.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "speed": "0.5", "friction": "0.8", "size_x": "4", "size_y": "0.12", "size_z": "0.5" }
+    },
+    {
+      "id": "emitter",
+      "type": "Emitter",
+      "position": [0.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "metal_every": "0" }
+    },
+    {
+      "id": "entry_eye",
+      "type": "RetroreflectiveSensor",
+      "position": [1.5, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "range": "1", "height": "0.05", "mode": "Retroreflective", "visual_only": "false" }
+    },
+    {
+      "id": "tall_eye",
+      "type": "RetroreflectiveSensor",
+      "position": [1.5, 0.5, -0.5],
+      "rotation": [0.0, 3.1415927, 0.0],
+      "properties": { "range": "1", "height": "0.2", "mode": "Retroreflective", "visual_only": "false" }
+    },
+    {
+      "id": "gate",
+      "type": "PivotDiverter",
+      "position": [2.5, 0.5, -0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "divert_angle": "45", "swing_speed": "220", "blade_length": "0.75" }
+    },
+    {
+      "id": "chute",
+      "type": "Chute",
+      "position": [3.0, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "incline": "30", "friction": "0.15", "ramp_width": "1.4", "lip_drop": "0.04" }
+    },
+    {
+      "id": "tall_count",
+      "type": "Remover",
+      "position": [3.0, 0.15, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "zone_x": "1.2", "zone_y": "0.4", "zone_z": "0.6" }
+    },
+    {
+      "id": "short_count",
+      "type": "Remover",
+      "position": [4.25, 0.3, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "zone_x": "0.5", "zone_y": "0.6", "zone_z": "0.6" }
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "4", "setpoint_max": "10", "setpoint_unit": "s", "setpoint": "6" }
+    }
+  ]
+}

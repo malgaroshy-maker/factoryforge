@@ -4,7 +4,9 @@
 plants rather than on the 3D engine. Verified on 2026-09-21: every scene's
 `good` controller passes and every scene's deliberately wrong one fails, each
 for that scene's own lesson. The six scenes IP-14 added on 2026-09-24 were
-verified the same way, in lockstep at seeds 11 and 5. **Nobody has graded a real student's program with
+verified the same way, in lockstep at seeds 11 and 5, and so was `pivot-divert`
+(IP-32), whose controllers were also run against the 3-D engine and agreed with
+the model carton for carton. **Nobody has graded a real student's program with
 any of them.** Those are two different claims and this file will say so until
 the second one is true.*
 
@@ -232,6 +234,7 @@ reads and the fake it shuts.
 | `air-receiver` | the receiver's true pressure in bar, against the band the pot sets; and the seconds from commanding a seized valve open to the alarm | scaling that is nearly right — the run raises the consumption and moves the pot — and a discrepancy check with no timer, which the first, healthy start shows up |
 | `press-station` | where the ram was each tick, against the selector's position and the two-hand relay's verdict at that tick | driving MANUAL on left AND right — the examiner ties one palm down and presses the other a second later — or an automatic cycle that runs whatever the selector says; the selector is turned to OFF and MAN mid-run |
 | `rotary-index` | the deck's angle when the pusher's plate met each carton, and whether the deck turned while the plate was out over it | pushing on a timer calibrated at the deck's rated speed — the run slows the deck to 40–60 % of it |
+| `pivot-divert` | which lane each carton ended in, against the height the scene gave it, and the blade's angle at the moment each carton reached it | holding the blade for as long as a carton took at the rated belt speed — the run slows the belt to 60 or 70 % of it; and diverting every second carton — the feed is shuffled |
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 
 Every scene also carries `controller.stayed_connected`,
@@ -265,6 +268,8 @@ something physical that no tag reports:
   press station
 * the **turntable's index speed** drops to 40, 50 or 60 % (from the seed), on
   the rotary index station
+* the **belt's speed** drops to 60 or 70 % (from the seed), on the pivot
+  diverter line, so a turned carton takes longer to slide off the blade
 * the **servo drive faults** mid-move, and the fault clears three seconds
   before anybody presses Reset, on the servo positioning scene
 
@@ -307,15 +312,18 @@ checkweigher from all four mass classes shuffled in blocks of four — the secon
 of those also guarantees that the carton the two instruments disagree about
 actually turns up, so a metal-sensing program cannot pass on a lucky draw.
 
-Those two feeds are the exam's, not the scene's. The emitters in
-`light-curtain-sorting` and `roller-line-weighing` alternate a short and a tall
-carton, and the checkweigher's makes every third one steel. `everyother` would
-pass the first, and the second need not produce the carton the rubric is
-about. Every other scene's feed is the engine's own: short, tall, short, tall,
-with every `metal_every`-th steel, which is also what decides the pick and
-place cell's barcode (101, 102 or 201, read off the carton).
-`tests/test_grade_templates.py` lists these two exceptions by name, and holds
-every position the models use to the template's.
+Those two feeds are the exam's, not the scene's, and so is the pivot diverter
+line's, which deals tall and short cartons two of each, shuffled in blocks. The
+emitters in `light-curtain-sorting`, `roller-line-weighing` and `pivot-divert`
+alternate a short and a tall carton, and the checkweigher's makes every third
+one steel. `everyother` would pass the first and the third, and the second need
+not produce the carton the rubric is about. The pivot diverter line's
+`everyother` shows it: run against the 3-D engine's own alternation it sorts
+every carton, and against the exam's shuffle it fails. Every other scene's feed
+is the engine's own: short, tall, short, tall, with every `metal_every`-th
+steel, which is also what decides the pick and place cell's barcode (101, 102
+or 201, read off the carton). `tests/test_grade_templates.py` lists these three
+exceptions by name, and holds every position the models use to the template's.
 
 The seed is chosen at random unless you give one, and it is in the report
 either way, so a disputed mark can be re-run exactly.
@@ -484,6 +492,10 @@ scene's own 60 s window. Neither is thirteen.
 | | `ignoresmode` | carries on cycling with the selector at OFF: 650 mm of down-stroke |
 | `rotary-index` | `timed` | pushes 4 cartons off at 75 deg once the deck is slowed to 33 deg/s |
 | | `notretracted` | turns the deck home on "not extended": 382 deg of turning with the plate out over the deck |
+| `pivot-divert` | `timed` | holds the blade on a stopwatch set at the rated belt, and once the belt is slowed to 0.35 m/s lets 3 tall cartons go on to the far end |
+| | `unlatched` | wires the blade to the eye, so it is home again before the tall carton gets there |
+| | `late` | swings the blade out as the carton reaches the post, as a pusher is fired: every carton lands in its lane, and 2 of them because the blade hit them at 0.5 m/s |
+| | `everyother` | turns every second carton and never reads the tall eye: right on the engine's alternating emitter, wrong on the exam's shuffle |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released
@@ -557,10 +569,21 @@ IP-14 added six more, each for parts no earlier scene used, and each with a
 rubric from the start: `star-delta-start`, `servo-positioning`,
 `cooling-tunnel`, `air-receiver`, `press-station` and `rotary-index`, which
 between them place every catalog part except two. `VerticalLift` waits for a
-second level (IP-15). `PivotDiverter` has no scene because it cannot divert:
-held at `divert`, its `diverted` tag reads true while its blade's collider stays
-parked (checked in the engine on 2026-09-24 with beams either side of the post
-and one only a parked blade can break), so a carton passes it untouched.
+second level (IP-15). `PivotDiverter` had no scene because it could not divert:
+held at `divert`, its `diverted` tag read true while its blade's collider stayed
+parked, so a carton passed it untouched. IP-32 fixed the part and added
+`pivot-divert`, graded like the rest.
+
+That scene's model is the one place a contact between two rigid bodies is
+reduced to four numbers. A turned carton slides along the blade, driven by the
+belt under it, so where it is on the blade scales with belt travel. The points
+where the blade must be across, where it strikes, and where letting go releases
+the carton were measured in the engine at two belt speeds rather than derived.
+`grading/scenes/pivot_divert.py` records how, and refuses a template that moves
+any part they depend on. Every reference controller was run against the 3-D
+engine at 0.5 and 0.35 m/s and landed each carton in the same lane as the
+model. That a late blade *strikes* the carton is read in the engine from how
+early the chute counts it, not seen directly.
 
 What "all ten" does *not* mean is that every scene is marked on everything its
 brief describes; see the next four paragraphs.
