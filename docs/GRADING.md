@@ -3,7 +3,8 @@
 *All ten shipped scenes, graded end to end, headless, on Python models of the
 plants rather than on the 3D engine. Verified on 2026-09-21: every scene's
 `good` controller passes and every scene's deliberately wrong one fails, each
-for that scene's own lesson. **Nobody has graded a real student's program with
+for that scene's own lesson. The six scenes IP-14 added on 2026-09-24 were
+verified the same way, in lockstep at seeds 11 and 5. **Nobody has graded a real student's program with
 any of them.** Those are two different claims and this file will say so until
 the second one is true.*
 
@@ -230,6 +231,7 @@ reads and the fake it shuts.
 | `cooling-tunnel` | the temperature trace, the seconds the product took to reach a dropped setpoint, and the overlap of heater power and delivered airflow | holding every setpoint on the heater alone, or with the fan left running under it — the recipe drops 60 C or more, which the room alone takes 15 s and more to take away |
 | `air-receiver` | the receiver's true pressure in bar, against the band the pot sets; and the seconds from commanding a seized valve open to the alarm | scaling that is nearly right — the run raises the consumption and moves the pot — and a discrepancy check with no timer, which the first, healthy start shows up |
 | `press-station` | where the ram was each tick, against the selector's position and the two-hand relay's verdict at that tick | driving MANUAL on left AND right — the examiner ties one palm down and presses the other a second later — or an automatic cycle that runs whatever the selector says; the selector is turned to OFF and MAN mid-run |
+| `rotary-index` | the deck's angle when the pusher's plate met each carton, and whether the deck turned while the plate was out over it | pushing on a timer calibrated at the deck's rated speed — the run slows the deck to 40–60 % of it |
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 
 Every scene also carries `controller.stayed_connected`,
@@ -261,6 +263,8 @@ something physical that no tag reports:
 * the **mode selector** is turned from AUTO to OFF mid-cycle and then to MAN,
   and the **two-hand station** is worked a tied-down palm at a time, on the
   press station
+* the **turntable's index speed** drops to 40, 50 or 60 % (from the seed), on
+  the rotary index station
 * the **servo drive faults** mid-move, and the fault clears three seconds
   before anybody presses Reset, on the servo positioning scene
 
@@ -478,6 +482,8 @@ scene's own 60 s window. Neither is thirteen.
 | | `impatient` | alarms on "commanded and not opened" with no timer, at 1.01 s, while a healthy valve is still travelling |
 | `press-station` | `andhands` | moves the ram 250 mm on a tied-down palm, because left AND right read true while the relay's permissive did not |
 | | `ignoresmode` | carries on cycling with the selector at OFF: 650 mm of down-stroke |
+| `rotary-index` | `timed` | pushes 4 cartons off at 75 deg once the deck is slowed to 33 deg/s |
+| | `notretracted` | turns the deck home on "not extended": 382 deg of turning with the plate out over the deck |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released
@@ -547,6 +553,15 @@ written and **has no rubric**. It needs a plant model with an articulated arm
 and a pallet station, which is more machine than any of the ten here, and
 nothing about the machinery below stops somebody writing it.
 
+IP-14 added six more, each for parts no earlier scene used, and each with a
+rubric from the start: `star-delta-start`, `servo-positioning`,
+`cooling-tunnel`, `air-receiver`, `press-station` and `rotary-index`, which
+between them place every catalog part except two. `VerticalLift` waits for a
+second level (IP-15). `PivotDiverter` has no scene because it cannot divert:
+held at `divert`, its `diverted` tag reads true while its blade's collider stays
+parked (checked in the engine on 2026-09-24 with beams either side of the post
+and one only a parked blade can break), so a carton passes it untouched.
+
 What "all ten" does *not* mean is that every scene is marked on everything its
 brief describes; see the next four paragraphs.
 
@@ -577,7 +592,11 @@ relay is not passing. The behaviour a student sees is identical and the
 mechanism is not, and if the engine ever changes what forcing means for those
 parts, this is where the two will part company.
 
-**Fault injection is not graded.** Every one of these scenes has a fault tag —
+**Fault injection is graded on two scenes, and not on the ten.** The servo
+positioning scene faults its drive mid-move and marks what the program does
+until the operator's Reset, and the air receiver seizes its isolation valve and
+marks the alarm. The ten this section was written about are unchanged: every
+one of them has a fault tag —
 `tank.fault`, `oven.fault`, `pump.fault`, `stop.fault`, `gantry.fault` — and
 half the briefs end on it: a seized valve keeps its opening while your command
 reads zero, a failed element cools while the heater output reads 100 %, a dead
@@ -602,7 +621,10 @@ pass one run and fail the next. Run it more than once with different seeds
 before a mark is final; the seed is in the report so you can say which runs you
 used.
 
-**Two scenes mark an output rather than a plant fact, and cannot do otherwise.**
+**Three scenes mark an output rather than a plant fact, and cannot do otherwise.**
+The air receiver's valve checks are an alarm lamp (`alarm.beacon`) timed
+against a valve the plant seized: in the engine the isolation valve feeds
+nothing, so there is no consequence to read instead.
 The checkweigher's reject decision is a lamp (`panel.red`) and the guarded
 cell's "never wrote `belt.rotate`" is a fact about the wire. There is no
 physical consequence in either scene to read instead — the line has no reject
@@ -644,7 +666,7 @@ still have to be written by hand, and so does this file's table.
 
 * `tools/grade.py` — the command, a shim over `factoryforge_sidecar.grading`
 * `sidecar/factoryforge_sidecar/grading/` — the tool: `core.py` runs it,
-  `scenes/` holds the ten plant models with their rubrics, and `reference/`
+  `scenes/` holds the plant models with their rubrics, and `reference/`
   holds their reference controllers
 * `tests/test_grade.py` — what is claimed above, asserted
 * `tools/try_scene.py` — the other side of the same seam: drives a scene

@@ -190,5 +190,17 @@
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · mode.position · hands.left · hands.right · hands.valid · ram.extend · ram.retract · ram.extended · ram.retracted · bdc.no · bdc.nc · tower.green · tower.yellow · tower.red",
       "done": "In AUTO the press cycles on its own; turn the selector to OFF mid-stroke and the ram goes straight back up, and does not come down again until AUTO and Start. In MAN a click on both palms together strokes it; click one, wait a second and click the other, and hands.left and hands.right both read true while hands.valid does not -- the ram must not move, because that is what a taped-down button looks like. Take your hands off mid-stroke (a single click holds for two seconds, less than a stroke) and the ram comes back up."
     }
+  },
+  {
+    "id": "rotary-index",
+    "title": "Rotary index station",
+    "blurb": "A turntable that turns each carton a quarter and a cylinder that sweeps it off onto the outfeed. Two motions in one space, each of which has to finish before the other starts.",
+    "path": "res://templates/rotary_index.json",
+    "scene": "rotary-index",
+    "brief": {
+      "task": "With the deck home, the rod back and deck_eye clear, drop a carton on the deck (emitter.emit), let it settle for the pot's seconds, and turn the deck a quarter (table.index). When table.atindex is made, sweep the carton onto the running outfeed with the cylinder -- two coils, two reeds -- and only once pusher.retracted is made turn the deck home again. The deck has no rollers: the only way on is the emitter and the only way off is the pusher.",
+      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · emitter.emit · table.index · table.athome · table.atindex · table.fault · pusher.extend · pusher.retract · pusher.extended · pusher.retracted · deck_eye.detect · outfeed.rotate · done.count · tower.green · tower.yellow · tower.red",
+      "done": "Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made."
+    }
   }
 ]

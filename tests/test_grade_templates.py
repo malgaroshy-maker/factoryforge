@@ -56,7 +56,7 @@ from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, air_receiver as ar, batch_dosing as bd, cooling_tunnel as ct,
     guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
-    press_station as ps, roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
+    press_station as ps, roller_line_weighing as rw, rotary_index as ri, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
 
 TEMPLATES = ROOT / "engine" / "templates"
@@ -304,6 +304,8 @@ CSHARP_MIRRORS = [
     (ps.PS_SHAFT - ps.PS_STANDARD_BELT_WIDTH / 2, "Parts/LimitSwitch.cs",
      r"ShaftZ = PartLayout\.StandardBeltWidth / 2\.0f \+ ([\d.]+)f"),
     (ps.PS_STANDARD_BELT_WIDTH, "Parts/PartLayout.cs", r"StandardBeltWidth = ([\d.]+)f"),
+    (ri.RI_LIMIT_BAND, "Parts/TurnTable.cs", r"IsHome => _angle <= ([\d.]+)f"),
+    (ri.RI_LIMIT_BAND, "Parts/TurnTable.cs", r"IsAtIndex => _angle >= IndexAngle - ([\d.]+)f"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
@@ -797,6 +799,29 @@ def test_the_bottom_dead_centre_switch_trips_near_the_end_of_the_stroke():
             break
     assert released is not None and released < ps.PS_TRIP_AT
     assert sim.tags.value("bdc.nc")
+
+
+def test_the_deck_turns_its_carton_and_the_pusher_sweeps_it_to_the_remover():
+    """`TurnTable.UpdateIndex` at the template's rate, the plate meeting a
+    carton at the deck's centre, the outfeed carrying it to where the
+    remover takes it -- and the retroreflective beam across the deck's centre
+    seeing it until it is swept off. The rotations the model checks are the
+    radians the engine reads (`SceneEditor.SceneFiles`), not degrees."""
+    assert ri._turned(_t("rotary-index").part("outfeed", "ConveyorBelt"), -math.pi / 2)
+    sim = _quiet(ri.RotaryIndexScene(1))
+    _step(sim, 0.1, {"emitter.emit": True, "outfeed.rotate": True})
+    _step(sim, 0.5, {"outfeed.rotate": True})
+    assert sim.tags.value("deck_eye.detect") and sim.tags.value("table.athome")
+    quarter = ri.RI_INDEX / ri.RI_SPEED_FIRST
+    _step(sim, quarter + 0.05, {"table.index": True, "outfeed.rotate": True})
+    assert sim.tags.value("table.atindex") and not sim.tags.value("table.athome")
+    _step(sim, ri.RI_STROKE / ri.RI_ROD_SPEED + 0.1,
+          {"table.index": True, "pusher.extend": True, "outfeed.rotate": True})
+    record = sim.ledger[1]
+    assert record["deck_at_push"] == pytest.approx(ri.RI_INDEX)
+    assert not sim.tags.value("deck_eye.detect")
+    _step(sim, 5.0, {"table.index": True, "pusher.retract": True, "outfeed.rotate": True})
+    assert sim.tags.value("done.count") == 1 and sim.turned_under_the_plate == 0.0
 
 
 def test_a_solenoid_valve_travels_and_a_seized_one_does_not():

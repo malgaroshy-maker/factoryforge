@@ -1907,6 +1907,128 @@
         "type": "bit",
         "kind": "output"
       }
+    ],
+    "rotary-index": [
+      {
+        "id": "deck_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "done.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "emitter.emit",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "outfeed.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "outfeed.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pusher.extend",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pusher.extended",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pusher.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "pusher.retract",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "pusher.retracted",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "table.athome",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "table.atindex",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "table.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "table.index",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

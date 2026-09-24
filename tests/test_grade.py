@@ -874,6 +874,30 @@ def test_a_cycle_that_ignores_the_selector_fails_off_and_manual(tmp_path):
     assert failed_ids(report) == {"mode.off_is_off", "mode.manual_needs_both_hands"}
 
 
+def test_the_rotary_index_passes_a_cycle_interlocked_on_its_switches(tmp_path):
+    code, report = graded(tmp_path, "rotary-index", "good", 60, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: cartons really crossed the deck, on both deck speeds.
+    assert evidence["delivered"] >= 4 and evidence["pushed_after_the_slowdown"] >= 1
+    assert evidence["index_speed_then"] < evidence["index_speed_first"]
+
+
+def test_a_push_timed_on_the_rated_index_meets_a_slowed_deck_half_round(tmp_path):
+    code, report = graded(tmp_path, "rotary-index", "timed", 60, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert "index.turned_square" in failed_ids(report)
+    skewed = report["evidence"]["skewed"]
+    assert skewed and all(s["at"] >= 24.0 and 30.0 < s["turned_deg"] < 88.0 for s in skewed)
+
+
+def test_turning_the_deck_on_not_extended_turns_it_under_the_plate(tmp_path):
+    code, report = graded(tmp_path, "rotary-index", "notretracted", 60, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"index.plate_clear_while_turning"}
+    assert any("`not extended` is" in line for line in report["feedback"])
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1166,6 +1190,10 @@ TABLE_NUMBERS = {
     ("air-receiver", "impatient"): lambda e: [f"{e['false_alarms_at'][0]:.2f}"],
     ("press-station", "andhands"): lambda e: [f"{e['tie_down_travel_m'] * 1000:.0f}"],
     ("press-station", "ignoresmode"): lambda e: [f"{e['off_travel_m'] * 1000:.0f}"],
+    ("rotary-index", "timed"): lambda e: [
+        str(len(e["skewed"])), f"{e['skewed'][0]['turned_deg']:.0f}",
+        f"{e['index_speed_then']:g}"],
+    ("rotary-index", "notretracted"): lambda e: [f"{e['turned_under_the_plate_deg']:.0f}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of
