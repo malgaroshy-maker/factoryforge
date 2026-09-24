@@ -90,8 +90,26 @@ public partial class NewPartsSelfTest : Node
             if (Bit("barcodescanner.read")) { _sawReadPulse = true; _readHighTicks++; }
             return;
         }
-        if (_step != 12 || _done) return;
-        _done = true;
+        if (_step > 12)
+        {
+            // The diverter's physical half, on real ticks: a blade that only
+            // turns in the node tree deflects nothing, and the hand-turned
+            // clock above cannot tell the difference.
+            if (_done) return;
+            try
+            {
+                if (!StepDiverterRig()) return;
+            }
+            catch (System.Exception ex)
+            {
+                _failures.Add(ex.Message);
+                GD.PrintErr($"  FAIL  threw: {ex.GetType().Name}: {ex.Message}");
+            }
+            _done = true;
+            Report();
+            return;
+        }
+        if (_step != 12) return;
 
         try
         {
@@ -114,7 +132,10 @@ public partial class NewPartsSelfTest : Node
             _failures.Add(ex.Message);
             GD.PrintErr($"  FAIL  threw: {ex.GetType().Name}: {ex.Message}");
         }
+    }
 
+    private void Report()
+    {
         if (_failures.Count == 0)
         {
             GD.Print("self-test newparts: PASS");
@@ -147,6 +168,42 @@ public partial class NewPartsSelfTest : Node
                 Rotation = new[] { 0.0f, 0.0f, 0.0f },
             });
         }
+
+        // The diverter rig, well clear of the row above, laid out the way the
+        // light-curtain cell lays out its pusher: a running belt, the diverter
+        // one grid cell off its centre line on the near side, and a chute one
+        // cell off on the far side. The diverter takes every default -- this is
+        // the part as the palette places it, not one tuned to pass.
+        data.Parts.Add(new PartInstanceData
+        {
+            Id = "dvbelt", Type = "ConveyorBelt",
+            Position = new[] { 0.0f, PartLayout.WorkPlaneY, RigZ },
+            Rotation = new[] { 0.0f, 0.0f, 0.0f },
+            Properties = new Dictionary<string, string>
+            {
+                ["size_x"] = "3", ["size_y"] = "0.12", ["size_z"] = "0.5", ["speed"] = "0.5",
+            },
+        });
+        data.Parts.Add(new PartInstanceData
+        {
+            Id = "dv", Type = "PivotDiverter",
+            Position = new[] { RigPivotX, PartLayout.WorkPlaneY, RigZ - 0.5f },
+            Rotation = new[] { 0.0f, 0.0f, 0.0f },
+        });
+        // Wide, because a turned carton leaves the belt moving downstream as
+        // well as across. And with its lip dropped: at the chute's default
+        // 0.015 m it is the slab's *centre line* that sits below the belt, and a
+        // 0.04 m slab tilted 30° brings its top edge up to 2 mm *above* the belt
+        // surface. A pusher's shove climbs that; a carton that only the belt's
+        // friction moves along the blade stops dead against it, square on the
+        // lip, which this rig first misread as the diverter failing.
+        data.Parts.Add(new PartInstanceData
+        {
+            Id = "dvchute", Type = "Chute",
+            Position = new[] { RigPivotX + 0.5f, PartLayout.WorkPlaneY, RigZ + 0.5f },
+            Rotation = new[] { 0.0f, 0.0f, 0.0f },
+            Properties = new Dictionary<string, string> { ["ramp_width"] = "1.4", ["lip_drop"] = "0.04" },
+        });
 
         const string path = "user://selftest_newparts.json";
         using (var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write))
@@ -213,6 +270,140 @@ public partial class NewPartsSelfTest : Node
 
         Run(240);
         Expect(Bit($"{id}.home"), "clearing the fault lets the diverter finish going home");
+    }
+
+    // ---------- IP-32: the blade has to turn cartons, not just report it
+
+    /// <summary>The rig's lane centre, and the diverter's x along it. The belt
+    /// runs +X from x = -1.5 to 1.5; the diverter's post is just off its near
+    /// edge (z ≈ RigZ - 0.26), the blade parked downstream along that edge,
+    /// and it sweeps across towards the far one.</summary>
+    private const float RigZ = 5.0f;
+    private const float RigPivotX = 0.0f;
+
+    /// <summary>The belt's far edge. A carton whose centre is well past this
+    /// has left the lane.</summary>
+    private const float RigFarEdge = RigZ + 0.25f;
+
+    /// <summary>Where the parked blade ends (pivot + the default blade
+    /// length). A carton past this has gone by the diverter.</summary>
+    private const float RigBladeEnd = RigPivotX + PivotDiverter.DefaultBladeLength;
+
+    private const int RigTimeout = 480;
+
+    private int _rigPhase;
+    private int _rigTicks;
+    private BoxPhysics? _rigBox;
+    private float _rigMinZ, _rigMaxZ;
+
+    private BoxPhysics DropRigCarton(bool tall)
+    {
+        var box = new BoxPhysics { IsTall = tall };
+        Editor.GetParent().AddChild(box);
+        box.GlobalPosition = new Vector3(-1.2f, PartLayout.WorkPlaneY + PartLayout.BeltSurface + box.Height / 2.0f + 0.02f, RigZ);
+        _rigMinZ = _rigMaxZ = RigZ;
+        _rigTicks = 0;
+        return box;
+    }
+
+    private static string Where(Node3D n) =>
+        $"({n.GlobalPosition.X:0.00}, {n.GlobalPosition.Y:0.00}, {n.GlobalPosition.Z:0.00})";
+
+    /// <summary>
+    /// One real tick of the diverter rig. Returns true when it is finished.
+    ///
+    /// Phase 1, home: a carton rides the whole lane past the parked blade and
+    /// is not turned. Phase 2: the blade swings across and the collider — the
+    /// physics server's body, not the drawn node — has to be at the divert
+    /// angle. Phase 3 and 4, divert: a short and then a tall carton are turned
+    /// off the near edge onto the chute, with the belt running throughout.
+    /// </summary>
+    private bool StepDiverterRig()
+    {
+        var dv = Part<PivotDiverter>("dv");
+        _rigTicks++;
+
+        switch (_rigPhase)
+        {
+            case 0:
+                Tags.Set("dvbelt.rotate", true);
+                Tags.Set("dv.divert", false);
+                _rigBox = DropRigCarton(tall: false);
+                _rigPhase = 1;
+                return false;
+
+            case 1:
+            {
+                var box = _rigBox!;
+                _rigMinZ = Mathf.Min(_rigMinZ, box.GlobalPosition.Z);
+                _rigMaxZ = Mathf.Max(_rigMaxZ, box.GlobalPosition.Z);
+                if (box.GlobalPosition.X < RigBladeEnd + 0.05f && _rigTicks < RigTimeout) return false;
+
+                GD.Print($"  rig home: carton at {Where(box)} after {_rigTicks} ticks, z in [{_rigMinZ:0.00}, {_rigMaxZ:0.00}]");
+                Expect(box.GlobalPosition.X >= RigBladeEnd + 0.05f,
+                       $"at `home` a carton rides past the parked diverter (at {Where(box)} after {_rigTicks} ticks)");
+                Expect(_rigMinZ > RigZ - 0.08f && _rigMaxZ < RigZ + 0.08f,
+                       $"and goes straight by it: z stayed in [{_rigMinZ:0.00}, {_rigMaxZ:0.00}] about the lane centre {RigZ:0.00}");
+                Expect(Mathf.Abs(dv.BladeColliderAngle) < 1.0f,
+                       $"the parked blade's collider is parked (at {dv.BladeColliderAngle:0.0}°)");
+                box.QueueFree();
+                _rigBox = null;
+
+                Tags.Set("dv.divert", true);
+                _rigTicks = 0;
+                _rigPhase = 2;
+                return false;
+            }
+
+            case 2:
+                if (!Bit("dv.diverted") || _rigTicks < 30) return _rigTicks > RigTimeout && Fail("the rig diverter never reported `diverted`");
+                // The reported angle and the collider's must agree. This is
+                // the check IP-32 was missing: the part said `diverted` while
+                // its collider was still parked along the edge.
+                GD.Print($"  rig divert: reported {dv.Angle:0.0}°, collider {dv.BladeColliderAngle:0.0}°, "
+                         + $"collider origin {dv.BladeColliderLocal.Origin}");
+                Expect(Mathf.Abs(dv.BladeColliderAngle - dv.DivertAngle) < 1.0f,
+                       $"with `diverted` made, the blade's collider is across the lane at {dv.DivertAngle:0}° "
+                       + $"(it is at {dv.BladeColliderAngle:0.0}°; the drawn blade is at {dv.Angle:0.0}°)");
+                _rigBox = DropRigCarton(tall: false);
+                _rigPhase = 3;
+                return false;
+
+            case 3:
+            case 4:
+            {
+                var box = _rigBox!;
+                string what = _rigPhase == 3 ? "short" : "tall";
+                if (_rigTicks % 60 == 0)
+                    GD.Print($"  rig {what}: t={_rigTicks} at {Where(box)} yaw={Mathf.RadToDeg(box.GlobalRotation.Y):0.0}");
+                bool off = box.GlobalPosition.Z > RigFarEdge + 0.1f;
+                if (!off && _rigTicks < RigTimeout) return false;
+
+                GD.Print($"  rig {what}: {(off ? "diverted" : "NOT diverted")} at {Where(box)} after {_rigTicks} ticks");
+                Expect(off,
+                       $"at `divert` a {what} carton on the running belt is turned off the far edge "
+                       + $"(z > {RigFarEdge + 0.1f:0.00}); it is at {Where(box)} after {_rigTicks} ticks");
+                Expect(!off || box.GlobalPosition.X < RigBladeEnd + 0.4f,
+                       $"and it is turned at the blade, not somewhere past it (at {Where(box)})");
+                box.QueueFree();
+                if (_rigPhase == 3)
+                {
+                    _rigBox = DropRigCarton(tall: true);
+                    _rigPhase = 4;
+                    return false;
+                }
+                Tags.Set("dvbelt.rotate", false);
+                Tags.Set("dv.divert", false);
+                return true;
+            }
+        }
+        return true;
+    }
+
+    private bool Fail(string what)
+    {
+        Expect(false, what);
+        return true;
     }
 
     private void CheckGantry()

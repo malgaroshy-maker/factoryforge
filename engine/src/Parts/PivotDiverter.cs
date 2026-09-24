@@ -13,9 +13,19 @@ namespace FactoryForge.Parts;
 /// before the next one does, so the two limit switches are the whole exercise
 /// rather than a formality.
 ///
-/// Local space follows the pusher's convention: the origin is the mounting
-/// point at the near edge of the belt, the post stands there, and the blade
-/// sweeps from parked (along the lane, in -X) out across the lane.
+/// Local space follows the pusher's convention: the machine stands on the near
+/// side of the belt and the lane lies in +Z. The origin is a grid point one
+/// cell off the belt's centre line, like the chute's, and the post stands
+/// <see cref="PivotSetback"/> in front of it, just outside the belt edge. The
+/// blade parks along that edge pointing *downstream* (+X, the way a default
+/// belt runs) and sweeps out across the lane, so a carton meeting it is turned
+/// along it to the far side, away from the post, into whatever stands there.
+///
+/// That orientation is not cosmetic. The blade first parked upstream (-X).
+/// Swung out, it made a funnel that steered cartons back towards the post:
+/// measured with the collider fixed, both a short and a tall carton went off
+/// the near edge onto the floor beside the post. Nobody noticed, because the
+/// blade's collider never moved at all (IP-32, see <see cref="ApplyAngle"/>).
 /// </summary>
 public partial class PivotDiverter : Node3D, IPart
 {
@@ -26,9 +36,21 @@ public partial class PivotDiverter : Node3D, IPart
     /// <summary>Sweep rate, degrees per second.</summary>
     [Export] public float SwingSpeed { get; set; } = 220.0f;
 
-    /// <summary>Blade length along the lane. Long enough to span a carton and
-    /// keep contact through the turn.</summary>
-    [Export] public float BladeLength { get; set; } = 0.44f;
+    /// <summary>Blade length. At the divert angle the tip has to reach the far
+    /// edge of the lane, or a carton slides off the end of the blade still on
+    /// the belt and rides on down the line: 0.75 m at 45° crosses 0.53 m, a
+    /// standard 0.5 m belt from a post just off its edge. The first default,
+    /// 0.44 m, crossed 0.31 m and could not have diverted anything.</summary>
+    [Export] public float BladeLength { get; set; } = DefaultBladeLength;
+
+    public const float DefaultBladeLength = 0.75f;
+
+    /// <summary>From the part's grid point to the pivot, towards the lane. One
+    /// cell less the belt's half-width, less a centimetre, puts the post just
+    /// off the edge of a standard belt when the part stands one grid cell from
+    /// the belt's centre line — the chute's <c>LipSetback</c>, for the same
+    /// reason.</summary>
+    public const float PivotSetback = 0.24f;
 
     private const float BladeHeight = 0.16f;
     private const float BladeThickness = 0.035f;
@@ -47,6 +69,31 @@ public partial class PivotDiverter : Node3D, IPart
     /// a seizure freeze it mid-sweep — the limit switches alone cannot tell
     /// "stuck at 20°" from "still travelling".</summary>
     public float Angle => _angle;
+
+    /// <summary>
+    /// Where the physics server has the blade's collider, in the part's own
+    /// frame — not where the node tree draws it. The two came apart once
+    /// (IP-32): the drawn blade swung, `diverted` came on, and the collider
+    /// never left its parking place, so no carton was ever turned. Anything
+    /// claiming the blade is across the lane should read this, not
+    /// <see cref="Angle"/>.
+    /// </summary>
+    public Transform3D BladeColliderLocal =>
+        _blade is null || !_blade.IsInsideTree()
+            ? Transform3D.Identity
+            : GlobalTransform.AffineInverse()
+              * PhysicsServer3D.BodyGetState(_blade.GetRid(), PhysicsServer3D.BodyState.Transform).AsTransform3D();
+
+    /// <summary>The collider's swing about the post, degrees, 0 at home —
+    /// the physical counterpart of <see cref="Angle"/>.</summary>
+    public float BladeColliderAngle
+    {
+        get
+        {
+            Vector3 along = BladeColliderLocal.Basis.Column0;   // the blade parks along +X
+            return Mathf.RadToDeg(Mathf.Atan2(along.Z, along.X));
+        }
+    }
 
     public bool IsDiverted => _angle >= DivertAngle - 0.5f;
     public bool IsHome => _angle <= 0.5f;
@@ -79,14 +126,14 @@ public partial class PivotDiverter : Node3D, IPart
             Name = "PivotPost",
             Mesh = new CylinderMesh { TopRadius = 0.035f, BottomRadius = 0.045f, Height = postHeight },
             MaterialOverride = postMat,
-            Position = new Vector3(0, BladeY + BladeHeight / 2.0f - postHeight / 2.0f, 0),
+            Position = new Vector3(0, BladeY + BladeHeight / 2.0f - postHeight / 2.0f, PivotSetback),
         });
         AddChild(new MeshInstance3D
         {
             Name = "BaseFoot",
             Mesh = new CylinderMesh { TopRadius = 0.11f, BottomRadius = 0.11f, Height = 0.025f },
             MaterialOverride = postMat,
-            Position = new Vector3(0, -PartLayout.FloorDrop, 0),
+            Position = new Vector3(0, -PartLayout.FloorDrop, PivotSetback),
         });
 
         // Rotary actuator body at the top of the post, so the blade reads as
@@ -96,13 +143,15 @@ public partial class PivotDiverter : Node3D, IPart
             Name = "RotaryActuator",
             Mesh = new CylinderMesh { TopRadius = 0.055f, BottomRadius = 0.055f, Height = 0.07f },
             MaterialOverride = postMat,
-            Position = new Vector3(0, BladeY + BladeHeight / 2.0f + 0.05f, 0),
+            Position = new Vector3(0, BladeY + BladeHeight / 2.0f + 0.05f, PivotSetback),
         });
 
-        // The pivot node carries the rotation; the blade body hangs off it at
-        // half its own length so the arm sweeps about the post rather than
-        // about its own centre.
-        _pivot = new Node3D { Name = "BladePivot", Position = new Vector3(0, BladeY, 0) };
+        // The pivot node only marks the axis. It never turns: the blade body
+        // moves itself (ApplyAngle), because a SyncToPhysics body sends the
+        // physics server its own transform changes and nothing else. When
+        // this node carried the rotation, the drawn blade swung and the
+        // collider stayed parked (IP-32).
+        _pivot = new Node3D { Name = "BladePivot", Position = new Vector3(0, BladeY, PivotSetback) };
         AddChild(_pivot);
 
         _blade = new AnimatableBody3D
@@ -112,7 +161,6 @@ public partial class PivotDiverter : Node3D, IPart
             // carton it meets instead of teleporting through it between frames
             // — the same reason the pusher's face plate is an AnimatableBody3D.
             SyncToPhysics = true,
-            Position = new Vector3(-BladeLength / 2.0f, 0, 0),
         };
         var bladeSize = new Vector3(BladeLength, BladeHeight, BladeThickness);
         _blade.AddChild(new MeshInstance3D { Mesh = new BoxMesh { Size = bladeSize }, MaterialOverride = bladeMat });
@@ -141,7 +189,7 @@ public partial class PivotDiverter : Node3D, IPart
             Name = "DriveFaultLamp",
             Mesh = new SphereMesh { Radius = 0.038f, Height = 0.076f },
             MaterialOverride = _faultLampMat,
-            Position = new Vector3(0, lampY, 0),
+            Position = new Vector3(0, lampY, PivotSetback),
         });
     }
 
@@ -168,12 +216,21 @@ public partial class PivotDiverter : Node3D, IPart
 
     private void ApplyAngle()
     {
-        if (_pivot is null) return;
-        // The blade parks along -X and the lane lies in +Z (the pusher's
-        // convention: the origin is the near edge, the machine is behind it).
-        // A positive turn about +Y therefore carries the tip out across the
-        // lane; a negative one would sweep it away from the belt entirely.
-        _pivot.Rotation = new Vector3(0, Mathf.DegToRad(_angle), 0);
+        if (_blade is null) return;
+        // The blade parks along +X, downstream, and the lane lies in +Z. A
+        // positive turn about +Y carries +X towards -Z, away from the belt, so
+        // the blade turns by the negative of its angle to swing its tip out
+        // across the lane.
+        //
+        // The turn goes on the body's *own* transform, about the post: its
+        // centre swings round the pivot at half the blade's length. An
+        // AnimatableBody3D with SyncToPhysics forwards a change of its local
+        // transform to the physics server and nothing that reaches it through
+        // a parent. Turning the parent was IP-32: a blade drawn across the lane
+        // that diverted nothing. The pusher, the stop gate and the turntable
+        // all move their bodies this way.
+        var turn = new Basis(Vector3.Up, -Mathf.DegToRad(_angle));
+        _blade.Transform = new Transform3D(turn, turn * new Vector3(BladeLength / 2.0f, 0, 0));
     }
 
     // ---------- IPart (HP-34)
@@ -225,10 +282,15 @@ public partial class PivotDiverter : Node3D, IPart
     public void Operate(PartOperate op) => op.ToggleBit("divert");
 
     /// <summary>IP-07. The blade has to swing all the way across: `diverted`
-    /// made, `home` broken.</summary>
+    /// made, `home` broken — and the *collider* across with it. The contacts
+    /// alone passed this probe for as long as the collider stayed parked and
+    /// the part diverted nothing (IP-32); the physics server's own transform
+    /// for the blade is the one thing a carton actually meets.</summary>
     public PartProbe? Probe => new(
-        "the blade across the lane: `diverted` made, `home` broken",
-        r => r.Bit("diverted") && !r.Bit("home"))
+        "the blade across the lane: `diverted` made, `home` broken, and the blade's collider "
+        + "(the physics body, not the drawn node) turned to the divert angle",
+        r => r.Bit("diverted") && !r.Bit("home")
+             && Mathf.Abs(BladeColliderAngle - DivertAngle) < 1.0f)
     {
         Drive = PartProbe.Drives(("divert", true)),
         WithinTicks = 90,
