@@ -130,6 +130,12 @@ class RotaryIndexScene(PlantScene):
         self._declare(
             Tag("emitter.emit", "Emitter 0 (Emit)", "bit", "output"),
             Tag("table.index", "Turntable 0 (Index)", "bit", "output"),
+            # The deck drive (IP-33), declared because the engine declares it:
+            # the grader offers exactly the engine's tags. This scene drops
+            # cartons on and pushes them off, so the model does not move a
+            # carton for it -- a program that runs the rollers here is marked as
+            # if it had not.
+            Tag("table.deck", "Turntable 0 (Deck Drive)", "bit", "output"),
             Tag("table.athome", "Turntable 0 (At Home)", "bit", "input", value=True),
             Tag("table.atindex", "Turntable 0 (At Index)", "bit", "input"),
             fault_input("table", "Turntable 0 Drive Fault"),

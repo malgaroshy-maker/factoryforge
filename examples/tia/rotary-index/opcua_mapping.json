@@ -21,6 +21,7 @@
   "pusher.retracted": "ns=3;s=\"FF_IO\".\"PusherRetracted\"",
   "table.athome": "ns=3;s=\"FF_IO\".\"TableAthome\"",
   "table.atindex": "ns=3;s=\"FF_IO\".\"TableAtindex\"",
+  "table.deck": "ns=3;s=\"FF_IO\".\"TableDeck\"",
   "table.fault": "ns=3;s=\"FF_IO\".\"TableFault\"",
   "table.index": "ns=3;s=\"FF_IO\".\"TableIndex\"",
   "tower.green": "ns=3;s=\"FF_IO\".\"TowerGreen\"",

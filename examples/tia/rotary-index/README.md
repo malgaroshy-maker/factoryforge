@@ -80,10 +80,11 @@ names.
 | `panel.red` | PLC writes | `PanelRed` | Bool | DBX0.3 | red lamp on the panel |  |
 | `pusher.extend` | PLC writes | `PusherExtend` | Bool | DBX0.4 | extend coil (5/2 valve, no spring: the rod stays where it was last driven) | yes |
 | `pusher.retract` | PLC writes | `PusherRetract` | Bool | DBX0.5 | retract coil | yes |
-| `table.index` | PLC writes | `TableIndex` | Bool | DBX0.6 | turn the deck to its index angle; FALSE turns it home | yes |
-| `tower.green` | PLC writes | `TowerGreen` | Bool | DBX0.7 | tower lamp, green | yes |
-| `tower.red` | PLC writes | `TowerRed` | Bool | DBX1.0 | tower lamp, red | yes |
-| `tower.yellow` | PLC writes | `TowerYellow` | Bool | DBX1.1 | tower lamp, yellow | yes |
+| `table.deck` | PLC writes | `TableDeck` | Bool | DBX0.6 | run the deck's rollers along its lane, wherever the deck points -- how a belt-fed carton rides on and off |  |
+| `table.index` | PLC writes | `TableIndex` | Bool | DBX0.7 | turn the deck to its index angle; FALSE turns it home | yes |
+| `tower.green` | PLC writes | `TowerGreen` | Bool | DBX1.0 | tower lamp, green | yes |
+| `tower.red` | PLC writes | `TowerRed` | Bool | DBX1.1 | tower lamp, red | yes |
+| `tower.yellow` | PLC writes | `TowerYellow` | Bool | DBX1.2 | tower lamp, yellow | yes |
 | `done.count` | PLC reads | `DoneCount` | DInt | DBD2 | cartons this remover has taken off the line, running total | yes |
 | `panel.setpoint` | PLC reads | `PanelSetpoint` | Real | DBD6 | the operator's pot, 0.5..3 s (starts at 1) | yes |
 | `deck_eye.detect` | PLC reads | `DeckEyeDetect` | Bool | DBX10.0 | TRUE while anything breaks the beam to the reflector | yes |

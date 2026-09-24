@@ -231,6 +231,7 @@ _MEANINGS: dict[tuple[str, str], str] = {
     ("LimitSwitch", "no"): "limit switch NO contact: TRUE while the lever is pushed past its trip point",
     ("LimitSwitch", "nc"): "limit switch NC contact: TRUE at rest, FALSE while the lever is pushed",
     ("TurnTable", "index"): "turn the deck to its index angle; FALSE turns it home",
+    ("TurnTable", "deck"): "run the deck's rollers along its lane, wherever the deck points -- how a belt-fed carton rides on and off",
     ("TurnTable", "athome"): "deck square at home",
     ("TurnTable", "atindex"): "deck square at its {index_angle} deg index; between the two neither is made",
     ("TurnTable", "fault"): "TRUE = the deck has seized where it is",

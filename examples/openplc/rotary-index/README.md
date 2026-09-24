@@ -47,7 +47,7 @@ is only what is different about this scene.
 | Block | Start | Size |
 |---|---|---|
 | Discrete Inputs (%IX100.0) | 0 | 12 |
-| Coils (%QX100.0) | 0 | 10 |
+| Coils (%QX100.0) | 0 | 11 |
 | Input Registers (%IW100) | 0 | 4 |
 | Holding Registers - Read (%IW100) | 0 | 0 |
 | Holding Registers - Write (%QW100) | 0 | 0 |
@@ -97,11 +97,12 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `pusher.retracted` | PLC reads | bit | 1x8 | `PusherRetracted` %IX101.0 | reed switch at home; mid-stroke neither reed is made | yes |
 | `table.athome` | PLC reads | bit | 1x9 | `TableAthome` %IX101.1 | deck square at home | yes |
 | `table.atindex` | PLC reads | bit | 1x10 | `TableAtindex` %IX101.2 | deck square at its 90 deg index; between the two neither is made | yes |
+| `table.deck` | PLC writes | bit | 0x6 | `TableDeck` %QX100.6 | run the deck's rollers along its lane, wherever the deck points -- how a belt-fed carton rides on and off |  |
 | `table.fault` | PLC reads | bit | 1x11 | `TableFault` %IX101.3 | TRUE = the deck has seized where it is | yes |
-| `table.index` | PLC writes | bit | 0x6 | `TableIndex` %QX100.6 | turn the deck to its index angle; FALSE turns it home | yes |
-| `tower.green` | PLC writes | bit | 0x7 | `TowerGreen` %QX100.7 | tower lamp, green | yes |
-| `tower.red` | PLC writes | bit | 0x8 | `TowerRed` %QX101.0 | tower lamp, red | yes |
-| `tower.yellow` | PLC writes | bit | 0x9 | `TowerYellow` %QX101.1 | tower lamp, yellow | yes |
+| `table.index` | PLC writes | bit | 0x7 | `TableIndex` %QX100.7 | turn the deck to its index angle; FALSE turns it home | yes |
+| `tower.green` | PLC writes | bit | 0x8 | `TowerGreen` %QX101.0 | tower lamp, green | yes |
+| `tower.red` | PLC writes | bit | 0x9 | `TowerRed` %QX101.1 | tower lamp, red | yes |
+| `tower.yellow` | PLC writes | bit | 0x10 | `TowerYellow` %QX101.2 | tower lamp, yellow | yes |
 
 ## Three things this scene's wiring does not forgive
 

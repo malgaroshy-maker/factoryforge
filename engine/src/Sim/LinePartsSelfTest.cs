@@ -19,6 +19,11 @@ namespace FactoryForge.Sim;
 /// can be reached by turning the dispatch by hand. Those two run on real engine
 /// ticks and the rest are hand-turned afterwards, which is why this test is
 /// phased rather than a single burst.
+///
+/// The turntable has a second real-physics check since IP-33 gave its deck a
+/// drive: a carton fed by a running belt rides onto the deck, the deck
+/// indexes, and the drive runs it off along the turned lane onto an outfeed
+/// belt. Without the drive the carton stops at the belt/deck joint.
 /// </summary>
 public partial class LinePartsSelfTest : Node
 {
@@ -84,8 +89,27 @@ public partial class LinePartsSelfTest : Node
             case 522: SweepARemoverPreviewOverACarton(); return;
             case 560: CheckTheCartonSurvivedThePreview(); return;
             case 580: CheckThePlacedRemoverStillRemoves(); return;
-            case 582: break;
-            default: return;
+            default:
+                if (_step <= 580) return;
+                // IP-33, on real ticks and for as long as the transfer takes:
+                // belt → deck → index → deck → outfeed. Ends before the
+                // hand-turned checks below, which move the dispatch and not
+                // the world.
+                if (!_transferDone)
+                {
+                    try
+                    {
+                        _transferDone = StepTransferRig();
+                    }
+                    catch (System.Exception ex)
+                    {
+                        _failures.Add(ex.Message);
+                        GD.PrintErr($"  FAIL  threw in the transfer rig: {ex.GetType().Name}: {ex.Message}");
+                        _transferDone = true;
+                    }
+                    if (!_transferDone) return;
+                }
+                break;
         }
 
         if (_done) return;
@@ -156,6 +180,21 @@ public partial class LinePartsSelfTest : Node
         data.Parts.Add(At("fan", "CoolingFan", 0.8f, -8.0f));
 
         data.Parts.Add(At("hands", "TwoHandControl", 0.0f, -12.0f));
+
+        // IP-33's transfer: an infeed belt running +X into a default
+        // turntable, and an outfeed belt leaving it down -Z, the way the deck's
+        // lane points after a 90° index. Both belts reach 4 cm onto the deck's
+        // rim, as the rotary-index template's outfeed does, so there is no gap
+        // at either joint for a carton corner to find.
+        var shortDeck = new Dictionary<string, string>
+        {
+            ["size_x"] = "2", ["size_y"] = "0.12", ["size_z"] = "0.5", ["speed"] = "0.5",
+        };
+        data.Parts.Add(At("rt", "TurnTable", 0.0f, RtZ));
+        data.Parts.Add(At("rtin", "ConveyorBelt", -RtJoint - 1.0f, RtZ, shortDeck));
+        var outfeed = At("rtout", "ConveyorBelt", 0.0f, RtZ - RtJoint - 1.0f, shortDeck);
+        outfeed.Rotation = new[] { 0.0f, Mathf.Pi / 2.0f, 0.0f };
+        data.Parts.Add(outfeed);
 
         const string path = "user://selftest_lineparts.json";
         using (var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write))
@@ -389,6 +428,143 @@ public partial class LinePartsSelfTest : Node
         Tags.ClearForce("xfer.fault");
         Run(300);
         Expect(Bit("xfer.athome"), "clearing the fault lets the deck square back up");
+    }
+
+    // ---------- IP-33: a belt-fed turntable, through to the outfeed
+
+    /// <summary>The transfer rig's deck centre, well clear of everything else
+    /// (the remover preview works at z = 12).</summary>
+    private const float RtZ = 16.0f;
+
+    /// <summary>Where each belt's end sits, from the deck centre: 4 cm inside
+    /// the default 0.34 m rim.</summary>
+    private const float RtJoint = 0.30f;
+
+    /// <summary>A generous bound on any one leg of the transfer. The longest,
+    /// the infeed, is about 2 m at 0.5 m/s: 240 ticks.</summary>
+    private const int RtLegTimeout = 600;
+
+    /// <summary>Past this (in -Z from the deck centre) the carton is on the
+    /// outfeed belt and clear of the deck's rim and collar.</summary>
+    private const float RtArrived = 0.75f;
+
+    private bool _transferDone;
+    private int _rtPhase;
+    private int _rtTicks;
+    private BoxPhysics? _rtBox;
+
+    private static string At3(Vector3 p) => $"({p.X:0.00}, {p.Y:0.00}, {p.Z:0.00})";
+
+    /// <summary>
+    /// One real tick of the transfer. Returns true when it is finished.
+    ///
+    /// The test plays the PLC, with a perfect eye: it reads the carton's
+    /// position where a real cell would have a photo-eye at the deck centre.
+    /// What it asserts is the physics — that the deck drive takes a carton
+    /// off a running belt at all (the IP-33 jam: without it the carton stops
+    /// half on the belt, half on a dead plate), that the carton stays on the
+    /// deck through the index, and that the drive then runs it off the other
+    /// way onto the outfeed.
+    /// </summary>
+    private bool StepTransferRig()
+    {
+        var table = Part<TurnTable>("rt");
+        Vector3 centre = table.GlobalPosition;
+        _rtTicks++;
+
+        switch (_rtPhase)
+        {
+            case 0:
+                Expect(Bit("rt.athome"), "the transfer rig's table starts at home");
+                _rtBox = new BoxPhysics { IsTall = false };
+                Editor.GetParent().AddChild(_rtBox);
+                _rtBox.GlobalPosition = new Vector3(centre.X - RtJoint - 1.6f,
+                    PartLayout.WorkPlaneY + PartLayout.BeltSurface + _rtBox.Height / 2.0f + 0.02f, RtZ);
+                Tags.Set("rtin.rotate", true);
+                Tags.Set("rt.deck", true);
+                _rtPhase = 1;
+                _rtTicks = 0;
+                return false;
+
+            case 1:
+            {
+                // Infeed: run until the carton is centred on the deck.
+                var box = _rtBox!;
+                bool centred = box.GlobalPosition.X >= centre.X - 0.01f;
+                if (_rtTicks % 60 == 0) GD.Print($"  transfer infeed: t={_rtTicks} carton at {At3(box.GlobalPosition)}");
+                if (!centred && _rtTicks < RtLegTimeout) return false;
+
+                GD.Print($"  transfer infeed: {(centred ? "centred" : "NOT centred")} at {At3(box.GlobalPosition)} after {_rtTicks} ticks");
+                Expect(centred,
+                       $"with the deck drive on, a carton fed by a running belt rides onto the turntable to its centre "
+                       + $"(it is at {At3(box.GlobalPosition)} after {_rtTicks} ticks; the deck rim is at x={centre.X - table.DeckRadius:0.00})");
+                Tags.Set("rt.deck", false);
+                Tags.Set("rtin.rotate", false);
+                if (!centred) return true;
+                _rtPhase = 2;
+                _rtTicks = 0;
+                return false;
+            }
+
+            case 2:
+            {
+                // Let the stop settle, then index with the drive off.
+                if (_rtTicks < 20) return false;
+                var box = _rtBox!;
+                Vector3 off = box.GlobalPosition - centre;
+                Expect(Mathf.Abs(off.X) < 0.06f && Mathf.Abs(off.Z) < 0.04f,
+                       $"and it stops there when the deck drive stops (off centre by {At3(off)})");
+                Tags.Set("rt.index", true);
+                _rtPhase = 3;
+                _rtTicks = 0;
+                return false;
+            }
+
+            case 3:
+            {
+                if (!Bit("rt.atindex") && _rtTicks < RtLegTimeout) return false;
+                var box = _rtBox!;
+                Vector3 off = box.GlobalPosition - centre;
+                GD.Print($"  transfer index: atindex={Bit("rt.atindex")} after {_rtTicks} ticks, carton off centre by {At3(off)}");
+                Expect(Bit("rt.atindex"), $"the loaded table reaches its index (at {table.Angle:0.0}°)");
+                Expect(new Vector2(off.X, off.Z).Length() < 0.08f && box.GlobalPosition.Y > PartLayout.WorkPlaneY,
+                       $"and the carton rides the index on the deck (off centre by {At3(off)})");
+                Tags.Set("rt.deck", true);
+                Tags.Set("rtout.rotate", true);
+                _rtPhase = 4;
+                _rtTicks = 0;
+                return false;
+            }
+
+            case 4:
+            {
+                // Discharge: the lane now points down -Z, and so must the drive.
+                var box = _rtBox!;
+                Vector3 p = box.GlobalPosition;
+                float ride = PartLayout.WorkPlaneY + PartLayout.BeltSurface + box.Height / 2.0f;
+                bool arrived = p.Z < centre.Z - RtArrived && Mathf.Abs(p.Y - ride) < 0.03f;
+                if (_rtTicks % 60 == 0) GD.Print($"  transfer outfeed: t={_rtTicks} carton at {At3(p)}");
+                if (!arrived && _rtTicks < RtLegTimeout) return false;
+
+                GD.Print($"  transfer outfeed: {(arrived ? "arrived" : "NOT arrived")} at {At3(p)} after {_rtTicks} ticks, "
+                         + $"v={At3(box.LinearVelocity)}");
+                Expect(arrived,
+                       $"after the index the deck drive runs the carton off along the turned lane onto the outfeed belt "
+                       + $"(z < {centre.Z - RtArrived:0.00}, riding at y≈{ride:0.00}); it is at {At3(p)} after {_rtTicks} ticks");
+                Expect(!arrived || Mathf.Abs(p.X - centre.X) < 0.12f,
+                       $"and it leaves square along the lane, not skewed off it (x={p.X:0.00} against {centre.X:0.00})");
+                Expect(!arrived || box.LinearVelocity.Z < -0.2f,
+                       $"and the outfeed belt is carrying it on (vz={box.LinearVelocity.Z:0.00})");
+
+                Tags.Set("rt.deck", false);
+                Tags.Set("rt.index", false);
+                Tags.Set("rtout.rotate", false);
+                box.QueueFree();
+                _rtBox = null;
+                return true;
+            }
+        }
+        return true;
     }
 
     // ---------- LP-03 measuring encoder

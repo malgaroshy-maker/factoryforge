@@ -230,6 +230,16 @@ public partial class SceneSelfTest : Node
                     props["swing_speed"] = "155";
                     props["blade_length"] = "0.51";
                     break;
+                case "TurnTable":
+                    props["index_angle"] = "135";
+                    props["index_speed"] = "70";
+                    // The deck drive (IP-33): its speed, and a lane run
+                    // backwards, which nothing in the geometry shows.
+                    props["deck_speed"] = "0.35";
+                    props["deck_dir_x"] = "-1";
+                    props["deck_dir_y"] = "0";
+                    props["deck_dir_z"] = "0";
+                    break;
                 case "PickPlaceArm":
                     props["rail_length"] = "2.1";
                     props["travel_speed"] = "42";
@@ -398,6 +408,13 @@ public partial class SceneSelfTest : Node
                     ExpectNear(props, "divert_angle", 38.0f, part.Type);
                     ExpectNear(props, "swing_speed", 155.0f, part.Type);
                     ExpectNear(props, "blade_length", 0.51f, part.Type);
+                    break;
+                case "TurnTable":
+                    ExpectNear(props, "index_angle", 135.0f, part.Type);
+                    ExpectNear(props, "index_speed", 70.0f, part.Type);
+                    ExpectNear(props, "deck_speed", 0.35f, part.Type);
+                    ExpectNear(props, "deck_dir_x", -1.0f, part.Type);
+                    ExpectNear(props, "deck_dir_z", 0.0f, part.Type);
                     break;
                 case "PickPlaceArm":
                     ExpectNear(props, "rail_length", 2.1f, part.Type);

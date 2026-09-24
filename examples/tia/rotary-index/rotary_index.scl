@@ -9,6 +9,7 @@ NON_RETAIN
       PanelRed : Bool;        // panel.red (PLC writes) red lamp on the panel
       PusherExtend : Bool;    // pusher.extend (PLC writes) extend coil (5/2 valve, no spring: the rod stays where it was last driven)
       PusherRetract : Bool;   // pusher.retract (PLC writes) retract coil
+      TableDeck : Bool;       // table.deck (PLC writes) run the deck's rollers along its lane, wherever the deck points -- how a belt-fed carton rides on and off
       TableIndex : Bool;      // table.index (PLC writes) turn the deck to its index angle; FALSE turns it home
       TowerGreen : Bool;      // tower.green (PLC writes) tower lamp, green
       TowerRed : Bool;        // tower.red (PLC writes) tower lamp, red

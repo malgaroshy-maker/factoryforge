@@ -23,9 +23,10 @@
   "pusher.retracted": "DBX11.0",
   "table.athome": "DBX11.1",
   "table.atindex": "DBX11.2",
+  "table.deck": "DBX0.6",
   "table.fault": "DBX11.3",
-  "table.index": "DBX0.6",
-  "tower.green": "DBX0.7",
-  "tower.red": "DBX1.0",
-  "tower.yellow": "DBX1.1"
+  "table.index": "DBX0.7",
+  "tower.green": "DBX1.0",
+  "tower.red": "DBX1.1",
+  "tower.yellow": "DBX1.2"
 }

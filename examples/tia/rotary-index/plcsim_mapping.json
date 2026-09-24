@@ -21,6 +21,7 @@
   "pusher.retracted": "FF_IO.PusherRetracted",
   "table.athome": "FF_IO.TableAthome",
   "table.atindex": "FF_IO.TableAtindex",
+  "table.deck": "FF_IO.TableDeck",
   "table.fault": "FF_IO.TableFault",
   "table.index": "FF_IO.TableIndex",
   "tower.green": "FF_IO.TowerGreen",

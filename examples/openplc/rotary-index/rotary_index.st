@@ -53,10 +53,11 @@
      0x3      1     %QX100.3               panel.red
      0x4      1     %QX100.4               pusher.extend
      0x5      1     %QX100.5               pusher.retract
-     0x6      1     %QX100.6               table.index
-     0x7      1     %QX100.7               tower.green
-     0x8      1     %QX101.0               tower.red
-     0x9      1     %QX101.1               tower.yellow
+     0x6      1     %QX100.6               table.deck
+     0x7      1     %QX100.7               table.index
+     0x8      1     %QX101.0               tower.green
+     0x9      1     %QX101.1               tower.red
+     0x10     1     %QX101.2               tower.yellow
      1x0      1     %IX100.0               deck_eye.detect
      1x1      1     %IX100.1               outfeed.fault
      1x2      1     %IX100.2               panel.estop
@@ -130,10 +131,11 @@ PROGRAM rotary_index
     PanelRed      AT %QX100.3  : BOOL;  (* panel.red      0x3   red lamp on the panel *)
     PusherExtend  AT %QX100.4  : BOOL;  (* pusher.extend  0x4   extend coil (5/2 valve, no spring: the rod stays where it was last driven) *)
     PusherRetract AT %QX100.5  : BOOL;  (* pusher.retract 0x5   retract coil *)
-    TableIndex    AT %QX100.6  : BOOL;  (* table.index    0x6   turn the deck to its index angle; FALSE turns it home *)
-    TowerGreen    AT %QX100.7  : BOOL;  (* tower.green    0x7   tower lamp, green *)
-    TowerRed      AT %QX101.0  : BOOL;  (* tower.red      0x8   tower lamp, red *)
-    TowerYellow   AT %QX101.1  : BOOL;  (* tower.yellow   0x9   tower lamp, yellow *)
+    TableDeck     AT %QX100.6  : BOOL;  (* table.deck     0x6   run the deck's rollers along its lane, wherever the deck points -- how a belt-fed carton rides on and off *)
+    TableIndex    AT %QX100.7  : BOOL;  (* table.index    0x7   turn the deck to its index angle; FALSE turns it home *)
+    TowerGreen    AT %QX101.0  : BOOL;  (* tower.green    0x8   tower lamp, green *)
+    TowerRed      AT %QX101.1  : BOOL;  (* tower.red      0x9   tower lamp, red *)
+    TowerYellow   AT %QX101.2  : BOOL;  (* tower.yellow   0x10  tower lamp, yellow *)
     (* --- PLC reads: discrete inputs ------------------------------------ *)
     DeckEyeDetect   AT %IX100.0  : BOOL;  (* deck_eye.detect  1x0   TRUE while anything breaks the beam to the reflector *)
     OutfeedFault    AT %IX100.1  : BOOL;  (* outfeed.fault    1x1   drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told *)

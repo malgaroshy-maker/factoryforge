@@ -2005,6 +2005,11 @@
         "kind": "input"
       },
       {
+        "id": "table.deck",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
         "id": "table.fault",
         "type": "bit",
         "kind": "input"
