@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-39. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-40. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31 and IP-32 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -670,7 +670,7 @@ firewall prompt once, then follow the guide exactly.
 | IP-29 | The grader marks the plant the engine runs | 4 | L | ● | **done** 326248e..c740af5 |
 | IP-30 | The window opens when the student's driver is up | 2 | M |  | **done** ddc74dd, 6a0887b |
 | IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | **done** b808bdd, 15c57b1 (76 % of clicks missed at a 50 ms poll before, 0 after) |
-| IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | open |
+| IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | **done** 885df29, 85c0bc6 (plus the pivot-divert scene) |
 | IP-33 | A turntable that can take a carton off a belt | 3 | M |  | open |
 | IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | open |
 | IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | open |
@@ -678,6 +678,7 @@ firewall prompt once, then follow the guide exactly.
 | IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | open |
 | IP-38 | The release carries the docs its guide links to | 5 | S |  | open |
 | IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
+| IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | open (found by IP-32: ~2 mm proud at defaults; a friction-driven carton stops dead) |
 
 ## Appendix B — where the findings came from
 
