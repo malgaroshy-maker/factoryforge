@@ -43,13 +43,17 @@ public partial class PartSettingsSelfTest : Node
         ["InductiveSensor"] = new[] { "Beam Range (m)", "Beam Height (m)" },
         ["RetroreflectiveSensor"] = new[] { "Beam Range (m)", "Beam Height (m)" },
         ["PusherMechanism"] = new[] { "Stroke Speed (m/s)", "Stroke Length (m)" },
-        ["LightArray"] = new[] { "Curtain Height (m)", "Beams" },
-        // Range Min/Max only appear once the Signal is raw (IP-16).
-        ["LevelTank"] = new[] { "Fill Rate (%/s)", "Drain Rate (%/s)", "Signal", "Range Min", "Range Max" },
+        ["LightArray"] = new[] { "Curtain Height (m)", "Beams", "Signal", "Range Min", "Range Max" },
+        // Range Min/Max only appear once the Signal is raw (IP-16). Output
+        // Signal has no range rows: an actuator's span is its full scale
+        // (IP-28).
+        ["LevelTank"] = new[] { "Fill Rate (%/s)", "Drain Rate (%/s)", "Signal", "Range Min", "Range Max",
+                                "Output Signal" },
         ["Chute"] = new[] { "Incline (deg)", "Surface Friction" },
         ["Emitter"] = new[] { "Metal every Nth" },
         ["Remover"] = new[] { "Counts into" },
-        ["ButtonPanel"] = new[] { "Scale Min", "Scale Max", "Scale Unit", "Setpoint", "Press Hold (s)" },
+        // The pot's Signal has no range rows: its plate is its span (IP-28).
+        ["ButtonPanel"] = new[] { "Scale Min", "Scale Max", "Scale Unit", "Setpoint", "Press Hold (s)", "Signal" },
         // IP-17's five. Not in any template yet (IP-14 places them), so the
         // test builds a scene of its own for them.
         ["LimitSwitch"] = new[] { "Lever (m)", "Height (m)", "Bounce (ms)" },
@@ -171,6 +175,35 @@ public partial class PartSettingsSelfTest : Node
         int beamsAfter = BeamCount(curtain);
         Expect(beamsAfter == 5 && beamsAfter != beamsBefore,
                $"Beams rebuilds the curtain: {beamsBefore} -> {beamsAfter} raycasts, wanted 5");
+
+        CheckCurtainSignal(curtain);
+    }
+
+    /// <summary>IP-28. The curtain's height output: Signal turns the tag into
+    /// an INT on the bus, and the range reaches the count. Nothing is in the
+    /// curtain, so it measures 0 m -- which a -0.25..0.25 m span puts at half
+    /// scale, and no other span would.</summary>
+    private void CheckCurtainSignal(LightArray curtain)
+    {
+        string tagId = "height_gauge.height";
+        DriveChoice("Signal", "S7 raw 0-27648");
+        Expect(Tags.Get(tagId)?.Type == TagType.Int,
+               $"Signal=S7 raw turns {tagId} into an INT on the bus (got {Tags.Get(tagId)?.Type})");
+
+        Inspect(curtain, "height_gauge", "LightArray");
+        Drive("Range Min", -0.25);
+        Drive("Range Max", 0.25);
+        Editor._PhysicsProcess(1.0 / 60.0);
+        int expected = (int)System.Math.Round(27648.0 * (curtain.MeasuredHeight + 0.25) / 0.5,
+                                              System.MidpointRounding.AwayFromZero);
+        int got = System.Convert.ToInt32(Tags.Visible(tagId));
+        Expect(System.Math.Abs(got - expected) <= 1,
+               $"the curtain's range reaches its count: {curtain.MeasuredHeight:0.###} m on a -0.25..0.25 m "
+               + $"span reads {got}, expected {expected}");
+
+        DriveChoice("Signal", "Engineering");
+        Expect(Tags.Get(tagId)?.Type == TagType.Float,
+               $"Signal=Engineering puts {tagId} back to a float (got {Tags.Get(tagId)?.Type})");
     }
 
     /// <summary>Friction is applied live to the physics material on set; speed
@@ -329,6 +362,27 @@ public partial class PartSettingsSelfTest : Node
         Expect(Mathf.IsEqualApprox(tank.DrainRate, 35.0f), $"Drain Rate reaches the tank (got {tank.DrainRate})");
 
         CheckTankSignal(tank);
+        CheckTankOutputSignal(tank);
+    }
+
+    /// <summary>IP-28. Output Signal's observable is what the valve does with
+    /// what the PLC writes: in raw, half of 27648 opens it half way.</summary>
+    private void CheckTankOutputSignal(LevelTank tank)
+    {
+        Inspect(tank, "tank", "LevelTank");
+        DriveChoice("Output Signal", "S7 raw 0-27648");
+        Expect(Tags.Get("tank.fill")?.Type == TagType.Int && Tags.Get("tank.drain")?.Type == TagType.Int,
+               "Output Signal=S7 raw turns both valve commands into INTs on the bus "
+               + $"(fill {Tags.Get("tank.fill")?.Type}, drain {Tags.Get("tank.drain")?.Type})");
+        Tags.Set("tank.fill", 13824);
+        Editor._PhysicsProcess(1.0 / 60.0);
+        Expect(Mathf.IsEqualApprox(tank.FillOpening, 50.0f),
+               $"13824 written to a raw fill valve opens it half way (got {tank.FillOpening} %)");
+        Tags.Set("tank.fill", 0);
+
+        DriveChoice("Output Signal", "Engineering");
+        Expect(Tags.Get("tank.fill")?.Type == TagType.Float,
+               $"Output Signal=Engineering puts tank.fill back to a float (got {Tags.Get("tank.fill")?.Type})");
     }
 
     /// <summary>
@@ -422,6 +476,8 @@ public partial class PartSettingsSelfTest : Node
         Expect(panel.PlateText.Contains("120"),
                $"the pot's value reaches the plate (plate reads '{panel.PlateText}')");
 
+        CheckPanelSignal(panel);
+
         // A setpoint outside the plate is not a setpoint, it is a mislabelled
         // instrument -- so the range has to clamp it, and the plate has to show
         // the clamped value rather than the one that was asked for.
@@ -434,6 +490,32 @@ public partial class PartSettingsSelfTest : Node
                $"raising the bottom of the plate carries the pot up with it (got {panel.Setpoint})");
 
         CheckPressHold(panel);
+    }
+
+    /// <summary>IP-28. The pot in raw is its setpoint as a count on its own
+    /// plate: 120 on a 0..250 plate is 13271, and there are no range rows to
+    /// disagree with the plate.</summary>
+    private void CheckPanelSignal(ButtonPanel panel)
+    {
+        DriveChoice("Signal", "S7 raw 0-27648");
+        Expect(Tags.Get("panel.setpoint")?.Type == TagType.Int,
+               $"Signal=S7 raw turns panel.setpoint into an INT (got {Tags.Get("panel.setpoint")?.Type})");
+        Inspect(panel, "panel", "ButtonPanel");
+        Expect(FindSettingControl<Control>("Range Min") is null,
+               "the raw pot offers no Range Min; its plate is its span");
+        Editor._PhysicsProcess(1.0 / 60.0);
+        int expected = (int)System.Math.Round(27648.0 * (panel.Setpoint - panel.SetpointMin)
+                                              / (panel.SetpointMax - panel.SetpointMin),
+                                              System.MidpointRounding.AwayFromZero);
+        int got = System.Convert.ToInt32(Tags.Visible("panel.setpoint"));
+        Expect(System.Math.Abs(got - expected) <= 1,
+               $"the pot at {panel.Setpoint:0.##} on a {panel.SetpointMin}..{panel.SetpointMax} plate reads {got}, "
+               + $"expected {expected}");
+
+        DriveChoice("Signal", "Engineering");
+        Expect(Tags.Get("panel.setpoint")?.Type == TagType.Float,
+               $"Signal=Engineering puts panel.setpoint back to a float (got {Tags.Get("panel.setpoint")?.Type})");
+        Inspect(panel, "panel", "ButtonPanel");
     }
 
     /// <summary>IP-31. The observable is how long a click then holds

@@ -31,6 +31,10 @@ namespace FactoryForge.Sim;
 /// Four of the parts are stepped by hand (a thermal soak costs no wall time);
 /// the load cell needs real cartons on a real deck, so its checks run on real
 /// physics frames between the hand-turned bursts.
+///
+/// IP-28 adds the analog <em>outputs</em> and the seven inputs IP-16 left in
+/// engineering units; those phases live in
+/// <c>AnalogSignalSelfTest.Outputs.cs</c>.
 /// </summary>
 public partial class AnalogSignalSelfTest : Node
 {
@@ -116,8 +120,24 @@ public partial class AnalogSignalSelfTest : Node
                 case 180: ScaleOneThenTwo(); return;
                 case 220: ScaleFull(); ScaleWireBreak(); return;
 
-                case 222: SaveAndReload(); return;
-                case 226: CheckReloaded(); break;
+                // IP-28: the analog outputs, and the inputs IP-16 left in
+                // engineering units. Hand-stepped like the four above, except
+                // the light curtain, which measures a real carton on real
+                // frames. See AnalogSignalSelfTest.Outputs.cs.
+                case 222: OutputsEngineeringPhase(); return;
+                case 232: CurtainCheck(AnalogSignalMode.Engineering); return;
+                case 240: CurtainEmpty(AnalogSignalMode.Engineering);
+                    SwitchIp28(AnalogSignalMode.S7Raw); OutputsProcessChecks(AnalogSignalMode.S7Raw);
+                    OutputCodeChecks(); CurtainEmpty(AnalogSignalMode.S7Raw); ParkCurtainCarton(); return;
+                case 250: CurtainCheck(AnalogSignalMode.S7Raw); return;
+                case 258: CurtainEmpty(AnalogSignalMode.S7Raw);
+                    SwitchIp28(AnalogSignalMode.Ma4To20); OutputsProcessChecks(AnalogSignalMode.Ma4To20);
+                    OutputCodeChecks(); Ip28WireBreakChecks(); RawClickAndProbeChecks();
+                    CurtainEmpty(AnalogSignalMode.Ma4To20); ParkCurtainCarton(); return;
+                case 268: CurtainCheck(AnalogSignalMode.Ma4To20); return;
+
+                case 270: SaveAndReload(); return;
+                case 274: CheckReloaded(); CheckReloadedIp28(); break;
                 default: return;
             }
         }
@@ -177,6 +197,7 @@ public partial class AnalogSignalSelfTest : Node
         {
             ["size_x"] = "2", ["size_y"] = "0.12", ["size_z"] = "0.5",
         }));
+        AddIp28Parts(data);
 
         using (var file = Godot.FileAccess.Open(ScenePath, Godot.FileAccess.ModeFlags.Write))
         {
@@ -278,15 +299,21 @@ public partial class AnalogSignalSelfTest : Node
     /// Signal dropdown, pick an entry. The panel hands the choice to the part
     /// and asks the editor to bring the tag table into line.
     /// </summary>
-    private void Choose(string id, string partType, AnalogSignalMode mode)
+    private void Choose(string id, string partType, AnalogSignalMode mode) =>
+        ChooseOn("Signal", id, partType, mode);
+
+    /// <summary><see cref="Choose"/> on a named dropdown: "Signal" for the
+    /// part's analog input, "Output Signal" for its analog outputs
+    /// (IP-28).</summary>
+    private void ChooseOn(string label, string id, string partType, AnalogSignalMode mode)
     {
         var node = Editor.NodeFor(id);
         if (node is null) { Expect(false, $"no part '{id}' to inspect"); return; }
         _panel.InspectNode(node, id, partType);
 
-        var picker = FindSettingControl<OptionButton>("Signal");
-        if (picker is null) { Expect(false, $"{partType}: the property panel offers no Signal dropdown"); return; }
-        Expect(picker.ItemCount == 3, $"{partType}: the Signal dropdown offers {picker.ItemCount} modes, not 3");
+        var picker = FindSettingControl<OptionButton>(label);
+        if (picker is null) { Expect(false, $"{partType}: the property panel offers no {label} dropdown"); return; }
+        Expect(picker.ItemCount == 3, $"{partType}: the {label} dropdown offers {picker.ItemCount} modes, not 3");
 
         int index = -1;
         for (int i = 0; i < picker.ItemCount; i++)
@@ -720,8 +747,12 @@ public partial class AnalogSignalSelfTest : Node
         {
             if (file is not null) text = file.GetAsText();
         }
+        // One per analog channel setting: IP-16's five inputs, IP-28's seven
+        // inputs and its seven output settings (one per part: the tank's two
+        // valves share theirs).
+        int wantWritten = Channels.Length + NewInputs.Length + OutputParts.Length;
         int written = text.Split("\"ma_4_20\"").Length - 1;
-        Expect(written == Channels.Length, $"the saved file names ma_4_20 {written} times, not {Channels.Length}");
+        Expect(written == wantWritten, $"the saved file names ma_4_20 {written} times, not {wantWritten}");
 
         Expect(Editor.LoadSceneFromFile(RoundTripPath), "the saved scene loads back");
     }
@@ -741,11 +772,12 @@ public partial class AnalogSignalSelfTest : Node
         // The effect, not the dictionary: 150 degC is half of the reloaded
         // 0..300 span. Had the span fallen back to the 0..400 default it
         // would read 10368, and had the mode fallen back to engineering the
-        // tag would not be an INT at all.
-        Tags.Set("oven.heater", 50.0);
+        // tag would not be an INT at all. The heater's power is itself a raw
+        // 4-20 mA output by now (IP-28), so half power is half of 27648.
+        Tags.Set("oven.heater", FullScale / 2);
         Run(2400);
         ExpectCount("oven.temperature", FullScale / 2, "after reloading, 150 degC reads half of the saved 0..300 span");
-        Tags.Set("oven.heater", 0.0);
+        Tags.Set("oven.heater", 0);
 
         // And the reloaded wire break still works: the per-part tag cache is
         // built from what this part declares, not from its type's default.

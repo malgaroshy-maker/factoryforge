@@ -63,6 +63,19 @@ async def _settle(check, timeout: float = 5.0, interval: float = 0.05):
 @pytest_asyncio.fixture
 async def fake_plc():
     """A local OPC UA server standing in for an S7-1500."""
+    async for plc in _fake_plc(ua.VariantType.Int32):
+        yield plc
+
+
+@pytest_asyncio.fixture
+async def fake_s7_int_plc():
+    """The same PLC with its counter declared `Int` -- Int16, the type of a
+    real `%IW` analog channel -- rather than `DInt` (IP-28)."""
+    async for plc in _fake_plc(ua.VariantType.Int16):
+        yield plc
+
+
+async def _fake_plc(int_variant: ua.VariantType):
     server = Server()
     await server.init()
     server.set_endpoint(PLC_ENDPOINT)
@@ -77,9 +90,9 @@ async def fake_plc():
         await node.set_writable()
         nodes[tag_id] = node
     for tag_id in INPUTS:
-        variant = (ua.VariantType.Int32 if tag_id.startswith("counter")
+        variant = (int_variant if tag_id.startswith("counter")
                    else ua.VariantType.Boolean)
-        initial = 0 if variant is ua.VariantType.Int32 else False
+        initial = False if variant is ua.VariantType.Boolean else 0
         node = await folder.add_variable(ua.NodeId(tag_id, idx), tag_id, initial, variant)
         await node.set_writable()
         nodes[tag_id] = node
@@ -150,6 +163,112 @@ async def test_initial_sensor_state_is_pushed_on_bind(fake_plc, opcua_client):
     assert "pusher.retracted" in opcua_client._nodes
     assert await _settle(lambda: nodes["pusher.retracted"].read_value()), \
         "initial state was never pushed to the PLC"
+
+
+async def _bound_client(bus, idx, **kwargs):
+    mapping = {t: f"ns={idx};s={t}" for t in OUTPUTS + INPUTS}
+    driver = drivers.create("opcua-client", bus, url=PLC_ENDPOINT, mapping=mapping, **kwargs)
+    await driver.start()
+    assert await _settle(lambda: len(driver._nodes) == len(mapping)), "never bound"
+    # The bind seeds every input from the scene; wait until it has, so the
+    # pushes below are not raced by it.
+    assert await _settle(lambda: set(INPUTS) <= set(driver._node_types)), "types never read"
+    return driver
+
+
+async def test_a_raw_count_lands_in_an_int16_node(bus, fake_s7_int_plc):
+    """IP-28. A real `%IW` analog channel is an S7 `Int`, an Int16 node over
+    OPC UA, and an S7 refuses an Int32 written into it (BadTypeMismatch) --
+    as the asyncua server does. The driver used to write every `int` tag as
+    Int32, so a raw count could only ever land in a `DInt`. It now writes the
+    node's own DataType, read at bind.
+
+    Every S7 analog code is a 16-bit value, so all of them must land: full
+    scale, 7FFFh (overflow, wire break) and 8000h (underflow).
+    """
+    _, idx, nodes = fake_s7_int_plc
+    driver = await _bound_client(bus, idx)
+    try:
+        assert driver._node_types["counter.tall"] is ua.VariantType.Int16
+
+        for count in (27648, 32767, -32768, -4864, 0, 13824):
+            await driver.push({"counter.tall": count})
+            assert await _settle(lambda: _equals(nodes["counter.tall"], count), timeout=2.0), \
+                f"{count} never reached the Int16 node"
+            value = await nodes["counter.tall"].read_data_value()
+            assert value.Value.VariantType is ua.VariantType.Int16
+        assert "counter.tall" not in driver._unacked
+    finally:
+        await driver.stop()
+
+
+async def test_a_count_an_int_cannot_hold_is_refused_and_said_so(monkeypatch, bus, fake_s7_int_plc):
+    """40000 is not an S7 `Int`. Wrapping it would hand the PLC -25536; the
+    driver refuses it, says why on the bus, once, and does not queue it for a
+    retry that could only ever be refused again. The next value that fits
+    goes through as normal."""
+    _, idx, nodes = fake_s7_int_plc
+    driver = await _bound_client(bus, idx, input_retry_interval=0.05)
+    reports: list[tuple[str, str]] = []
+    real_report = driver._report
+
+    async def spy(level, code, message):
+        reports.append((code, message))
+        await real_report(level, code, message)
+
+    monkeypatch.setattr(driver, "_report", spy)
+    try:
+        await driver.push({"counter.tall": 1234})
+        assert await _settle(lambda: _equals(nodes["counter.tall"], 1234)), "1234 never landed"
+
+        await driver.push({"counter.tall": 40000})
+        await driver.push({"counter.tall": 40001})
+        assert "counter.tall" not in driver._unacked, "an unwritable value was queued for retry"
+        await asyncio.sleep(0.3)          # several reconciler periods
+        assert await nodes["counter.tall"].read_value() == 1234, \
+            "an out-of-range count was written anyway"
+        refused = [m for c, m in reports if c == "value_out_of_range"]
+        assert len(refused) == 1, f"reported {len(refused)} times: {refused}"
+        assert "40000" in refused[0] and "Int16" in refused[0] and "counter.tall" in refused[0]
+
+        await driver.push({"counter.tall": 27648})
+        assert await _settle(lambda: _equals(nodes["counter.tall"], 27648)), \
+            "a value that fits was not written after a refusal"
+    finally:
+        await driver.stop()
+
+
+async def _equals(node, want) -> bool:
+    return await node.read_value() == want
+
+
+def test_encode_for_node_matches_the_node_not_the_tag():
+    """The encoding rules without a server: the node's type wins where the
+    value fits it, an unknown type falls back to the pre-IP-28 variant, and
+    anything that would need rounding or wrapping is refused."""
+    from factoryforge_sidecar.drivers.opcua_client import Unwritable, encode_for_node
+
+    VT = ua.VariantType
+    assert encode_for_node("int", 27648, VT.Int16).VariantType is VT.Int16
+    assert encode_for_node("int", 27648, VT.Int32).VariantType is VT.Int32
+    assert encode_for_node("int", 5, VT.Double) == ua.Variant(5.0, VT.Double)
+    assert encode_for_node("float", 1.5, VT.Double) == ua.Variant(1.5, VT.Double)
+    assert encode_for_node("bit", True, VT.Boolean) == ua.Variant(True, VT.Boolean)
+    # Unknown DataType: exactly what every write was before.
+    assert encode_for_node("int", 7, None) == ua.Variant(7, VT.Int32)
+    assert encode_for_node("float", 0.5, None) == ua.Variant(0.5, VT.Float)
+
+    for tag_type, value, node_type, code in [
+        ("int", 32768, VT.Int16, "value_out_of_range"),
+        ("int", -32769, VT.Int16, "value_out_of_range"),
+        ("int", -1, VT.UInt16, "value_out_of_range"),
+        ("float", 42.5, VT.Int16, "node_type_mismatch"),
+        ("bit", True, VT.Int16, "node_type_mismatch"),
+        ("int", 1, VT.String, "node_type_mismatch"),
+    ]:
+        with pytest.raises(Unwritable) as refused:
+            encode_for_node(tag_type, value, node_type)
+        assert refused.value.code == code, (tag_type, value, node_type)
 
 
 async def test_unmapped_tags_are_reported_not_fatal(bus, fake_plc):
