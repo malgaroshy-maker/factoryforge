@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-40. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31 and IP-32 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-40. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31, IP-32, IP-36 and IP-38 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -674,9 +674,9 @@ firewall prompt once, then follow the guide exactly.
 | IP-33 | A turntable that can take a carton off a belt | 3 | M |  | open |
 | IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | open |
 | IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | open |
-| IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | open |
+| IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | **done** (gate checks every shipped text file) |
 | IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | open |
-| IP-38 | The release carries the docs its guide links to | 5 | S |  | open |
+| IP-38 | The release carries the docs its guide links to | 5 | S |  | **done** (gate checks 322 relative links) |
 | IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
 | IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | open (found by IP-32: ~2 mm proud at defaults; a friction-driven carton stops dead) |
 
