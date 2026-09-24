@@ -57,6 +57,15 @@ class Feed:
             self.left = EMIT_PULSE if self.on else self.gap
         return self.on
 
+    def hold(self) -> bool:
+        """The feeder while the belt is stopped: low, and a whole gap owed
+        before the next carton. Resuming mid-pulse instead would raise a
+        second edge the moment the belt restarts, and put a carton on top of
+        the one that was just made -- found on the wall clock, where the
+        mushroom can land inside a pulse (IP-35)."""
+        self.on, self.left = False, self.gap
+        return False
+
 
 class Scanner:
     """A reference controller's scan loop, with the panel already solved.

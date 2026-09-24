@@ -58,7 +58,7 @@ async def _sorter(bus, stop: asyncio.Event, scanner: Scanner | None) -> None:
             "conveyor.rotate": running,
             # Fed only while the belt runs: a carton made on a stopped belt
             # lands on the one before it.
-            "emitter.emit": feed(dt) if running else False,
+            "emitter.emit": feed(dt) if running else feed.hold(),
             "pusher.extend": any(at <= now for at in state["strokes"]),
             **lamps,
         })
@@ -102,7 +102,7 @@ async def _blind(bus, stop: asyncio.Event) -> None:
             state["cycle"] -= CYCLE
         await bus.write_many({
             "conveyor.rotate": scanner.running,
-            "emitter.emit": feed(dt) if scanner.running else False,
+            "emitter.emit": feed(dt) if scanner.running else feed.hold(),
             "pusher.extend": state["cycle"] >= CYCLE - STROKE_HOLD,
             **scanner.lamps(),
         })
@@ -119,7 +119,7 @@ async def _greedy(bus, stop: asyncio.Event) -> None:
         scanner.scan()
         await bus.write_many({"conveyor.rotate": scanner.running,
                               "pusher.extend": True,
-                              "emitter.emit": feed(dt) if scanner.running else False,
+                              "emitter.emit": feed(dt) if scanner.running else feed.hold(),
                               **scanner.lamps()})
 
     await run_scan(bus, stop, body)

@@ -327,7 +327,7 @@ def test_the_examiner_strikes_only_with_no_tall_carton_committed_to_the_plate(
     """Why the strike waits (gotcha 24, for the examiner's own rule). `good`
     times its push on a clock, as the brief allows; a strike that stranded a
     tall carton between the beam and the plate would fail it for a carton
-    the E-stop missorted. Seed 2 is one of 21 in 1..40 that do, unwaited."""
+    the E-stop missorted. Seed 2 is one of 19 in 1..40 that do, unwaited."""
     code, report = graded(tmp_path, "sorting-by-height", "good", 60, seed=2)
     assert code == 0, failed_ids(report)
     monkeypatch.setattr(sorting.SortingExam, "_plate_is_clear", lambda self: True)

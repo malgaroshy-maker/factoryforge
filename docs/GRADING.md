@@ -311,7 +311,7 @@ until the belt is running and no tall carton is between the high beam and the
 pusher. The brief allows a push timed on a clock after the beam, and a strike
 that stopped such a carton in front of the plate would fail a correct program
 for a carton the E-stop stranded. Without the wait, `good` fails
-`sort.tall_diverted` on 21 of seeds 1–40; with it, it passes all 40. Four
+`sort.tall_diverted` on 19 of seeds 1–40; with it, it passes all 40. Four
 checks:
 
 * `line.started_by_start`: the belt never began to move without a Start
@@ -520,7 +520,7 @@ scene's own 60 s window. Neither is thirteen.
 | `sorting-by-height` | `blind` | pushes on a timer — misrouted cartons |
 | | `greedy` | plate held out — short cartons in the chute |
 | | `nostart` | runs whenever the mushroom is out: the belt starts at 0.01 s with nobody having pressed Start, and again at 18.21 s when the mushroom is released |
-| | `startalone` | the Start pressed at 20.17 s with no Reset restarts the line: 1480 mm of belt while the trip was latched |
+| | `startalone` | the Start pressed at 19.87 s with no Reset restarts the line: 1480 mm of belt while the trip was latched |
 | `start-stop-station` | `noestop` | 3245 mm of belt through a struck mushroom and its latch, where 100 mm is the limit |
 | | `startalone` | 1745 mm of belt after Start alone cleared the latch, where 100 mm is the limit |
 | | `runon` | makes 21 cartons against a pot of 5 |
