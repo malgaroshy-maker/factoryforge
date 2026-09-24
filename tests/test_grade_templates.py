@@ -248,6 +248,9 @@ CSHARP_MIRRORS = [
     (pp.PP_CODES[1], "Parts/BarcodeScanner.cs", r"CodeTallCarton = (\d+);"),
     (pp.PP_CODES[2], "Parts/BarcodeScanner.cs", r"CodeMetal = (\d+);"),
     (pp.PP_DEFAULT_READ_HOLD, "Parts/ButtonPanel.cs", r"DefaultPressHold = ([\d.]+)f;"),
+    # IP-34: the examiner's press, closed this long and then open at least as
+    # long (`ButtonPanel.StepContact`).
+    (plant.Panel.PRESS, "Parts/ButtonPanel.cs", r"DefaultPressHold = ([\d.]+)f;"),
     (sh.SORTING_PANEL_SETPOINT, "Editor/SceneEditor.DefaultScene.cs",
      r'ConfigureSetpoint\([\d.]+f, [\d.]+f, "s", ([\d.]+)f\)'),
     # IP-29: the numbers the positions and behaviours the models adopted rest on.
@@ -1073,3 +1076,63 @@ def test_a_scanner_read_is_held_the_way_the_engine_holds_it():
     # compares the model with itself passes whatever the model says (it did,
     # with the hold shrunk to one tick). CSHARP_MIRRORS pins 0.2 to the C#.
     assert highs * dt == pytest.approx(0.2, abs=dt)
+
+
+# --- the examiner's press (IP-34) -----------------------------------------
+
+def test_no_template_sets_its_own_press_hold():
+    """`Panel.PRESS` is `ButtonPanel.DefaultPressHold`, pinned above. A
+    template may set `press_hold` on its panel (`ButtonPanel.cs` saves and
+    loads it), and the engine would then hold that scene's presses longer or
+    shorter than the examiner does. None does today; one that starts to has
+    to be followed by the model, the way `read_hold` is on the scanner."""
+    overridden = []
+    for path in sorted(TEMPLATES.glob("*.json")):
+        if path.name == "manifest.json":
+            continue
+        for part in json.loads(path.read_text(encoding="utf-8")).get("parts", []):
+            if part.get("type") == "ButtonPanel" and "press_hold" in part.get("properties", {}):
+                overridden.append(f"{path.name}:{part['id']}")
+    assert not overridden, f"panels whose press hold the grader does not follow: {overridden}"
+
+
+def _contact(presses: list[float], ticks: int = 150, dt: float = 0.01):
+    """Step a bare panel, pressing Start at each time in `presses`; return the
+    tag's value per tick and the ticks its rising edges came on."""
+    tags = plant.TagTable([])
+    panel = plant.Panel(tags)
+    panel.declare(tags)
+    script = plant.Script([(at, panel.press("start")) for at in presses])
+    trace, t = [], 0.0
+    for _ in range(ticks):
+        t += dt
+        script.run(t)
+        panel.tick(dt, t)
+        trace.append(bool(tags.get("panel.start").value))
+    rises = [i for i, v in enumerate(trace) if v and (i == 0 or not trace[i - 1])]
+    return trace, rises, panel
+
+
+def test_a_press_is_held_the_way_the_engine_holds_it():
+    """`ButtonPanel.StepContact` (IP-31): closed for the hold, then open at
+    least as long. Against the engine's 0.2 s, not the model's own constant --
+    CSHARP_MIRRORS pins that one to the C#."""
+    trace, rises, _ = _contact([0.1])
+    assert len(rises) == 1
+    assert sum(trace) * 0.01 == pytest.approx(0.2, abs=1e-9)
+
+
+def test_a_second_press_while_the_button_is_down_is_the_same_press():
+    """A double-click is one Start, not a phantom second one."""
+    trace, rises, panel = _contact([0.1, 0.2])
+    assert len(rises) == 1 and sum(trace) == 20
+    assert [what for _, what in panel.absorbed] == ["start"]
+
+
+def test_a_press_while_the_contact_reopens_waits_out_the_gap():
+    """Two deliberate presses stay two edges, each with a low gap a poller can
+    see: the second waits until the contact has been open for the hold."""
+    trace, rises, _ = _contact([0.1, 0.35])
+    assert len(rises) == 2
+    gap = rises[1] - (rises[0] + 20)
+    assert gap == 20, f"the contact was open {gap} ticks between the two presses"

@@ -146,7 +146,7 @@ The window then waits for one more thing: the student's sidecar saying its
 driver has reached the PLC (the tag bus's `controller` message, IP-30).
 `factoryforge_sidecar connect` starts its driver after the describe, and an
 OPC UA or S7 driver can take seconds to connect. In eight of the ten scenes the
-examiner presses Start 1.0 s in, for 0.15 s (`Panel.PRESS`), so a window that
+examiner presses Start 1.0 s in, for 0.2 s (`Panel.PRESS`), so a window that
 opened on the describe could be over the first Start before the PLC could see
 it. "Ready" means the PLC can see the tags. A client driver (OPC UA client, S7,
 PLCSIM) is ready once it is connected and has bound the tags. A server driver

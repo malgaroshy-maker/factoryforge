@@ -4,6 +4,7 @@ examiner's script, the operator panel and the scene base class.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 
@@ -211,16 +212,29 @@ class Panel:
     normally closed, true = healthy.
     """
 
-    #: Long enough that a controller scanning at 50 ms cannot miss the edge,
-    #: short enough to still be one edge. `tools/try_scene.py` holds 0.15 s
-    #: against the real engine for the same reason.
-    PRESS = 0.15
+    #: How long a press holds a momentary contact closed, and then the least
+    #: time it stays open before the next press on the same button can close
+    #: it again: `ButtonPanel.DefaultPressHold` (`ButtonPanel.cs`, IP-31),
+    #: which no template overrides (`tests/test_grade_templates.py` holds both
+    #: to that). The grader used to hold 0.15 s against the engine's one
+    #: physics tick; IP-31 raised the engine to 0.2 s and IP-34 brought the
+    #: examiner's hand to the same number, so a program is marked against the
+    #: press it will meet in the 3D scene.
+    PRESS = 0.2
 
     def __init__(self, tags: TagTable, prefix: str = "panel",
                  setpoint: float = 0.0) -> None:
         self.tags = tags
         self.prefix = prefix
-        self._held: dict[str, float] = {}
+        #: One momentary contact per button, as `ButtonPanel.StepContact`
+        #: moves it: `[phase, ticks left, requested]`, phase "idle", "high"
+        #: (closed) or "low" (open, and not yet open for long enough).
+        self._contacts: dict[str, list] = {
+            name: ["idle", 0, False] for name in ("start", "stop", "reset")}
+        #: Presses that landed while their button was already down, and so
+        #: were the press in progress rather than a new edge -- what the
+        #: engine does with a double-click. No exam does this on purpose.
+        self.absorbed: list[tuple[float, str]] = []
         self.setpoint_value = setpoint
         self.healthy = True
         #: Sim time of the last Start press. Ground truth for "did the machine
@@ -243,8 +257,16 @@ class Panel:
     # --- the examiner's hand ---
 
     def press(self, name: str):
+        """A press, as a click on the engine's cap is one: a request the
+        contact acts on at its next tick. While the button is still down it
+        is the same press (`absorbed`); while it is re-opening it waits out
+        the gap and then makes its own edge."""
         def do() -> None:
-            self._held[name] = self._t + self.PRESS
+            contact = self._contacts[name]
+            if contact[0] == "high":
+                self.absorbed.append((round(self._t, 2), name))
+                return
+            contact[2] = True
             self.presses.append((round(self._t, 2), name))
             if name == "start":
                 self.last_start = self._t
@@ -274,10 +296,39 @@ class Panel:
     def tick(self, dt: float, now: float) -> None:
         self._t = now
         p = self.prefix
-        for name in ("start", "stop", "reset"):
-            self.tags.set(f"{p}.{name}", now < self._held.get(name, -1.0))
+        hold = self.hold_ticks(dt)
+        for name, contact in self._contacts.items():
+            self._step_contact(contact, hold)
+            self.tags.set(f"{p}.{name}", contact[0] == "high")
         self.tags.set(f"{p}.estop", self.healthy)
         self.tags.set(f"{p}.setpoint", float(self.setpoint_value))
+
+    @classmethod
+    def hold_ticks(cls, dt: float) -> int:
+        """`PRESS` in whole ticks, rounded up and never less than one --
+        `ButtonPanel.PressHoldTicks`, on this clock's tick."""
+        return max(1, math.ceil(cls.PRESS / dt - 1e-6))
+
+    @staticmethod
+    def _step_contact(contact: list, hold: int) -> None:
+        """`ButtonPanel.StepContact`, line for line: closed for `hold` ticks,
+        then open for at least `hold` ticks, and a request waits for that."""
+        phase, left, requested = contact
+        if phase == "high":
+            contact[2] = False                 # already down: the same press
+            if left > 0:
+                contact[1] = left - 1
+                return
+            contact[0], contact[1] = "low", hold - 1
+            return
+        if phase == "low":
+            if left > 0:
+                contact[1] = left - 1
+                return
+            contact[0] = "idle"
+        if not contact[2]:
+            return
+        contact[0], contact[1], contact[2] = "high", hold - 1, False
 
     def started_since(self, when: float) -> bool:
         return self.last_start is not None and self.last_start >= when
