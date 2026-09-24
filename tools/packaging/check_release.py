@@ -38,7 +38,13 @@ import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+
+# This script's own folder, put on the path explicitly: test_plan.py loads the
+# file by location, and then nothing else puts it there.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DIST = ROOT / "dist"
@@ -261,12 +267,97 @@ def check_grader(sidecar: Path) -> list[str]:
     return problems
 
 
+def release_contents(target: str) -> tuple[str, dict[str, bytes]]:
+    """What the release holds, `{path inside the extracted folder: bytes}`,
+    read from the archive a user downloads when there is one -- that is what
+    ships -- and from the staged folder when the build skipped the archive.
+    Only text is read; every other file maps to b""."""
+    archive = DIST / f"FactoryForge-{target}.zip"
+    files: dict[str, bytes] = {}
+    if archive.is_file():
+        prefix = f"{target}/"
+        with zipfile.ZipFile(archive) as z:
+            for name in z.namelist():
+                if name.endswith("/") or not name.startswith(prefix):
+                    continue
+                rel = name[len(prefix):]
+                files[rel] = z.read(name) if release_text.is_text(rel) else b""
+        return f"{archive.name}", files
+    staging = DIST / target
+    for path in sorted(staging.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(staging).as_posix()
+            files[rel] = path.read_bytes() if release_text.is_text(rel) else b""
+    return f"{staging} (no archive: built with --skip-archive?)", files
+
+
+def check_release_text(target: str, show: int = 40) -> list[str]:
+    """IP-36 and IP-38 against what ships: no command the extracted folder
+    cannot run, outside a marked from-source region, and no relative link to
+    a file the folder does not have. Returns one problem per check that
+    failed; prints every offending file:line (up to *show* of each)."""
+    where, files = release_contents(target)
+    if not files:
+        message = f"nothing to read in {where}"
+        print(f"  [FAIL] {message}", file=sys.stderr)
+        return [message]
+    texts: dict[str, str] = {}
+    undecodable = []
+    for rel, data in files.items():
+        if release_text.is_text(rel):
+            try:
+                texts[rel] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                undecodable.append(rel)
+    problems: list[str] = []
+
+    commands = [f"{rel}:{line}: {message}"
+                for rel in sorted(texts)
+                for line, message in release_text.command_problems(rel, texts[rel])]
+    commands += [f"{rel}: not UTF-8, so it could not be checked" for rel in undecodable]
+    if commands:
+        problems.append(f"{len(commands)} line(s) of shipped text tell the reader to run "
+                        f"something the release cannot, outside a from-source region")
+        print(f"  [FAIL] {problems[-1]}:", file=sys.stderr)
+        for line in commands[:show]:
+            print(f"           {line}", file=sys.stderr)
+        if len(commands) > show:
+            print(f"           ... and {len(commands) - show} more", file=sys.stderr)
+    else:
+        print(f"  [ok]   every command in {len(texts)} shipped text files runs from the "
+              f"release, or is marked from-source", flush=True)
+
+    dead = release_text.dead_links(
+        {rel: text for rel, text in texts.items() if rel.endswith(".md")}, set(files))
+    linked = sum(len(release_text.relative_links(rel, text))
+                 for rel, text in texts.items() if rel.endswith(".md"))
+    if dead:
+        problems.append(f"{len(dead)} relative link(s) in shipped pages lead nowhere "
+                        f"in the release")
+        print(f"  [FAIL] {problems[-1]}:", file=sys.stderr)
+        for line in dead[:show]:
+            print(f"           {line}", file=sys.stderr)
+        if len(dead) > show:
+            print(f"           ... and {len(dead) - show} more", file=sys.stderr)
+    elif not linked:
+        # A link checker that found no links has checked nothing (gotcha 16).
+        problems.append("found no relative links at all in the shipped pages")
+        print(f"  [FAIL] {problems[-1]}", file=sys.stderr)
+    else:
+        print(f"  [ok]   all {linked} relative links in the shipped pages resolve inside "
+              f"{where}", flush=True)
+    return problems
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--target", choices=sorted(BINARIES), required=True)
     parser.add_argument("--sidecar-only", action="store_true",
                         help="check the frozen sidecar alone; not a release verdict")
+    parser.add_argument("--text-only", action="store_true",
+                        help="check the shipped docs' commands and links alone; not a "
+                             "release verdict")
     args = parser.parse_args(argv)
 
     staging = DIST / args.target
@@ -274,6 +365,16 @@ def main(argv: list[str]) -> int:
     failures: list[str] = []
 
     print(f"Checking the {args.target} release in {staging}", flush=True)
+
+    if args.text_only:
+        failures = check_release_text(args.target)
+        print()
+        if failures:
+            print(f"{len(failures)} problem(s) in the shipped text", file=sys.stderr)
+            return 1
+        print("Shipped text OK. The engine and the sidecar were NOT checked: "
+              "this is not a release verdict.")
+        return 0
 
     if args.sidecar_only:
         sidecar = staging / SIDECARS[args.target]
@@ -329,6 +430,9 @@ def main(argv: list[str]) -> int:
             print(f"  [ok]   drivers usable: {', '.join(verified)}")
         failures.extend(check_grader(sidecar))
 
+    # What the release tells its reader (IP-36, IP-38).
+    failures.extend(check_release_text(args.target))
+
     print(f"\n  {len(SELF_TESTS)} self-tests against the exported binary:")
     for name in SELF_TESTS:
         try:
@@ -345,7 +449,8 @@ def main(argv: list[str]) -> int:
         print(f"{len(failures)} problem(s) -- this release is not shippable", file=sys.stderr)
         return 1
     print(f"Release OK: {len(SELF_TESTS)} self-tests passed against {binary.name}; "
-          f"the frozen sidecar graded {GATE_SCENE} to PASS and FAIL and ran demo")
+          f"the frozen sidecar graded {GATE_SCENE} to PASS and FAIL and ran demo; "
+          f"every shipped command runs from the release and every link resolves")
     return 0
 
 

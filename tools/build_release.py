@@ -34,7 +34,9 @@ ENGINE = ROOT / "engine"
 DIST = ROOT / "dist"
 
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools" / "packaging"))
 from run import find_godot  # noqa: E402
+import release_text  # noqa: E402
 
 #: Preset name in engine/export_presets.cfg -> (staging dir, binary name).
 TARGETS = {
@@ -44,10 +46,15 @@ TARGETS = {
 
 #: Everything that is not the engine itself. templates/ are res:// resources
 #: and travel inside the binary, so they are deliberately absent here; the
-#: grader's copy travels inside the frozen sidecar (`freeze_sidecar`).
+#: grader's copy travels inside the frozen sidecar (`freeze_sidecar`). These
+#: are the seeds: every document they link to ships too (`payload_files`,
+#: IP-38), so a page linked from here needs no entry of its own. OPENPLC.md
+#: and GRADING.md are named anyway -- the first hour depends on both.
 PAYLOAD = [
     ("examples", "examples"),
     ("docs/GETTING_STARTED.md", "docs/GETTING_STARTED.md"),
+    ("docs/OPENPLC.md", "docs/OPENPLC.md"),
+    ("docs/GRADING.md", "docs/GRADING.md"),
     ("docs/tag-bus.md", "docs/tag-bus.md"),
     ("docs/DRIVER_AUTHORING.md", "docs/DRIVER_AUTHORING.md"),
     ("docs/PART_AUTHORING.md", "docs/PART_AUTHORING.md"),
@@ -55,6 +62,55 @@ PAYLOAD = [
     ("README.md", "README.md"),
     ("LICENSE", "LICENSE"),
 ]
+
+
+def payload_files(root: Path = ROOT, payload: list[tuple[str, str]] | None = None
+                  ) -> dict[str, Path]:
+    """`{path in the release: source file}` for everything but the engine and
+    the sidecar: PAYLOAD, plus every document a shipped page links to, followed
+    through the pages that adds (IP-38). A link the build cannot honour -- to
+    nothing, out of the tree, or to source code -- stops the build here rather
+    than shipping a dead link.
+
+    Every entry keeps its repository path in the release, which is what lets a
+    relative link resolve the same in both.
+    """
+    files: dict[str, Path] = {}
+    for src_rel, dest_rel in (PAYLOAD if payload is None else payload):
+        if src_rel != dest_rel:
+            raise SystemExit(f"[payload] {src_rel} -> {dest_rel}: a moved file breaks "
+                             f"every relative link to and from it")
+        src = root / src_rel
+        if not src.exists():
+            raise SystemExit(f"[payload] missing: {src_rel}")
+        if src.is_dir():
+            for path in sorted(src.rglob("*")):
+                if path.is_file() and "__pycache__" not in path.parts:
+                    files[path.relative_to(root).as_posix()] = path
+        else:
+            files[dest_rel] = src
+    added, problems = release_text.doc_closure(root, set(files))
+    if problems:
+        raise SystemExit("[payload] shipped pages link to what a release cannot carry:\n  "
+                         + "\n  ".join(problems))
+    for rel in sorted(added):
+        files[rel] = root / rel
+    return dict(sorted(files.items()))
+
+
+def payload_bytes(rel: str, src: Path) -> bytes:
+    """What a payload file ships as. A page in `release_text.SOURCE_ONLY_DOCS`
+    is wrapped in one from-source region under a visible note (IP-36);
+    everything else is copied byte for byte."""
+    data = src.read_bytes()
+    if not release_text.is_source_only(rel):
+        return data
+    banner = release_text.source_only_banner(rel)
+    if banner is None:
+        raise SystemExit(f"[payload] {rel} is listed as source-only, but a "
+                         f"{Path(rel).suffix or 'suffix-less'} file cannot carry the note")
+    head, tail = banner
+    return (head + data.decode("utf-8") + tail).encode("utf-8")
 
 
 def platform_key() -> str:
@@ -194,17 +250,19 @@ def freeze_sidecar(staging: Path) -> Path | None:
 
 
 def copy_payload(staging: Path) -> None:
-    for src_rel, dest_rel in PAYLOAD:
-        src, dest = ROOT / src_rel, staging / dest_rel
-        if not src.exists():
-            print(f"[payload] skipped, missing: {src_rel}")
-            continue
+    files = payload_files()
+    seeds = [dest for _, dest in PAYLOAD]
+    linked = [rel for rel in files
+              if not any(rel == s or rel.startswith(s + "/") for s in seeds)]
+    marked = 0
+    for rel, src in files.items():
+        dest = staging / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if src.is_dir():
-            shutil.copytree(src, dest, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dest)
-    print(f"[payload] {len(PAYLOAD)} entries")
+        data = payload_bytes(rel, src)
+        dest.write_bytes(data)
+        marked += len(data) != src.stat().st_size
+    print(f"[payload] {len(files)} files from {len(PAYLOAD)} entries, {len(linked)} of them "
+          f"only because a shipped page links to them; {marked} marked source-only")
 
 
 def make_archive(staging: Path, target: str) -> Path:

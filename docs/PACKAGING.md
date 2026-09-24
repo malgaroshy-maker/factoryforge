@@ -110,14 +110,75 @@ FactoryForge-windows.zip
     data_FactoryForge_windows_x86_64/  the .NET assemblies — required
     factoryforge-sidecar.exe           every PLC protocol and the grader, frozen
     examples/                          TIA, OpenPLC and Node-RED examples, mappings
-    docs/                              GETTING_STARTED, tag-bus, authoring guides, TEST_PLAN
-    README.md, LICENSE
+    docs/                              GETTING_STARTED, OPENPLC, GRADING, tag-bus, ...
+    README.md, LICENSE, ...            and every page those link to (below)
 ```
 
 The folder inside the archive is named after the target, `windows/` or
 `linux/` — `make_archive` stores paths relative to `dist/`. This listing
 said `FactoryForge-windows/` until 2026-09-23, which no archive has ever
 contained.
+
+### Every page a shipped page links to ships too
+
+`PAYLOAD` in `build_release.py` is only the seeds. `payload_files` follows
+every relative link in every shipped Markdown page — `[x](y)`, `![x](y)`,
+`<img src>`, `[ref]: y` — and ships the target, then follows the links in
+that, until nothing new turns up (IP-38). Until it did, `docs/OPENPLC.md` and
+`docs/GRADING.md` were linked from the first-hour guide and the starters and
+were not in the zip. Following `README.md` is what brings in `AGENTS.md`, the
+plans, `docs/history/` and the issue forms under `.github/`: the README links
+to them, so a reader of the zip can follow those links too.
+
+Two rules keep that from shipping the source tree by accident. The closure adds
+only documentation (`.md`, `.txt`, `.yml`, and images); a shipped page linking
+to a `.py` or `.cs` file, to a file that does not exist, or out of the
+repository stops the build and names the link. And a file keeps its repository
+path in the release, which is what lets the same relative link resolve in both.
+
+### Commands a release cannot run are marked, or they fail the gate
+
+The release has no Python, no Godot, no .NET SDK and no `tools/`. A page in
+the zip that says `python tools/grade.py` hands someone a command that cannot
+run, and until IP-36 every starter README did. `check_release.py` reads every
+shipped text file (not `.py`, `.sh` or `.c`, whose usage lines describe the
+runtime they need) and fails on `python …`, `pip install`, `pytest`, `dotnet`,
+`godot`, `run.py`, `cd sidecar`, `-m factoryforge_sidecar`, or a `tools/…`
+script run with arguments. A code line counts, and so does an inline code span
+with arguments. A bare `` `tools/grade.py` `` names a file, and that is allowed.
+
+Text for contributors is fine if the reader can tell. Wrap it:
+
+```markdown
+<!-- from-source -->
+(From a source checkout: `python -m factoryforge_sidecar connect ...`.)
+<!-- /from-source -->
+```
+
+The markers are HTML comments, so they do not render. They may sit on lines of
+their own or inside a line (`… (<!-- from-source -->from a source checkout,
+`python …`<!-- /from-source -->) …`), and they nest. The gate refuses a
+region whose visible text never uses the word "source": a marker the reader
+cannot see is not a label. It also refuses an unclosed marker or a stray close,
+so a typo cannot exempt the rest of a file. On a line of its own, the marker
+starts an HTML block, which can split a paragraph in two. Inside a line it
+cannot, so use that form in the middle of a paragraph.
+
+A page whose whole subject is the source tree (`SOURCE_ONLY_DOCS` in
+`tools/packaging/release_text.py`: `AGENTS.md`, the plans, the authoring guides,
+`TEST_PLAN`, this file, `docs/history/`, `.github/`) is not edited for this.
+The build wraps its shipped copy in one region, under a visible note that its
+commands need a clone and a link to Getting Started.
+
+The commands a release *can* run are `.\factoryforge-sidecar …` on Windows and
+`./factoryforge-sidecar …` on Linux, typed in the extracted folder. A bare
+`factoryforge-sidecar` works in cmd.exe, but PowerShell and a Linux shell do
+not look in the current folder, and `./` does not work in cmd, so `.\` is the
+Windows form. The grader prints its connect line that way when frozen
+(`grading/core.py`, `sidecar_launcher`), and `tools/gen_starters.py` writes
+the starters that way. `tests/test_examples.py` checks every generated sidecar
+command for the prefix. The gate does not flag a bare
+`factoryforge-sidecar`, because prose names the program that way too.
 
 The scene templates — listed in `engine/templates/manifest.json`, which is the
 one place that knows how many there are — are `res://` resources and travel
@@ -281,6 +342,25 @@ going to catch either.
 To iterate on the freeze alone, `check_release.py --target windows
 --sidecar-only` runs only these checks. It prints that it is not a release
 verdict, and it is not one.
+
+### The shipped text is read, from the archive
+
+The gate reads `dist/FactoryForge-<target>.zip`, which is what a user
+downloads, or the staged folder if the build skipped the archive, and it says
+which one it read. It checks the two things described under *What a release
+contains*: no command the release cannot run outside a from-source region, and
+no relative link to a file the archive does not hold. It names every offending
+`file:line`. `check_release.py --target windows --text-only` runs only these
+two checks, and like `--sidecar-only` it is not a release verdict.
+`tests/test_release_text.py` runs the same reader over the file set
+`payload_files` computes from the checkout, so a doc edit that would fail the
+gate fails in pytest first, with no Godot needed.
+
+Both checks were watched failing on 2026-09-24 against a real Windows archive
+(gotcha 24). With `python tools/grade.py --list` planted in the zip's
+`docs/GETTING_STARTED.md`, the gate failed on exactly that line. With
+`docs/OPENPLC.md` removed from the zip, it failed with the 20 pages that link
+to it. The unmodified archive passed both, and then passed the whole gate.
 
 ---
 
