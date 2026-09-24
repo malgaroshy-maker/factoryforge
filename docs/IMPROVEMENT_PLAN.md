@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-40. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -678,6 +678,7 @@ firewall prompt once, then follow the guide exactly.
 | IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | open |
 | IP-38 | The release carries the docs its guide links to | 5 | S |  | **done** (gate checks 322 relative links) |
 | IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
+| IP-41 | Starters warn that OpenPLC's first scans read every input FALSE | 2 | S |  | open (AGENTS gotcha 25; the first-hour program handles it with `EstopSeen`) |
 | IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | **done** 768fce8 (pivot-divert still carries its lip_drop 0.04 workaround; its grader requires it) |
 
 ## Appendix B — where the findings came from

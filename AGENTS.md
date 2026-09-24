@@ -433,6 +433,17 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
     path — and both were checked by deliberately reintroducing the bug and
     confirming they fail. Do that before trusting a new self-test.
 
+25. **OpenPLC scans before its first Modbus poll returns, and until then every
+    input reads FALSE.** A normally-closed E-stop that reads FALSE looks struck,
+    so a program that latches a trip on `NOT PanelEstop` trips itself every time
+    the runtime starts, and the grader's first Start does nothing. The guide's
+    program failed exactly this way on a real OpenPLC after passing every
+    Python model of it (2026-09-25, `docs/OPENPLC.md`). Arm the trip only once
+    the E-stop has been seen healthy, and keep refusing Start while it reads
+    FALSE, so a cut wire still stops the line. The converse also bites: when
+    the Modbus link drops, OpenPLC keeps its last inputs and keeps running, so
+    a line left running is already turning when the next grader connects.
+
 ---
 
 ## Current state
