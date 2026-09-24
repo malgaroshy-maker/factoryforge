@@ -21,6 +21,9 @@ namespace FactoryForge.Sim;
 /// enough to be polled and does not repeat for the same item, that the gauge's needle moves, that the
 /// beacon lights, and that the heater has a real time constant and a fault that
 /// the command cannot reveal.
+///
+/// The diverter rig (IP-32) also holds the chute to IP-40: its chute keeps
+/// the default lip, and a turned carton has to go down it, not stop on it.
 /// </summary>
 public partial class NewPartsSelfTest : Node
 {
@@ -191,18 +194,21 @@ public partial class NewPartsSelfTest : Node
             Rotation = new[] { 0.0f, 0.0f, 0.0f },
         });
         // Wide, because a turned carton leaves the belt moving downstream as
-        // well as across. And with its lip dropped: at the chute's default
-        // 0.015 m it is the slab's *centre line* that sits below the belt, and a
-        // 0.04 m slab tilted 30° brings its top edge up to 2 mm *above* the belt
-        // surface. A pusher's shove climbs that; a carton that only the belt's
-        // friction moves along the blade stops dead against it, square on the
-        // lip, which this rig first misread as the diverter failing.
+        // well as across -- and otherwise the chute as the palette places it,
+        // lip included (IP-40). Until IP-40 the chute anchored the slab's
+        // *centre line* 15 mm below the belt, so a 0.04 m slab tilted 30° put
+        // its top edge 2 mm *above* the belt surface. A pusher's shove climbs
+        // that; a carton that only the belt's friction moves along the blade
+        // stopped dead against it, square on the lip, which this rig first
+        // misread as the diverter failing and then worked around with
+        // `lip_drop` 0.04. The rig now takes the default lip so that a proud
+        // lip fails here, by name.
         data.Parts.Add(new PartInstanceData
         {
             Id = "dvchute", Type = "Chute",
             Position = new[] { RigPivotX + 0.5f, PartLayout.WorkPlaneY, RigZ + 0.5f },
             Rotation = new[] { 0.0f, 0.0f, 0.0f },
-            Properties = new Dictionary<string, string> { ["ramp_width"] = "1.4", ["lip_drop"] = "0.04" },
+            Properties = new Dictionary<string, string> { ["ramp_width"] = "1.4" },
         });
 
         const string path = "user://selftest_newparts.json";
@@ -291,6 +297,18 @@ public partial class NewPartsSelfTest : Node
 
     private const int RigTimeout = 480;
 
+    /// <summary>A diverted carton has until this many ticks after it was
+    /// dropped to be down the chute. It is over the edge in about 340.</summary>
+    private const int RigCartonTimeout = 600;
+
+    /// <summary>How far below its riding height a carton's centre must be to
+    /// count as on its way down the ramp, not parked at the top of it.</summary>
+    private const float RigChuteDescent = 0.10f;
+
+    /// <summary>Where the carton crossed the far edge, for "turned at the
+    /// blade" -- by the time it is down the chute it has slid on.</summary>
+    private float? _rigOffX;
+
     private int _rigPhase;
     private int _rigTicks;
     private BoxPhysics? _rigBox;
@@ -326,6 +344,7 @@ public partial class NewPartsSelfTest : Node
         switch (_rigPhase)
         {
             case 0:
+                CheckRigChuteLip();
                 Tags.Set("dvbelt.rotate", true);
                 Tags.Set("dv.divert", false);
                 _rigBox = DropRigCarton(tall: false);
@@ -377,14 +396,28 @@ public partial class NewPartsSelfTest : Node
                 if (_rigTicks % 60 == 0)
                     GD.Print($"  rig {what}: t={_rigTicks} at {Where(box)} yaw={Mathf.RadToDeg(box.GlobalRotation.Y):0.0}");
                 bool off = box.GlobalPosition.Z > RigFarEdge + 0.1f;
-                if (!off && _rigTicks < RigTimeout) return false;
+                if (off && _rigOffX is null) _rigOffX = box.GlobalPosition.X;
 
-                GD.Print($"  rig {what}: {(off ? "diverted" : "NOT diverted")} at {Where(box)} after {_rigTicks} ticks");
+                // Off the belt is not enough: it has to go *down the chute*. A
+                // carton that crosses the edge and then stops on a proud lip
+                // (IP-40) is over the far edge and going nowhere, and the old
+                // check -- z alone -- passed it.
+                float ride = PartLayout.WorkPlaneY + PartLayout.BeltSurface + box.Height / 2.0f;
+                bool down = off && box.GlobalPosition.Y < ride - RigChuteDescent;
+                if (!down && _rigTicks < RigCartonTimeout) return false;
+
+                GD.Print($"  rig {what}: {(down ? "down the chute" : off ? "off the belt but NOT down the chute" : "NOT diverted")} "
+                         + $"at {Where(box)} after {_rigTicks} ticks");
                 Expect(off,
                        $"at `divert` a {what} carton on the running belt is turned off the far edge "
                        + $"(z > {RigFarEdge + 0.1f:0.00}); it is at {Where(box)} after {_rigTicks} ticks");
-                Expect(!off || box.GlobalPosition.X < RigBladeEnd + 0.4f,
-                       $"and it is turned at the blade, not somewhere past it (at {Where(box)})");
+                Expect(!off || down,
+                       $"and the {what} carton goes down the default chute: its centre {RigChuteDescent:0.00} m "
+                       + $"below where it rode the belt ({ride:0.00}); it is at {Where(box)} after {_rigTicks} ticks "
+                       + "-- stopped on the lip?");
+                Expect(_rigOffX is not { } offX || offX < RigBladeEnd + 0.4f,
+                       $"and it is turned at the blade, not somewhere past it (it left the lane at x={_rigOffX:0.00})");
+                _rigOffX = null;
                 box.QueueFree();
                 if (_rigPhase == 3)
                 {
@@ -398,6 +431,18 @@ public partial class NewPartsSelfTest : Node
             }
         }
         return true;
+    }
+
+    /// <summary>The geometry half of IP-40, read off the collision shape the
+    /// solver has. The carton runs are the half that matters; this one names
+    /// the cause when they fail.</summary>
+    private void CheckRigChuteLip()
+    {
+        Vector3 lip = Part<Chute>("dvchute").DeckLipFromShape();
+        float mm = (lip.Y - PartLayout.BeltSurface) * 1000.0f;
+        GD.Print($"  rig chute: lip {mm:+0.0;-0.0} mm against the belt surface");
+        Expect(lip.Y <= PartLayout.BeltSurface - 0.005f,
+               $"a default chute's lip sits below the belt surface (it is {mm:+0.0;-0.0} mm from it)");
     }
 
     private bool Fail(string what)

@@ -14,6 +14,14 @@ namespace FactoryForge.Parts;
 /// lifts the lip by half the length times sin(incline), which at 25° over 0.7 m
 /// put it 12 cm *above* the belt.
 ///
+/// And "the lip" means the top edge a carton actually meets, not the slab's
+/// centre line (IP-40). Anchoring the centre line 15 mm down left the top
+/// surface half a thickness above it — t/2·cos(incline), 17 mm for a 0.04 m
+/// slab at 30° — so the edge stood 2 mm *proud* of the belt. A pusher's shove
+/// climbs 2 mm; a carton that only belt friction moves, turned off the lane by
+/// a pivot diverter, stopped dead against it. <see cref="LipDrop"/> is now
+/// measured to the top surface, so the default lip really is 15 mm down.
+///
 /// The incline and the surface friction are a matched pair: a box only slides
 /// when tan(incline) &gt; µ. At the original 12° with no physics material at all,
 /// the ramp inherited Godot's default µ = 1.0 and boxes simply parked on it.
@@ -50,8 +58,10 @@ public partial class Chute : StaticBody3D, IPart
     /// centimetre of clearance, puts the lip just off the belt edge.</summary>
     [Export] public float LipSetback { get; set; } = DefaultLipSetback;
 
-    /// <summary>How far the lip sits below the carrying surface, so a box steps
-    /// down onto the ramp rather than catching on it.</summary>
+    /// <summary>How far the lip — the ramp's top surface at its high edge —
+    /// sits below the belt's carrying surface, so a box steps down onto the
+    /// ramp rather than catching on it. Until IP-40 this was measured to the
+    /// slab's centre line, which put the edge above the belt.</summary>
     [Export] public float LipDrop { get; set; } = DefaultLipDrop;
 
     public static float InclineRadians => Mathf.DegToRad(DefaultInclineDegrees);
@@ -74,9 +84,32 @@ public partial class Chute : StaticBody3D, IPart
     /// </summary>
     public static Vector3 SurfaceOffset(float distance)
     {
-        var lip = new Vector3(0, PartLayout.BeltSurface - DefaultLipDrop, -DefaultLipSetback);
+        // The lip is on the surface (IP-40), so walking down the slope from it
+        // stays on the surface: there is no half-thickness to add.
         var downSlope = new Vector3(0, -Mathf.Sin(InclineRadians), Mathf.Cos(InclineRadians));
-        return lip + downSlope * distance + SurfaceNormal * (DefaultThickness / 2.0f);
+        return LipOffset(DefaultLipDrop, DefaultLipSetback) + downSlope * distance;
+    }
+
+    /// <summary>The high edge of the ramp's top surface, relative to the part
+    /// origin: <paramref name="lipDrop"/> below the belt surface and
+    /// <paramref name="lipSetback"/> back towards the belt.</summary>
+    public static Vector3 LipOffset(float lipDrop, float lipSetback) =>
+        new(0, PartLayout.BeltSurface - lipDrop, -lipSetback);
+
+    private const string DeckShapeName = "DeckShape";
+
+    /// <summary>
+    /// Where the top surface's high edge actually is, read off the deck's
+    /// collision shape rather than worked out from the settings — the settings
+    /// agreed with themselves the whole time the edge stood proud. Relative to
+    /// the part origin; NaN before the geometry is built. For the tests
+    /// (IP-40).
+    /// </summary>
+    public Vector3 DeckLipFromShape()
+    {
+        if (GetNodeOrNull<CollisionShape3D>(DeckShapeName) is { Shape: BoxShape3D box } shape)
+            return shape.Transform * new Vector3(0, box.Size.Y / 2.0f, -box.Size.Z / 2.0f);
+        return new Vector3(float.NaN, float.NaN, float.NaN);
     }
 
     public override void _Ready() => BuildGeometry();
@@ -103,11 +136,13 @@ public partial class Chute : StaticBody3D, IPart
 
         var basis = Basis.Identity.Rotated(Vector3.Right, Mathf.DegToRad(InclineAngleDegrees));
 
-        // Anchor at the lip, then walk half the ramp down the slope to find the
-        // slab centre. Rotating the basis first means "down the slope" stays
-        // correct for any incline.
-        var lip = new Vector3(0, PartLayout.BeltSurface - LipDrop, -LipSetback);
-        var centre = lip + basis * new Vector3(0, 0, RampLength / 2.0f);
+        // Anchor at the lip -- the top surface's high edge -- then go half the
+        // thickness into the slab and half the ramp down the slope to find its
+        // centre. Rotating the basis first keeps both steps right for any
+        // incline. Leaving out the first step was IP-40: the centre line sat at
+        // the lip's height and the surface stood proud of the belt.
+        var lip = LipOffset(LipDrop, LipSetback);
+        var centre = lip + basis * new Vector3(0, -RampThickness / 2.0f, RampLength / 2.0f);
         var ramp = new Transform3D(basis, centre);
 
         var chuteMat = new StandardMaterial3D
@@ -126,6 +161,7 @@ public partial class Chute : StaticBody3D, IPart
         });
         AddChild(new CollisionShape3D
         {
+            Name = DeckShapeName,
             Shape = new BoxShape3D { Size = deckSize },
             Transform = ramp,
         });
