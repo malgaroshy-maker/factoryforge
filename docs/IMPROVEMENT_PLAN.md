@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-34. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-14, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-39. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-29, IP-30 and IP-31 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -546,6 +546,42 @@ marks the plant the engine runs (IP-29). Derive it from
 matrix and the IP-27 table.
 *Size:* S.
 
+## Added by IP-09 — IP-35 … IP-39
+
+Found by following the new first-hour guide from the release zip alone.
+
+**IP-35 — The sorting grader presses the Start its brief promises** · gate
+The sorting-by-height brief says the mushroom stops the line and Start alone
+will not restart it, but its grader never presses Start. A program written to
+the brief, which waits for Start, never runs its belt under the grader. The
+guide's program ignores Start and explains why, and that is teaching the
+wrong habit to fit the grader. The rubric should press Start and mark the
+E-stop / Reset / Start contract, as IP-12 asks for every panel scene.
+
+**IP-36 — Every command a release user is told to run exists in the release** · gate
+`tools/gen_starters.py` writes `python tools/grade.py` into `examples/README.md`
+and every starter README. The grader prints `factoryforge-sidecar connect`
+without the `.\` that PowerShell needs to run a program from the current
+folder. Print and generate the form that runs from the extracted folder on
+each OS. Add a test that searches the release's text for `python ` and
+`tools/` commands.
+
+**IP-37 — The F5 dialog can serve Modbus to a PLC that is not on loopback**
+The F5 dialog's Modbus option has no host or port fields and always serves
+`127.0.0.1:502`, which OpenPLC in WSL cannot reach. Add both fields (the
+HP-22 default stays loopback, and binding wider is an explicit choice).
+
+**IP-38 — The release carries the docs its guide links to**
+`build_release.py` does not ship `docs/OPENPLC.md` or `docs/GRADING.md`, so
+links to them inside the zip are dead. Ship every doc the shipped docs link
+to, and have the release gate check that no link inside the zip is dead.
+
+**IP-39 — Verify OpenPLC in WSL reaching the Windows sidecar** · gate
+Steps 4–6 of the first hour were not run end to end, because allowing the
+sidecar through the Windows firewall is the user's decision. The OpenPLC runs
+used the Linux layout on loopback instead. **Needs the user:** allow the
+firewall prompt once, then follow the guide exactly.
+
 ---
 
 ## Sequencing
@@ -611,7 +647,7 @@ matrix and the IP-27 table.
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
-| IP-09 | A no-licence first hour | 2 | M | ● | open |
+| IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282, except the WSL-to-Windows firewall crossing (IP-39) |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | open |
@@ -637,6 +673,11 @@ matrix and the IP-27 table.
 | IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | open |
 | IP-33 | A turntable that can take a carton off a belt | 3 | M |  | open |
 | IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | open |
+| IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | open |
+| IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | open |
+| IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | open |
+| IP-38 | The release carries the docs its guide links to | 5 | S |  | open |
+| IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
 
 ## Appendix B — where the findings came from
 
