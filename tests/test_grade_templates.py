@@ -56,7 +56,7 @@ from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, air_receiver as ar, batch_dosing as bd, cooling_tunnel as ct,
     guarded_cell as gc,
     light_curtain_sorting as lc, pick_and_place_cell as pp,
-    roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
+    press_station as ps, roller_line_weighing as rw, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
 
 TEMPLATES = ROOT / "engine" / "templates"
@@ -293,6 +293,17 @@ CSHARP_MIRRORS = [
     (ar.AR_UNDERRANGE, "Parts/AnalogSignal.cs", r"UnderrangeLimit = (-\d+);"),
     (ar.AR_UNDERFLOW, "Parts/AnalogSignal.cs", r"Underflow = (-\d+);"),
     (ar.AR_SWITCH_BAND, "Parts/SolenoidValve.cs", r"SwitchBand = ([\d.]+)f"),
+    (ps.PS_AXIS_Y, "Parts/PneumaticCylinder.cs", r"const float AxisY = ([\d.]+)f"),
+    (ps.PS_PLATE_HEIGHT, "Parts/PneumaticCylinder.cs", r"PlateHeight = ([\d.]+)f"),
+    (ps.PS_PLATE_THICKNESS, "Parts/PneumaticCylinder.cs", r"PlateThickness = ([\d.]+)f"),
+    (ps.PS_ROD_STUB, "Parts/PneumaticCylinder.cs", r"Mathf\.Max\(Extension \+ ([\d.]+)f, [\d.]+f\)"),
+    (ps.PS_TRIP_ANGLE, "Parts/LimitSwitch.cs", r"TripAngle = ([\d.]+)f"),
+    (ps.PS_DIFFERENTIAL, "Parts/LimitSwitch.cs", r"Differential = ([\d.]+)f"),
+    (ps.PS_MAX_ANGLE, "Parts/LimitSwitch.cs", r"MaxAngle = ([\d.]+)f"),
+    (ps.PS_ROLLER, "Parts/LimitSwitch.cs", r"RollerRadius = ([\d.]+)f"),
+    (ps.PS_SHAFT - ps.PS_STANDARD_BELT_WIDTH / 2, "Parts/LimitSwitch.cs",
+     r"ShaftZ = PartLayout\.StandardBeltWidth / 2\.0f \+ ([\d.]+)f"),
+    (ps.PS_STANDARD_BELT_WIDTH, "Parts/PartLayout.cs", r"StandardBeltWidth = ([\d.]+)f"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
 ]
@@ -743,6 +754,49 @@ def test_a_star_run_up_is_slower_on_a_loaded_machine_and_in_proportion_to_inerti
     light, loaded = run_up(), run_up(max(sd.SD_LOADS_THEN))
     assert light < 3.5 and loaded > 1.6 * light
     assert sd.SD_INERTIA == _t("star-delta-start").part("motor", "StarDeltaStarter").number("inertia")
+
+
+def test_the_two_hand_relay_refuses_a_tied_down_palm():
+    """`TwoHandControl.Step` (:252): `valid` needs both held AND pressed
+    within the sync window; a palm re-pressed while held keeps its first
+    timestamp, so renewing it is not a fresh press."""
+    sim = _quiet(ps.PressScene(1))
+    sim._press("left")()
+    _step(sim, ps.PS_SYNC + 0.5)
+    sim._press("right")()
+    _step(sim, 0.05)
+    assert sim.tags.value("hands.left") and sim.tags.value("hands.right")
+    assert not sim.tags.value("hands.valid")
+    sim._press("left", "right")()
+    _step(sim, 0.05)
+    assert not sim.tags.value("hands.valid"), "renewing a held palm re-timed it"
+    _step(sim, ps.PS_HOLD + 0.1)
+    sim._press("left", "right")()
+    _step(sim, 0.05)
+    assert sim.tags.value("hands.valid")
+    _step(sim, ps.PS_HOLD)
+    assert not sim.tags.value("hands.valid"), "a click held longer than hold_time"
+
+
+def test_the_bottom_dead_centre_switch_trips_near_the_end_of_the_stroke():
+    """`LimitSwitch.MeasureDeflection`/`StepContacts` against the ram's face
+    plate where the template puts both: it makes past its trip angle, short of
+    the extended reed, and breaks again a little earlier on the way back (the
+    differential). The engine showed the same order: NO made before the
+    extended reed, and broken again about half a second into the retract."""
+    assert ps.PS_STROKE - 0.1 < ps.PS_TRIP_AT < ps.PS_STROKE - ps.PS_REED_BAND
+    sim = _quiet(ps.PressScene(1))
+    _step(sim, ps.PS_STROKE / ps.PS_ROD_SPEED + 0.1, {"ram.extend": True})
+    assert sim.tags.value("bdc.no") and not sim.tags.value("bdc.nc")
+    assert sim.tags.value("ram.extended")
+    released = None
+    for i in range(300):
+        _step(sim, 0.01, {"ram.extend": False, "ram.retract": True})
+        if not sim.tags.value("bdc.no"):
+            released = sim.extension
+            break
+    assert released is not None and released < ps.PS_TRIP_AT
+    assert sim.tags.value("bdc.nc")
 
 
 def test_a_solenoid_valve_travels_and_a_seized_one_does_not():

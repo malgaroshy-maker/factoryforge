@@ -1800,6 +1800,113 @@
         "type": "bit",
         "kind": "input"
       }
+    ],
+    "press-station": [
+      {
+        "id": "bdc.nc",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "bdc.no",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "hands.left",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "hands.right",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "hands.valid",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "mode.position",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "ram.extend",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "ram.extended",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "ram.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "ram.retract",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "ram.retracted",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "tower.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "tower.yellow",
+        "type": "bit",
+        "kind": "output"
+      }
     ]
   }
 }

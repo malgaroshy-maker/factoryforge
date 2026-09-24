@@ -845,6 +845,35 @@ def test_a_discrepancy_check_with_no_timer_alarms_on_a_healthy_valve(tmp_path):
     assert failed_ids(report) == {"valve.no_false_alarm"}
 
 
+def test_the_press_passes_a_program_that_obeys_its_selector_and_the_relay(tmp_path):
+    code, report = graded(tmp_path, "press-station", "good", 46, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: the ram really cycled in AUTO and really stroked on two hands,
+    # and the hold-to-run press really let go mid-stroke.
+    modes = [s["mode"] for s in evidence["strokes"]]
+    assert modes.count("AUTO") >= 2 and modes.count("MAN") == 1
+    short = evidence["short_press"]
+    assert 0.1 < short["at_release_m"] < evidence["bdc_trips_at_m"]
+    assert short["deepest_m"] <= short["at_release_m"] + 0.01 and short["home_at"]
+
+
+def test_left_and_right_is_not_the_two_hand_permissive(tmp_path):
+    """The examiner ties one palm down and presses the other a second later:
+    both bits true, `valid` false -- and a ram that moves on the AND."""
+    code, report = graded(tmp_path, "press-station", "andhands", 46, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"mode.manual_needs_both_hands"}
+    assert report["evidence"]["tie_down_travel_m"] > 0.1
+    assert any("taped-down button" in line for line in report["feedback"])
+
+
+def test_a_cycle_that_ignores_the_selector_fails_off_and_manual(tmp_path):
+    code, report = graded(tmp_path, "press-station", "ignoresmode", 46, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"mode.off_is_off", "mode.manual_needs_both_hands"}
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1135,6 +1164,8 @@ TABLE_NUMBERS = {
     ("air-receiver", "by32767"): lambda e: [
         f"{e['worst_outside']['bar']:.2f}", f"{e['worst_outside']['pot']:g}"],
     ("air-receiver", "impatient"): lambda e: [f"{e['false_alarms_at'][0]:.2f}"],
+    ("press-station", "andhands"): lambda e: [f"{e['tie_down_travel_m'] * 1000:.0f}"],
+    ("press-station", "ignoresmode"): lambda e: [f"{e['off_travel_m'] * 1000:.0f}"],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

@@ -20,6 +20,7 @@ here; the reference controllers the grader checks itself with stay Python.
 | Heat treat station | `heat-treat-station` | [openplc/heat-treat-station/](openplc/heat-treat-station/) | [tia/heat-treat-station/](tia/heat-treat-station/) |
 | Light curtain sorting | `light-curtain-sorting` | [openplc/light-curtain-sorting/](openplc/light-curtain-sorting/) | [tia/light-curtain-sorting/](tia/light-curtain-sorting/) |
 | Pick & place cell | `pick-and-place-cell` | [openplc/pick-and-place-cell/](openplc/pick-and-place-cell/) | [tia/pick-and-place-cell/](tia/pick-and-place-cell/) |
+| Press station | `press-station` | [openplc/press-station/](openplc/press-station/) | [tia/press-station/](tia/press-station/) |
 | Roller line with weighing | `roller-line-weighing` | [openplc/roller-line-weighing/](openplc/roller-line-weighing/) | [tia/roller-line-weighing/](tia/roller-line-weighing/) |
 | Servo positioning | `servo-positioning` | [openplc/servo-positioning/](openplc/servo-positioning/) | [tia/servo-positioning/](tia/servo-positioning/) |
 | Sorting by height | `sorting-by-height` | [openplc/sorting-by-height/](openplc/sorting-by-height/) | [tia/sorting-by-height/](tia/sorting-by-height/) |

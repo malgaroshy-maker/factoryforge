@@ -1,0 +1,48 @@
+{
+  "name": "press-station",
+  "version": "1.0",
+  "parts": [
+    {
+      "id": "ram",
+      "type": "PneumaticCylinder",
+      "position": [1.0, 0.5, -0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "stroke": "0.65", "rod_speed": "0.25", "plate_width": "0.3", "reed_band": "0.012" }
+    },
+    {
+      "id": "bdc",
+      "type": "LimitSwitch",
+      "position": [1.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "lever_length": "0.2", "height": "0.05", "bounce_ms": "0" }
+    },
+    {
+      "id": "hands",
+      "type": "TwoHandControl",
+      "position": [2.0, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "sync_window": "0.5", "hold_time": "2" }
+    },
+    {
+      "id": "mode",
+      "type": "SelectorSwitch",
+      "position": [1.0, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "positions": "3", "labels": "MAN,OFF,AUTO", "detent": "1" }
+    },
+    {
+      "id": "tower",
+      "type": "StackLight",
+      "position": [2.0, 0.5, -0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": {}
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.0, 0.5, 1.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "0.5", "setpoint_max": "5", "setpoint_unit": "s", "setpoint": "1" }
+    }
+  ]
+}

@@ -178,5 +178,17 @@
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · receiver.supply · receiver.pressure · receiver.wirebreak · valve.open · valve.opened · valve.closed · valve.fault · pressure_gauge.value · alarm.beacon · alarm.horn",
       "done": "The needle on the receiver's own gauge and the one you drive agree, and the receiver cycles inside the band -- still after the plant draws harder (the receiver's Consumption) and after you move the pot. Divide by 32767 instead of 27648 and everything reads 16 % low and the receiver runs 16 % high. Seize the valve (valve.fault) and Start: valve.opened never comes, and only a timer on the feedback notices -- but a check without one alarms on every healthy start, because for two seconds neither limit switch is made."
     }
+  },
+  {
+    "id": "press-station",
+    "title": "Press station",
+    "blurb": "A pneumatic press with a mode selector and a two-hand station. The selector decides who may move the ram -- the sequencer, the operator's two hands, or nobody -- and that interlock is the program.",
+    "path": "res://templates/press_station.json",
+    "scene": "press-station",
+    "brief": {
+      "task": "Run the press in the mode mode.position says (0 MAN, 1 OFF, 2 AUTO), read every scan. AUTO: from Start, stroke the ram down to the bottom-dead-centre switch bdc.no, hold it there for the pot's seconds, bring it back up, and repeat until Stop or the selector leaves AUTO. OFF: the ram goes up and stays up. MAN: the ram goes down only while the two-hand relay's hands.valid is made, and comes back up when it drops or at bdc.no; the next stroke needs both hands off first.",
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · mode.position · hands.left · hands.right · hands.valid · ram.extend · ram.retract · ram.extended · ram.retracted · bdc.no · bdc.nc · tower.green · tower.yellow · tower.red",
+      "done": "In AUTO the press cycles on its own; turn the selector to OFF mid-stroke and the ram goes straight back up, and does not come down again until AUTO and Start. In MAN a click on both palms together strokes it; click one, wait a second and click the other, and hands.left and hands.right both read true while hands.valid does not -- the ram must not move, because that is what a taped-down button looks like. Take your hands off mid-stroke (a single click holds for two seconds, less than a stroke) and the ram comes back up."
+    }
   }
 ]
