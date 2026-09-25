@@ -54,6 +54,10 @@ public partial class SceneSelfTest
         ["Chute"] = "declares no tags and has no tick: a static ramp, with nothing a controller can "
                     + "drive and nothing it reports. A carton sliding down it is Jolt's work, not the "
                     + "part's, and the chute's settings are covered by this test's save/load round trip.",
+        ["Mezzanine"] = "declares no tags and has no tick: a raised floor (IP-15), with nothing a "
+                        + "controller can drive and nothing it reports. That it holds a level up is "
+                        + "asserted by this test's level round trip and by --self-test=handlingparts, "
+                        + "where a carton rides a lift onto a belt standing on one.",
     };
 
     private const string ProbeScenePath = "user://selftest_probe_scene.json";

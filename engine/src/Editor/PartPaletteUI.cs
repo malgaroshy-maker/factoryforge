@@ -21,6 +21,67 @@ public partial class PartPaletteUI : Control
     private VBoxContainer _groups = null!;
     private Label _empty = null!;
 
+    /// <summary>A level button was pressed: +1 up, -1 down (IP-15). Wired by
+    /// Main to <see cref="SceneEditor.StepLevel"/>, the same call PgUp/PgDn
+    /// make, so the two cannot mean different things.</summary>
+    [Signal] public delegate void LevelStepRequestedEventHandler(int delta);
+
+    private Label _levelLabel = null!;
+
+    /// <summary>
+    /// The level row, directly under the title: which work plane parts land
+    /// on, and two buttons to change it. Here rather than on the toolbar
+    /// because it is about placing, and the palette is where placing starts --
+    /// and because the toolbar is full. PgUp / PgDn do the same thing and the
+    /// tooltip says so, since a key nobody is told about is not a feature.
+    /// </summary>
+    private void BuildLevelRow(VBoxContainer mainBox)
+    {
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 4);
+        mainBox.AddChild(row);
+
+        const string tip = "The level new parts land on: 0 is the floor, each level up is "
+                           + "0.9 m higher. With parts selected, this lifts or lowers them "
+                           + "instead. Keys: PgUp / PgDn.";
+
+        var down = new Button { Text = "▼", TooltipText = tip, FocusMode = FocusModeEnum.None,
+                                CustomMinimumSize = new Vector2(32, 28) };
+        down.Pressed += () => EmitSignal(SignalName.LevelStepRequested, -1);
+        row.AddChild(down);
+
+        _levelLabel = new Label
+        {
+            TooltipText = tip,
+            MouseFilter = MouseFilterEnum.Pass,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+        };
+        _levelLabel.AddThemeFontSizeOverride("font_size", 12);
+        row.AddChild(_levelLabel);
+
+        var up = new Button { Text = "▲", TooltipText = tip, FocusMode = FocusModeEnum.None,
+                              CustomMinimumSize = new Vector2(32, 28) };
+        up.Pressed += () => EmitSignal(SignalName.LevelStepRequested, +1);
+        row.AddChild(up);
+
+        ShowLevel(0);
+    }
+
+    /// <summary>Follow the editor's active level. Driven from
+    /// <see cref="SceneEditor.ActiveLevelChanged"/>, not from this palette's
+    /// own buttons, because PgUp/PgDn and a scene load change it too.</summary>
+    public void ShowLevel(int level)
+    {
+        if (_levelLabel is null) return;
+        _levelLabel.Text = level == 0
+            ? "LEVEL 0 · floor"
+            : $"LEVEL {level} · +{Parts.PartLayout.FloorY(level):0.0} m";
+        _levelLabel.AddThemeColorOverride("font_color",
+            level == 0 ? new Color(0.75f, 0.78f, 0.84f) : new Color(0.98f, 0.80f, 0.35f));
+    }
+
     /// <summary>Every button, with the text it can be matched against, so
     /// filtering is a visibility pass rather than a rebuild — a rebuild would
     /// drop focus out of the search box on every keystroke.</summary>
@@ -64,6 +125,8 @@ public partial class PartPaletteUI : Control
         };
         title.AddThemeFontSizeOverride("font_size", 16);
         mainBox.AddChild(title);
+
+        BuildLevelRow(mainBox);
 
         // Search, because twenty-two parts across six groups is past the point
         // where scanning is faster than typing. Matches the label, the group,

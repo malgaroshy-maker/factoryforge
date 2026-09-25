@@ -33,6 +33,7 @@ public static class KeyBindings
         new("M", "Move selected part — the keyboard route", "BUILDING"),
         new("R", "Rotate — while placing, or a selected part", "BUILDING"),
         new("Arrows", "Nudge selected part one cell", "BUILDING"),
+        new("PgUp / PgDn", "Level up / down — where parts land, or lift the selection", "BUILDING"),
         new("Ctrl+D", "Duplicate — again to build a line", "BUILDING"),
         new("Ctrl+A", "Select every part", "BUILDING"),
         new("Ctrl+C / V", "Copy / paste — across scenes too", "BUILDING"),

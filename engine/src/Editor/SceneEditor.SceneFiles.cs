@@ -22,6 +22,7 @@ public partial class SceneEditor
         if (Scene is null && Tags is not null) SortingTags.Undeclare(Tags);
 
         SceneName = "untitled";
+        SetActiveLevel(0);
         IsDirty = false;
         NotifyTagsChanged();
         GD.Print("New empty scene");
@@ -79,7 +80,11 @@ public partial class SceneEditor
         string stem = System.IO.Path.GetFileNameWithoutExtension(path);
         if (stem.Length > 0 && stem != "custom_scene") SceneName = stem;
 
-        var data = new SceneData { Name = SceneName, Parts = CapturePartsSnapshot() };
+        var parts = CapturePartsSnapshot();
+        // The lowest format that holds it (IP-15): a scene with nothing raised
+        // is written as version 1, exactly as before, and stays openable by
+        // the build before this one.
+        var data = new SceneData { Name = SceneName, Version = SceneData.VersionFor(parts), Parts = parts };
         string json = data.ToJson();
 
         // Write somewhere else first (HP-47). Opening the destination for
@@ -217,6 +222,9 @@ public partial class SceneEditor
         // the file has already had its turn.
         if (dropSortingTags && Scene is null && Tags is not null) SortingTags.Undeclare(Tags);
         ClearAllPlacedParts();
+        // A new scene starts on the floor, whatever level the last one was
+        // being built on.
+        SetActiveLevel(0);
 
         if (data.Name is { Length: > 0 }) SceneName = data.Name;
 
@@ -298,7 +306,7 @@ public partial class SceneEditor
                 Position = new float[] { part.Node.Position.X, part.Node.Position.Y, part.Node.Position.Z },
                 Rotation = new float[] { part.Node.Rotation.X, part.Node.Rotation.Y, part.Node.Rotation.Z },
                 Properties = PartProperties.Capture(part.Node),
-            });
+            }.OnItsLevel());
         }
         return list;
     }
@@ -327,7 +335,10 @@ public partial class SceneEditor
         var node = CreatePartNode(p.Type);
         if (node is null) return null;
 
-        node.Position = new Vector3(p.Position[0], p.Position[1], p.Position[2]);
+        // WorldY, not Position[1]: in a file Y is measured within the part's
+        // level (IP-15), and dropping the level here is exactly the flattening
+        // a version-1 build is refused the file to prevent.
+        node.Position = new Vector3(p.Position[0], p.WorldY, p.Position[2]);
         node.Rotation = new Vector3(p.Rotation[0], p.Rotation[1], p.Rotation[2]);
         PartProperties.Apply(node, p.Properties);
         GetParent()?.AddChild(node);

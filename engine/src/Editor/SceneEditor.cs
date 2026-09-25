@@ -373,6 +373,9 @@ public partial class SceneEditor : Node3D, IPartHost
         {
             _previewNode.Name = "PlacementPreview";
             _previewNode.Rotation = new Vector3(0, _previewRotationY, 0);
+            // On the active level from the first frame, not the floor until
+            // the mouse next moves (IP-15).
+            _previewNode.Position = new Vector3(0, PartLayout.PlaneY(ActiveLevel), 0);
             AddChild(_previewNode);
             // After AddChild, not before: a part builds its collision shapes and
             // its Area3D in _Ready, which Godot runs as the node enters the
@@ -528,6 +531,10 @@ public partial class SceneEditor : Node3D, IPartHost
     {
         if (_selectedPart is not { } entry) return;
 
+        // Pick it up on the level it stands on, so the ghost does not jump to
+        // whatever level was last placed on. PgUp/PgDn while it is held then
+        // carry it to another level -- the move commits as one MoveCommand.
+        SetActiveLevel(PartLayout.LevelOf(entry.Node.Position.Y));
         SetPlacementPart(entry.PartType);
         if (_previewNode is not null)
         {
@@ -1131,7 +1138,7 @@ public partial class SceneEditor : Node3D, IPartHost
 
         var mousePos = GetViewport().GetMousePosition();
         if (WorkPlanePoint(camera.ProjectRayOrigin(mousePos),
-                           camera.ProjectRayNormal(mousePos)) is { } point)
+                           camera.ProjectRayNormal(mousePos), ActiveLevel) is { } point)
             _previewNode.Position = point;
     }
 
@@ -1144,12 +1151,19 @@ public partial class SceneEditor : Node3D, IPartHost
     /// saved position depends on how you moved it.
     ///
     /// Null when the ray runs parallel to the plane or points away from it.
+    ///
+    /// <paramref name="level"/> picks which work plane (IP-15). The ray is met
+    /// at that level's own height rather than at the floor's and lifted
+    /// afterwards: seen from an angle, the cell under the cursor on a
+    /// mezzanine is not the cell under it on the floor, and a part that landed
+    /// a metre from where it was pointed at would read as a broken editor.
     /// </summary>
-    private Vector3? WorkPlanePoint(Vector3 from, Vector3 dir)
+    private Vector3? WorkPlanePoint(Vector3 from, Vector3 dir, int level)
     {
         if (Mathf.Abs(dir.Y) <= 0.001f) return null;
 
-        float t = (PartLayout.WorkPlaneY - from.Y) / dir.Y;
+        float planeY = PartLayout.PlaneY(level);
+        float t = (planeY - from.Y) / dir.Y;
         if (t <= 0) return null;
 
         var hitPoint = from + dir * t;
@@ -1168,7 +1182,7 @@ public partial class SceneEditor : Node3D, IPartHost
             snapped.Z = Mathf.Clamp(snapped.Z, -maxZ, maxZ);
         }
 
-        return new Vector3(snapped.X, PartLayout.WorkPlaneY, snapped.Z);
+        return new Vector3(snapped.X, planeY, snapped.Z);
     }
 
     /// <summary>
@@ -1191,11 +1205,13 @@ public partial class SceneEditor : Node3D, IPartHost
     /// cursor does for the several seconds somebody spends deciding. Exposed
     /// for the same reason as <see cref="PlacePreviewAt"/>: a headless run has
     /// no camera for <see cref="UpdatePreviewPosition"/> to project through.
+    /// Y is ignored and pinned to the active level's plane, as the cursor's
+    /// would be.
     /// </summary>
     public void MovePreviewTo(Vector3 position)
     {
         if (_previewNode is null) return;
-        _previewNode.Position = new Vector3(position.X, PartLayout.WorkPlaneY, position.Z);
+        _previewNode.Position = new Vector3(position.X, PartLayout.PlaneY(ActiveLevel), position.Z);
     }
 
     /// <summary>The part type the placement tool is holding, or null. The

@@ -6,7 +6,8 @@ plants rather than on the 3D engine. Verified on 2026-09-21: every scene's
 for that scene's own lesson. The six scenes IP-14 added on 2026-09-24 were
 verified the same way, in lockstep at seeds 11 and 5, and so was `pivot-divert`
 (IP-32), whose controllers were also run against the 3-D engine and agreed with
-the model carton for carton. **Nobody has graded a real student's program with
+the model carton for carton. So was `mezzanine-lift` (IP-15), the first scene
+on two levels. **Nobody has graded a real student's program with
 any of them.** Those are two different claims and this file will say so until
 the second one is true.*
 
@@ -247,6 +248,7 @@ reads and the fake it shuts.
 | `rotary-index` | the deck's angle when the pusher's plate met each carton, and whether the deck turned while the plate was out over it | pushing on a timer calibrated at the deck's rated speed — the run slows the deck to 40–60 % of it |
 | `pivot-divert` | which lane each carton ended in, against the height the scene gave it, and the blade's angle at the moment each carton reached it | holding the blade for as long as a carton took at the rated belt speed — the run slows the belt to 60 or 70 % of it; and diverting every second carton — the feed is shuffled |
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
+| `mezzanine-lift` | for every carton, whether it came to rest on the lift's carriage, and the carriage's height when it left it | discharging a fixed time after calling level 1 — the run slows the hoist to 30 or 35 % of its rating |
 
 Every scene also carries `controller.stayed_connected`,
 `integrity.no_forced_tags` and `integrity.no_input_writes`, and every scene has
@@ -283,6 +285,8 @@ something physical that no tag reports:
   diverter line, so a turned carton takes longer to slide off the blade
 * the **servo drive faults** mid-move, and the fault clears three seconds
   before anybody presses Reset, on the servo positioning scene
+* the **lift's hoist** drops to 30 or 35 % of its speed (from the seed) at
+  30 s, on the mezzanine lift, so a climb takes 3.4 or 4.0 s instead of 1.2
 
 None of those is visible as a value on the bus. The controller can only find
 out by measuring — the encoder counting slower, the flow meter reading less,
@@ -557,6 +561,8 @@ scene's own 60 s window. Neither is thirteen.
 | | `unlatched` | wires the blade to the eye, so it is home again before the tall carton gets there |
 | | `late` | swings the blade out as the carton reaches the post, as a pusher is fired: every carton lands in its lane, and 2 of them because the blade hit them at 0.5 m/s |
 | | `everyother` | turns every second carton and never reads the tall eye: right on the engine's alternating emitter, wrong on the exam's shuffle |
+| `mezzanine-lift` | `timed` | discharges on a stopwatch set at the rated climb; once the hoist is slowed to 0.2625 m/s at 30 s it runs a carton off the carriage at 0.56 m, onto the mezzanine floor, and waits for the outfeed eye for ever |
+| | `nostop` | leaves the deck running after the carton is aboard: 1 carton runs across the carriage and off its far side before the lift has moved |
 
 `guarded-cell` also has a second right answer, `guardlock`. It is `good` plus
 guard locking done properly: locked while the contactor can run and released
@@ -633,8 +639,21 @@ nothing about the machinery below stops somebody writing it.
 IP-14 added six more, each for parts no earlier scene used, and each with a
 rubric from the start: `star-delta-start`, `servo-positioning`,
 `cooling-tunnel`, `air-receiver`, `press-station` and `rotary-index`, which
-between them place every catalog part except two. `VerticalLift` waits for a
-second level (IP-15). `PivotDiverter` had no scene because it could not divert:
+between them place every catalog part except two. `VerticalLift` waited for a
+second level, and IP-15 gave it one: `mezzanine-lift` lifts cartons from a
+floor conveyor to an outfeed standing on a `Mezzanine` at level 1, graded on
+the lift's handshake (stop the deck on `occupied`, discharge on `atlevel`).
+Its model is 1-D along the line plus the carriage's height; the carriage's
+dimensions are `VerticalLift.cs`'s, held equal by
+`tests/test_grade_templates.py`. The two slowed hoist speeds were chosen from
+the engine's geometry: a carton run off early at either one slides out under
+the outfeed onto the mezzanine floor, which is where the engine puts it too.
+Every reference controller was run against the 3-D engine, at the rated
+hoist and at both slowed ones held from the start, and ended every carton
+where the model does: `good` delivered all of them (10 in 75 s rated, 3 in
+40 s slowed), `timed` spilled its first carton onto the mezzanine at a
+carriage height of 0.50-0.58 m (the model: 0.56 and 0.48), and `nostop` ran
+its carton off at the floor. `PivotDiverter` had no scene because it could not divert:
 held at `divert`, its `diverted` tag read true while its blade's collider stayed
 parked, so a carton passed it untouched. IP-32 fixed the part and added
 `pivot-divert`, graded like the rest.

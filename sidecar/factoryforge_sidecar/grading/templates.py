@@ -75,6 +75,15 @@ _RELATIVE = Path("engine") / "templates"
 #: A template's path in the manifest is a Godot resource path.
 _RES_PREFIX = "res://templates/"
 
+#: `engine/src/Parts/PartLayout.cs` (`LevelHeight`): the rise from one level
+#: to the next (IP-15). `tests/test_grade_templates.py` holds the two equal.
+LEVEL_HEIGHT = 0.9
+
+#: The newest scene-file format this module reads (`SceneData.CurrentMajorVersion`).
+#: Version 2 added a per-part `level`; a newer format is refused, as the engine
+#: refuses it, rather than read as if its parts were somewhere they are not.
+FORMAT_MAJOR = 2
+
 
 class TemplateError(RuntimeError):
     """A template the grader needs is missing, or is not the plant it models."""
@@ -146,6 +155,16 @@ class Part:
     rotation: tuple[float, float, float]
     properties: dict = field(hash=False)
     source: str = ""
+    #: The work plane the part stands on (IP-15). A scene file measures
+    #: `position`'s Y within the part's level, so the height it really stands
+    #: at is `world_y`; the engine's `SceneData` reads it the same way.
+    level: int = 0
+
+    @property
+    def world_y(self) -> float:
+        """The height of the part's origin: its Y within its level plus the
+        level's rise (`PartLayout.LevelHeight`, `LEVEL_HEIGHT` below)."""
+        return self.position[1] + self.level * LEVEL_HEIGHT
 
     def _where(self) -> str:
         return f"{self.source}: part {self.id!r} ({self.type})"
@@ -233,13 +252,22 @@ def _template(directory: Path, scene: str) -> Template:
                             f"to read its plant from")
     path = directory / resource[len(_RES_PREFIX):]
     data = _read_json(path)
+    version = str(data.get("version") or "1.0")
+    try:
+        major = int(version.split(".")[0])
+    except ValueError as exc:
+        raise TemplateError(f"{path.name}: format version {version!r} is not a "
+                            f"version number") from exc
+    if major > FORMAT_MAJOR:
+        raise TemplateError(f"{path.name} is a version {version} scene file and the "
+                            f"grader reads version {FORMAT_MAJOR}")
     parts: dict[str, Part] = {}
     for raw in data.get("parts", []):
         part = Part(id=raw["id"], type=raw["type"],
                     position=tuple(float(v) for v in raw["position"]),
                     rotation=tuple(float(v) for v in raw.get("rotation", (0, 0, 0))),
                     properties=dict(raw.get("properties") or {}),
-                    source=path.name)
+                    source=path.name, level=int(raw.get("level", 0)))
         if part.id in parts:
             raise TemplateError(f"{path.name} places two parts called {part.id!r}")
         parts[part.id] = part

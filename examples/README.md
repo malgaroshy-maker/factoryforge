@@ -19,6 +19,7 @@ here; the reference controllers the grader checks itself with stay Python.
 | Guarded cell | `guarded-cell` | [openplc/guarded-cell/](openplc/guarded-cell/) | [tia/guarded-cell/](tia/guarded-cell/) |
 | Heat treat station | `heat-treat-station` | [openplc/heat-treat-station/](openplc/heat-treat-station/) | [tia/heat-treat-station/](tia/heat-treat-station/) |
 | Light curtain sorting | `light-curtain-sorting` | [openplc/light-curtain-sorting/](openplc/light-curtain-sorting/) | [tia/light-curtain-sorting/](tia/light-curtain-sorting/) |
+| Mezzanine lift | `mezzanine-lift` | [openplc/mezzanine-lift/](openplc/mezzanine-lift/) | [tia/mezzanine-lift/](tia/mezzanine-lift/) |
 | Pick & place cell | `pick-and-place-cell` | [openplc/pick-and-place-cell/](openplc/pick-and-place-cell/) | [tia/pick-and-place-cell/](tia/pick-and-place-cell/) |
 | Pivot diverter line | `pivot-divert` | [openplc/pivot-divert/](openplc/pivot-divert/) | [tia/pivot-divert/](tia/pivot-divert/) |
 | Press station | `press-station` | [openplc/press-station/](openplc/press-station/) | [tia/press-station/](tia/press-station/) |

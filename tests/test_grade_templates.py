@@ -55,7 +55,7 @@ from factoryforge_sidecar.grading import plant, registry, templates  # noqa: E40
 from factoryforge_sidecar.grading.scenes import (  # noqa: E402
     accumulation_buffer as ab, air_receiver as ar, batch_dosing as bd, cooling_tunnel as ct,
     guarded_cell as gc,
-    light_curtain_sorting as lc, pick_and_place_cell as pp, pivot_divert as pv,
+    light_curtain_sorting as lc, mezzanine_lift as ml, pick_and_place_cell as pp, pivot_divert as pv,
     press_station as ps, roller_line_weighing as rw, rotary_index as ri, servo_positioning as sv, sorting_by_height as sh,
     star_delta_start as sd, start_stop_station as ss)
 
@@ -313,6 +313,20 @@ CSHARP_MIRRORS = [
     (pv.PD_LIMIT_BAND, "Parts/PivotDiverter.cs", r"IsHome => _angle <= ([\d.]+)f"),
     (sv.SV_ENABLE_DELAY, "Parts/ServoAxis.cs", r"EnableDelay = ([\d.]+)f"),
     (sv.SV_QUICK_STOP, "Parts/ServoAxis.cs", r"QuickStopFactor = ([\d.]+)f"),
+    # IP-15: levels, and the lift's carriage, which no template configures.
+    (templates.LEVEL_HEIGHT, "Parts/PartLayout.cs", r"LevelHeight = ([\d.]+)f"),
+    (templates.FORMAT_MAJOR, "Editor/SceneData.cs", r"CurrentMajorVersion = (\d+);"),
+    (ml.ML_DECK_LENGTH, "Parts/VerticalLift.cs", r"DeckLength = ([\d.]+)f"),
+    (ml.ML_ZONE_FRACTION, "Parts/VerticalLift.cs", r"ZoneFraction = ([\d.]+)f"),
+    (ml.ML_BLADE_HEIGHT, "Parts/VerticalLift.cs", r"BladeHeight = ([\d.]+)f"),
+    (ml.ML_BLADE_SPEED, "Parts/VerticalLift.cs", r"BladeSpeed = ([\d.]+)f"),
+    (ml.ML_BLADE_TUCK, "Parts/VerticalLift.cs", r"BladeHeight / 2\.0f - ([\d.]+)f;"),
+    (ml.ML_BLADE_SHORT, "Parts/VerticalLift.cs", r"BladeOpenY \+ BladeHeight - ([\d.]+)f"),
+    (ml.ML_BLADE_THICKNESS, "Parts/VerticalLift.cs",
+     r"new Vector3\(([\d.]+)f, BladeHeight, DeckWidth\)"),
+    (ml.ML_BLADE_SETBACK, "Parts/VerticalLift.cs",
+     r"-\(DeckLength / 2\.0f \+ ([\d.]+)f\),\s*Mathf\.Lerp"),
+    (ml.ML_GATE_OPEN, "Parts/VerticalLift.cs", r"IsGateOpen => _bladeRise <= ([\d.]+)f"),
 ]
 
 
@@ -1136,3 +1150,120 @@ def test_a_press_while_the_contact_reopens_waits_out_the_gap():
     assert len(rises) == 2
     gap = rises[1] - (rises[0] + 20)
     assert gap == 20, f"the contact was open {gap} ticks between the two presses"
+
+
+# --- levels (IP-15) ------------------------------------------------------
+
+def test_a_template_says_the_lowest_format_that_holds_it():
+    """The engine writes "2.0" only when a part stands on a raised level, so
+    every scene without one stays openable by the build before levels, and a
+    scene with one is refused by that build instead of flattened
+    (`SceneData.VersionFor`). The shipped templates follow the same rule, and
+    at least one of them is on two levels -- or this checks nothing."""
+    raised = []
+    for entry in _manifest():
+        if not entry["path"]:
+            continue
+        name = entry["path"].removeprefix("res://templates/")
+        data = json.loads((TEMPLATES / name).read_text(encoding="utf-8"))
+        levels = {part.get("level", 0) for part in data["parts"]}
+        wanted = "2.0" if levels - {0} else "1.0"
+        assert data.get("version") == wanted, (name, data.get("version"), sorted(levels))
+        if wanted == "2.0":
+            raised.append(entry["id"])
+    assert raised == [ml.SCENE]
+
+
+def test_a_part_on_a_level_stands_a_level_higher():
+    """`position`'s Y is within the part's level; `world_y` adds the level's
+    rise, as `SceneData.WorldY` does. The outfeed is written at 0.5, like
+    every belt, and stands at 1.4."""
+    outfeed = _t(ml.SCENE).part("outfeed", "ConveyorBelt")
+    assert outfeed.level == 1 and outfeed.position[1] == pytest.approx(plant.WORK_PLANE_Y)
+    assert outfeed.world_y == pytest.approx(plant.WORK_PLANE_Y + templates.LEVEL_HEIGHT)
+    infeed = _t(ml.SCENE).part("infeed", "ConveyorBelt")
+    assert infeed.level == 0 and infeed.world_y == pytest.approx(plant.WORK_PLANE_Y)
+
+
+def test_the_grader_refuses_a_scene_format_it_does_not_read(tmp_path, monkeypatch):
+    copy = _copy_templates(tmp_path)
+    path = copy / "mezzanine_lift.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["version"] = f"{templates.FORMAT_MAJOR + 1}.0"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(templates.TEMPLATES_ENV, str(copy))
+    with pytest.raises(templates.TemplateError, match="grader reads version 2"):
+        templates.template(ml.SCENE)
+
+
+def test_the_mezzanine_lift_model_refuses_a_flattened_outfeed(tmp_path, monkeypatch):
+    """The layout check is what holds the model to a line on two levels: the
+    same template with the outfeed's level dropped -- what a version-1 reader
+    would make of it -- is not the plant the grader models."""
+    import importlib
+    copy = _copy_templates(tmp_path)
+    path = copy / "mezzanine_lift.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for part in data["parts"]:
+        if part["id"] == "outfeed":
+            del part["level"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv(templates.TEMPLATES_ENV, str(copy))
+    try:
+        with pytest.raises(templates.TemplateError, match="layout is not the one"):
+            importlib.reload(ml)
+    finally:
+        monkeypatch.delenv(templates.TEMPLATES_ENV)
+        importlib.reload(ml)
+
+
+def test_the_lift_takes_one_carton_aboard_and_holds_the_next_at_the_gate():
+    """`VerticalLift.Step`, on the model alone: a carton on a running infeed
+    boards a driven deck, counts as aboard only once its centre is over the
+    deck's middle (`DeckHasCarton`), and the gate then rises and holds the
+    next one on the belt, outside the shaft."""
+    # Every value written every step: `_step` leaves a tag it is not given
+    # where it was, as a PLC's output image does.
+    sim = _quiet(ml.MezzanineLiftScene(1))
+    run = {"infeed.rotate": True, "lift.transfer": True, "emitter.emit": False}
+    _step(sim, 0.05, {**run, "emitter.emit": True})
+    for _ in range(1000):
+        _step(sim, 0.01, run)
+        if sim.tags.value("lift.occupied"):
+            break
+    (aboard,) = sim.carriage
+    assert abs(aboard.position - ml.ML_LX) <= ml.ML_ABOARD
+    assert aboard.position - plant.CARTON_LENGTH / 2 > ml.ML_BLADE_FACE, \
+        "aboard means clear of the blade the gate is about to raise"
+    held = {"infeed.rotate": True, "lift.transfer": False, "emitter.emit": False}
+    _step(sim, 0.05, held)                                   # stop the deck
+    _step(sim, 0.05, {**held, "emitter.emit": True})         # the next one
+    _step(sim, 8.0, held)
+    (waiting,) = sim.infeed
+    assert waiting.position == pytest.approx(ml.ML_BLADE_FACE - plant.CARTON_LENGTH / 2)
+    assert sim.tags.value("gate_eye.detect") and not sim.tags.value("lift.ready")
+    assert len(sim.carriage) == 1
+
+
+def test_the_carriage_hands_a_carton_to_the_outfeed_only_at_level_one():
+    """Discharged at level 1 it rides the outfeed to the remover; run off on
+    the way up, it goes to the spill bin on the mezzanine floor."""
+    def trip(discharge_after: float) -> dict:
+        sim = _quiet(ml.MezzanineLiftScene(1))
+        run = {"infeed.rotate": True, "outfeed.rotate": True, "emitter.emit": False}
+        _step(sim, 0.05, {**run, "lift.transfer": True, "emitter.emit": True})
+        for _ in range(1000):
+            _step(sim, 0.01, {**run, "lift.transfer": True})
+            if sim.tags.value("lift.occupied"):
+                break
+        _step(sim, discharge_after, {**run, "lift.target": 1, "lift.transfer": False})
+        _step(sim, 10.0, {**run, "lift.target": 1, "lift.transfer": True})
+        return sim.ledger[1]
+
+    at_level = trip(ml.ML_RATED_CLIMB + 0.3)
+    assert at_level["lane"] == "delivered" and at_level["left_height"] == pytest.approx(0.9)
+    # Discharged 0.2 s into a 1.2 s climb: the carriage is still rising
+    # while the carton crosses the deck, and short of the level when it
+    # reaches the edge.
+    early = trip(0.2)
+    assert early["lane"] == "spill" and 0.3 < early["left_height"] < 0.9

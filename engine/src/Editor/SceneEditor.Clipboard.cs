@@ -80,7 +80,11 @@ public partial class SceneEditor
                 Position = new[]
                 {
                     _pasteAnchor.X + item.Position[0] + _pasteOffset.X,
-                    PartLayout.WorkPlaneY,
+                    // Pinned to a work plane as it always was, but to the
+                    // plane of the level the part was copied from (IP-15):
+                    // pinning everything to level 0 would paste a lift and the
+                    // belt it feeds upstairs as two belts on the floor.
+                    PartLayout.PlaneY(PartLayout.LevelOf(_pasteAnchor.Y + item.Position[1])),
                     _pasteAnchor.Z + item.Position[2] + _pasteOffset.Z,
                 },
                 Rotation = item.Rotation,

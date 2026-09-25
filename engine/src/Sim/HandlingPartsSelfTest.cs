@@ -210,6 +210,23 @@ public partial class HandlingPartsSelfTest : Node
             ["size_x"] = "1.5", ["size_y"] = "0.12", ["size_z"] = "0.5", ["speed"] = "0.5",
         }));
 
+        // --- and, on level 1, the belt the lift discharges onto, standing on
+        // a mezzanine (IP-15). Mirror image of the feed: its tail very nearly
+        // touches the carriage deck at the lift's first level. Placed through
+        // the file's own level key, as a scene author would write it.
+        var upper = At("upper", "ConveyorBelt", 1.0f, 0.0f, new Dictionary<string, string>
+        {
+            ["size_x"] = "1.5", ["size_y"] = "0.12", ["size_z"] = "0.5", ["speed"] = "0.5",
+        });
+        upper.Level = 1;
+        data.Parts.Add(upper);
+        var deck = At("mezz", "Mezzanine", 1.25f, 0.0f, new Dictionary<string, string>
+        {
+            ["size_x"] = "2.0", ["size_z"] = "1.5",
+        });
+        deck.Level = 1;
+        data.Parts.Add(deck);
+
         // --- the arm, with a table under its working radius to stand a carton
         // on. Headless has no floor, so a carton with nothing under it falls
         // for ever and every assertion about it becomes a statement about
@@ -259,6 +276,7 @@ public partial class HandlingPartsSelfTest : Node
                               ["columns"] = "0", ["rows"] = "0", ["layers"] = "0",
                           }));
 
+        data.Version = SceneData.VersionFor(data.Parts);
         const string path = "user://selftest_handlingparts.json";
         using (var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write))
         {
@@ -432,8 +450,9 @@ public partial class HandlingPartsSelfTest : Node
                "and the lift does not claim to be ready — it is neither at the infeed level "
                + "nor empty");
 
-        // Discharge it at the upper level.
+        // Discharge it at the upper level, onto the raised belt.
         Tags.Set("lift.transfer", true);
+        Tags.Set("upper.rotate", true);
     }
 
     private void CheckTheDeckDischarges()
@@ -448,7 +467,19 @@ public partial class HandlingPartsSelfTest : Node
             Expect(box.GlobalPosition.X > 0.20f,
                    $"and it left forwards, driven by the deck rather than dropped "
                    + $"(x={box.GlobalPosition.X:0.000})");
+
+            // IP-15: the belt it went onto stands on level 1, and physics has
+            // to agree -- the carton rides that belt's deck at level 1's
+            // height, not the floor's and not a level it fell to.
+            float ride = PartLayout.PlaneY(1) + PartLayout.BeltSurface + box.Height / 2.0f;
+            Expect(Mathf.Abs(box.GlobalPosition.Y - ride) < 0.05f,
+                   $"and it is riding the belt on level 1 (y={box.GlobalPosition.Y:0.000}, "
+                   + $"the level-1 deck carries it at {ride:0.000})");
+            Expect(box.GlobalPosition.X > 0.35f && box.LinearVelocity.X > 0.2f,
+                   $"carried along by that belt (x={box.GlobalPosition.X:0.000}, "
+                   + $"vx={box.LinearVelocity.X:0.00} m/s)");
         }
+        Tags.Set("upper.rotate", false);
 
         var lift = Part<VerticalLift>("lift");
         Expect(!lift.IsGateOpen,

@@ -17,6 +17,18 @@ part offsets its own geometry from there — legs reach *down* by
 `PartLayout.BeltSurface`. Never bake a mounting height into a scene position, or
 the part will hover when someone places it from the palette.
 
+That rule holds on every level (IP-15). A part placed on level *n* has its
+origin on `PartLayout.PlaneY(n)` = `WorkPlaneY + n × LevelHeight` (0.9 m per
+level, the lift's pitch), and level *n*'s floor — the top of a `Mezzanine`
+deck — is exactly `FloorDrop` below that. So legs reaching down by `FloorDrop`
+land on the mezzanine with no code in your part that knows what a level is.
+Keep it that way: measure from your origin, never from `y = 0`. The one
+exception is a structure whose job is to reach the *ground* from wherever it
+stands — the mezzanine's own posts — and that reads its height from
+`GlobalPosition` and rebuilds when it moves, rather than assuming a level. In a
+scene file the level is its own key, `"level": 1`, and the position's Y stays
+the in-level 0.5.
+
 **2. The instance id is a tag *prefix*, never a whole tag name.** The dispatch
 appends the suffix, so a part registered as `"conveyor"` resolves
 `conveyor.rotate`. Registering it as `"conveyor.rotate"` makes the lookup ask for

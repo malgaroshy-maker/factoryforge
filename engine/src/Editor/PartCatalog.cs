@@ -73,6 +73,9 @@ public static class PartCatalog
         new("VerticalLift", "Vertical Lift", "TRANSPORT",
             "Carriage between levels, so height becomes part of the route. Exactly one carton fits, and its own gate holds the next one back.",
             () => new VerticalLift()),
+        new("Mezzanine", "Mezzanine Deck", "TRANSPORT",
+            "A raised floor for a level above the ground. Place it on the level it holds up (PgUp/PgDn): its deck is that level's floor, so belts and sensors placed there stand on it, and a carton that falls there lands on it.",
+            () => new Mezzanine()),
 
         new("PhotoelectricSensor", "Photoelectric Sensor", "SENSORS",
             "Diffuse beam that reflects off the item itself. Cheapest, shortest range.",

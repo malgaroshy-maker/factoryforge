@@ -214,5 +214,17 @@
       "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · belt.rotate · belt.fault · emitter.emit · entry_eye.detect · tall_eye.detect · gate.divert · gate.diverted · gate.home · gate.fault · tall_count.count · short_count.count",
       "done": "Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made."
     }
+  },
+  {
+    "id": "mezzanine-lift",
+    "title": "Mezzanine lift",
+    "blurb": "A vertical lift that takes cartons from the floor conveyor up to an outfeed on a mezzanine, one at a time. The carriage holds exactly one carton, and it goes only where the program sends it.",
+    "path": "res://templates/mezzanine_lift.json",
+    "scene": "mezzanine-lift",
+    "brief": {
+      "task": "Run both belts, and emit a carton only once the last one is aboard the lift, so one is on its way at a time. With the carriage at the floor and lift.ready made, run the carriage's deck (lift.transfer) to draw the carton aboard, and stop it the moment lift.occupied says the carton is on. Let it settle for the pot's seconds, then call the carriage to level 1 (lift.target := 1). Only when lift.atlevel is made with lift.level = 1, run the deck again to put the carton onto the outfeed; when out_eye sees it there, stop the deck and send the carriage back to level 0.",
+      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · emitter.emit · infeed.rotate · gate_eye.detect · lift.target · lift.transfer · lift.level · lift.atlevel · lift.height · lift.occupied · lift.ready · lift.fault · outfeed.rotate · out_eye.detect · done.count · spill.count",
+      "done": "Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut."
+    }
   }
 ]

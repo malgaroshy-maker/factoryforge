@@ -1,0 +1,81 @@
+{
+  "name": "mezzanine-lift",
+  "version": "2.0",
+  "parts": [
+    {
+      "id": "emitter",
+      "type": "Emitter",
+      "position": [0.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "metal_every": "0", "tall_every": "0" }
+    },
+    {
+      "id": "infeed",
+      "type": "ConveyorBelt",
+      "position": [1.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "speed": "0.5", "friction": "0.8", "size_x": "2.5", "size_y": "0.12", "size_z": "0.5" }
+    },
+    {
+      "id": "gate_eye",
+      "type": "RetroreflectiveSensor",
+      "position": [2.5, 0.5, -0.5],
+      "rotation": [0.0, 3.1415927, 0.0],
+      "properties": { "range": "1", "height": "0.05", "mode": "Retroreflective", "visual_only": "false" }
+    },
+    {
+      "id": "lift",
+      "type": "VerticalLift",
+      "position": [3.0, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "levels": "2", "spacing": "0.9", "hoist_speed": "0.75", "infeed_level": "0", "transfer_speed": "0.5", "tolerance": "0.02" }
+    },
+    {
+      "id": "deck",
+      "type": "Mezzanine",
+      "position": [4.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "level": 1,
+      "properties": { "size_x": "2.4", "size_z": "1.5" }
+    },
+    {
+      "id": "outfeed",
+      "type": "ConveyorBelt",
+      "position": [4.5, 0.5, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "level": 1,
+      "properties": { "speed": "0.5", "friction": "0.8", "size_x": "2.5", "size_y": "0.12", "size_z": "0.5" }
+    },
+    {
+      "id": "out_eye",
+      "type": "RetroreflectiveSensor",
+      "position": [3.5, 0.5, 0.5],
+      "rotation": [0.0, 0.0, 0.0],
+      "level": 1,
+      "properties": { "range": "1", "height": "0.05", "mode": "Retroreflective", "visual_only": "false" }
+    },
+    {
+      "id": "done",
+      "type": "Remover",
+      "position": [6.0, 0.3, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "level": 1,
+      "properties": { "zone_x": "0.5", "zone_y": "0.6", "zone_z": "0.6" }
+    },
+    {
+      "id": "spill",
+      "type": "Remover",
+      "position": [3.85, 0.2, 0.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "level": 1,
+      "properties": { "zone_x": "1.0", "zone_y": "0.36", "zone_z": "0.7" }
+    },
+    {
+      "id": "panel",
+      "type": "ButtonPanel",
+      "position": [0.5, 0.5, 1.0],
+      "rotation": [0.0, 0.0, 0.0],
+      "properties": { "setpoint_min": "0.5", "setpoint_max": "3", "setpoint_unit": "s", "setpoint": "1" }
+    }
+  ]
+}

@@ -2126,6 +2126,128 @@
         "type": "bit",
         "kind": "input"
       }
+    ],
+    "mezzanine-lift": [
+      {
+        "id": "done.count",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "emitter.emit",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "gate_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "infeed.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "infeed.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "lift.atlevel",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "lift.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "lift.height",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "lift.level",
+        "type": "int",
+        "kind": "input"
+      },
+      {
+        "id": "lift.occupied",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "lift.ready",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "lift.target",
+        "type": "int",
+        "kind": "output"
+      },
+      {
+        "id": "lift.transfer",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "out_eye.detect",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "outfeed.fault",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "outfeed.rotate",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.estop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.green",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.red",
+        "type": "bit",
+        "kind": "output"
+      },
+      {
+        "id": "panel.reset",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.setpoint",
+        "type": "float",
+        "kind": "input"
+      },
+      {
+        "id": "panel.start",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "panel.stop",
+        "type": "bit",
+        "kind": "input"
+      },
+      {
+        "id": "spill.count",
+        "type": "int",
+        "kind": "input"
+      }
     ]
   }
 }

@@ -240,6 +240,14 @@ _MEANINGS: dict[tuple[str, str], str] = {
     ("PivotDiverter", "diverted"): "blade fully across -- a carton meeting it now is turned, not hit",
     ("PivotDiverter", "home"): "blade parked along the belt edge",
     ("PivotDiverter", "fault"): "drive fault: TRUE = seized; the blade stays where it is, at neither limit mid-swing",
+    ("VerticalLift", "target"): "call the carriage to a level: 0 = the floor; {levels} levels, {spacing} m apart",
+    ("VerticalLift", "transfer"): "run the carriage's deck along the line -- how a carton gets on, and how it gets off",
+    ("VerticalLift", "level"): "the level the carriage is nearest (not that it has arrived: see atlevel)",
+    ("VerticalLift", "atlevel"): "carriage at the level it is called to, within {tolerance} m -- stale on the scan you change the call",
+    ("VerticalLift", "height"): "carriage height above its lowest level, m",
+    ("VerticalLift", "occupied"): "a carton is aboard: its centre is over the middle of the deck",
+    ("VerticalLift", "ready"): "carriage empty at the infeed level with its entry gate down -- a carton may come aboard",
+    ("VerticalLift", "fault"): "hoist fault: TRUE = seized where it stands, between floors if that is where it was; the gate stays shut",
 }
 
 #: Tag-specific meanings where the part type alone says too little -- today only
@@ -250,6 +258,8 @@ _TAG_MEANINGS: dict[tuple[str, str], str] = {
     ("sorting-by-height", "sensor_low.detect"): "low beam: TRUE while any carton is in it",
     ("sorting-by-height", "sensor_high.detect"): "high beam: TRUE while a TALL carton is in it",
     ("sorting-by-height", "stack_light.green"): "green tower lamp",
+    ("mezzanine-lift", "done.count"): "cartons delivered to the far end of the mezzanine outfeed, running total",
+    ("mezzanine-lift", "spill.count"): "cartons that fell onto the mezzanine floor -- run off the carriage between floors -- running total",
 }
 
 #: What a student must know about one scene's starter that its tag set does

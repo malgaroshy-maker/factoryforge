@@ -84,6 +84,7 @@ public partial class SceneSelfTest : Node
         try
         {
             CheckRoundTrip();
+            CheckLevels();
             CheckClearUndo();
             CheckRotateAndDuplicate();
             CheckACopiedRemoverCountsItsOwn();
@@ -274,6 +275,10 @@ public partial class SceneSelfTest : Node
                     props["travel"] = "0.9";
                     props["slide_speed"] = "1.7";
                     break;
+                case "Mezzanine":
+                    props["size_x"] = "2.7";
+                    props["size_z"] = "1.3";
+                    break;
             }
 
             data.Parts.Add(new PartInstanceData
@@ -284,9 +289,14 @@ public partial class SceneSelfTest : Node
                 // mounting convention requires.
                 Position = new[] { -6.0f + i * 1.0f, 0.5f, -4.0f },
                 Rotation = new[] { 0.0f, i % 2 == 0 ? 0.0f : Mathf.Pi / 2.0f, 0.0f },
+                // One part on a raised level (IP-15), written the way a scene
+                // file writes it: Y within its level, the level beside it. The
+                // part that exists to be raised is the natural one to raise.
+                Level = AllTypes[i] == RaisedType ? 1 : 0,
                 Properties = props,
             });
         }
+        data.Version = SceneData.VersionFor(data.Parts);
 
         // A key no build knows: loading must ignore it, not fail. SceneData's
         // docs promise a scene from a newer build still opens.
@@ -312,8 +322,10 @@ public partial class SceneSelfTest : Node
             string id = $"probe_{type.ToLowerInvariant()}";
             Expect(ids.Contains(id), $"{type} was loaded");
 
-            // Chute is the one part with no I/O of its own, by design.
-            if (type == "Chute") continue;
+            // A part with no I/O of its own, by design (the chute, the
+            // mezzanine), has nothing to register. Asked of the catalog rather
+            // than listed, so the next static part does not need a line here.
+            if (PartCatalog.TagSuffixes(type).Count == 0) continue;
             Expect(PartTagManager.HasTagsFor(id, Tags), $"{type} registered its tags");
         }
 
@@ -453,6 +465,10 @@ public partial class SceneSelfTest : Node
                     ExpectNear(props, "travel", 0.9f, part.Type);
                     ExpectNear(props, "slide_speed", 1.7f, part.Type);
                     break;
+                case "Mezzanine":
+                    ExpectNear(props, "size_x", 2.7f, part.Type);
+                    ExpectNear(props, "size_z", 1.3f, part.Type);
+                    break;
             }
         }
     }
@@ -476,7 +492,7 @@ public partial class SceneSelfTest : Node
 
         foreach (string type in AllTypes)
         {
-            if (type == "Chute") continue;   // no I/O of its own, by design
+            if (PartCatalog.TagSuffixes(type).Count == 0) continue;   // no I/O of its own, by design
             string id = $"probe_{type.ToLowerInvariant()}";
             Expect(PartTagManager.HasTagsFor(id, Tags), $"{type} kept its tags after undoing Clear");
         }
@@ -736,6 +752,22 @@ public partial class SceneSelfTest : Node
             """
             { "name": "from-the-future", "version": "9.0", "parts": [
               { "id": "belt_1", "type": "ConveyorBelt",
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+
+        // IP-15: a level that is not a floor this build has. Below the ground
+        // is nonsense and above MaxLevel is a typo; either way nothing is
+        // cleared first.
+        RefuseAndKeepTheScene("a part on level -1",
+            """
+            { "name": "basement", "version": "2.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt", "level": -1,
+                "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
+            """, intact, sceneName);
+        RefuseAndKeepTheScene("a part above the highest level",
+            """
+            { "name": "sky", "version": "2.0", "parts": [
+              { "id": "belt_1", "type": "ConveyorBelt", "level": 9,
                 "position": [1.0, 0.5, 0], "rotation": [0, 0, 0] } ] }
             """, intact, sceneName);
 

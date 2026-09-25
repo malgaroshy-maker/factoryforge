@@ -66,6 +66,7 @@ public partial class EditorKeysSelfTest : Node
 
             CheckNudgeFollowsTheScreen();
             CheckOneKeyOneAction();
+            CheckLevelKeys();
         }
         catch (System.Exception ex)
         {
@@ -240,6 +241,38 @@ public partial class EditorKeysSelfTest : Node
         Editor.SetPlacementPart("ConveyorBelt");
         Expect(!Press(Key.Escape), "Escape is deliberately shared with Main's overlays");
         Expect(!Editor.HasPlacementPreview, "and still cancels the placement here");
+    }
+
+    // ---------- IP-15
+
+    /// <summary>PgUp / PgDn, as keystrokes: with a part selected they lift and
+    /// lower it, with nothing selected they choose the level to place on, and
+    /// either way the key is claimed.</summary>
+    private void CheckLevelKeys()
+    {
+        Editor.ClearAllPlacedParts();
+        Editor.SetActiveLevel(0);
+        Editor.SetPlacementPart("ConveyorBelt");
+        Editor.PlacePreviewAt(Vector3.Zero);
+        Editor.CancelPlacement();
+        Editor.SelectPartByIndex(0);
+        float floorY = Editor.SelectedPosition?.Y ?? float.NaN;
+
+        bool claimed = Press(Key.Pageup);
+        float raisedY = Editor.SelectedPosition?.Y ?? float.NaN;
+        Expect(Mathf.IsEqualApprox(raisedY - floorY, Parts.PartLayout.LevelHeight),
+               $"PgUp lifts the selected part one level (rose {raisedY - floorY:0.000} m)");
+        Expect(claimed, "and claims the key");
+
+        Press(Key.Pagedown);
+        Expect(Mathf.IsEqualApprox(Editor.SelectedPosition?.Y ?? float.NaN, floorY),
+               "PgDn puts it back down");
+
+        Press(Key.Escape);                 // deselect
+        Press(Key.Pageup);
+        Expect(Editor.ActiveLevel == 1,
+               $"with nothing selected, PgUp chooses the level to place on (now {Editor.ActiveLevel})");
+        Editor.SetActiveLevel(0);
     }
 
     /// <summary>Send a key the way the window does, and report whether anything

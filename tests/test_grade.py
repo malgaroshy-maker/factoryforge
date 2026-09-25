@@ -1018,6 +1018,38 @@ def test_turning_every_second_carton_fails_the_shuffled_feed(tmp_path):
     assert any(m["tall"] for m in misrouted) and any(not m["tall"] for m in misrouted)
 
 
+def test_the_mezzanine_lift_passes_a_handshake_on_occupied_and_atlevel(tmp_path):
+    code, report = graded(tmp_path, "mezzanine-lift", "good", 75, seed=5)
+    assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
+    evidence = report["evidence"]
+    # Gotcha 16: cartons really rode up, on both hoist speeds, every one of
+    # them at level 1.
+    assert evidence["delivered"] >= 6 and evidence["delivered_lifted_after_the_slowdown"] >= 1
+    assert evidence["hoist_speed_then"] < evidence["hoist_speed_first"]
+    assert evidence["spilled"] == 0
+    assert all(c["left_height"] == pytest.approx(0.9, abs=0.02)
+               for c in evidence["cartons"] if c["left_height"] is not None)
+
+
+def test_a_discharge_timed_on_the_rated_climb_leaves_the_carriage_between_floors(tmp_path):
+    code, report = graded(tmp_path, "mezzanine-lift", "timed", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"lift.discharged_at_level", "lift.delivered"}
+    between = report["evidence"]["left_between_floors"]
+    assert between and all(0.3 < b["left_height_m"] < 0.8 and b["at"] >= 30.0
+                           and b["lane"] == "spill" for b in between)
+    assert any("Discharge on lift.atlevel" in line for line in report["feedback"])
+
+
+def test_a_deck_left_running_carries_the_carton_off_the_far_side(tmp_path):
+    code, report = graded(tmp_path, "mezzanine-lift", "nostop", 75, seed=5)
+    assert code == 1 and report["verdict"] == "FAIL"
+    assert failed_ids(report) == {"lift.held_aboard", "lift.delivered"}
+    ran = report["evidence"]["ran_through"]
+    assert ran and all(r["left_height_m"] == 0.0 and r["lane"] == "floor" for r in ran)
+    assert any("Stop lift.transfer on lift.occupied" in line for line in report["feedback"])
+
+
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):
     """A student whose sidecar never started has not failed the exercise, and
     a marking script needs to tell the two apart."""
@@ -1326,6 +1358,10 @@ TABLE_NUMBERS = {
         str(len(e["misrouted"])), f"{e['belt_speed_then']:g}"],
     ("pivot-divert", "late"): lambda e: [
         str(len(e["struck"])), f"{e['belt_speed_first']:g}"],
+    ("mezzanine-lift", "timed"): lambda e: [
+        f"{e['left_between_floors'][0]['left_height_m']:.2f}",
+        f"{e['hoist_speed_then']:g}", f"{e['slowed_at']:g}"],
+    ("mezzanine-lift", "nostop"): lambda e: [str(len(e["ran_through"]))],
 }
 
 #: The feedback excerpts under "What a student gets back": each is how one of

@@ -176,6 +176,17 @@ pedestal reach down to the floor, the chute's deck hangs below and forward of it
 anchor. That is why the scene editor can snap X/Z to the 0.5 m grid, pin Y, and
 have any part land correctly. Never bake a mounting height into a scene position.
 
+It holds per level (IP-15): a part on level *n* sits on `PartLayout.PlaneY(n)`,
+0.9 m (`LevelHeight`, the lift's pitch) per level, and that level's floor is
+`FloorDrop` below it — the top of a `Mezzanine` deck — so every part's legs
+land on a raised floor unchanged. A scene file stores the level as its own key
+with Y still the in-level 0.5, and is stamped version 2.0 only when a part is
+raised; a version-1 build refuses that file rather than putting everything on
+the floor, and still opens every file with nothing raised. `PgUp`/`PgDn` pick
+the level to place on, or lift a selection. Anything that reads a part's height
+from a scene file must add `level × LevelHeight` (`SceneData.WorldY`, the
+grader's `Part.world_y`).
+
 **A part's instance id is a tag *prefix*, never a whole tag name.** The dispatch
 in `SceneEditor._PhysicsProcess` appends the suffix, so registering a part as
 `"conveyor.rotate"` looks up `conveyor.rotate.rotate` and silently disables it.

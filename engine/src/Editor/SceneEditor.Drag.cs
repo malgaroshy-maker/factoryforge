@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using FactoryForge.Parts;
 using Godot;
 
 namespace FactoryForge.Editor;
@@ -64,7 +65,11 @@ public partial class SceneEditor
     public void DragPartToRay(Vector3 from, Vector3 dir)
     {
         if (_partDrag is null) return;
-        if (WorkPlanePoint(from, dir) is not { } point) return;
+        // On the plane of the level the part started on (IP-15): a drag slides
+        // a part along its own floor. Changing level is PgUp/PgDn, which is a
+        // deliberate act rather than something a mouse gesture could do by
+        // accident.
+        if (WorkPlanePoint(from, dir, PartLayout.LevelOf(_partDragOrigin.Y)) is not { } point) return;
 
         // The part under the cursor goes where the cursor is; everything else
         // selected follows by the same vector, so a group keeps its shape. The

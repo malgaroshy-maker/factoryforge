@@ -42,8 +42,12 @@ public partial class VerticalLift : Node3D, IPart
     /// <summary>How many levels the lift serves, including level 0.</summary>
     [Export] public int Levels { get; set; } = 3;
 
-    /// <summary>Rise between levels, metres.</summary>
-    [Export] public float LevelSpacing { get; set; } = 0.90f;
+    /// <summary>Rise between levels, metres. Defaults to the editor's own
+    /// level pitch (<see cref="PartLayout.LevelHeight"/>, IP-15), so a lift on
+    /// level 0 serves belts placed on levels 1 and 2 flush without anybody
+    /// setting anything. They are one number, not two that happen to agree.
+    /// </summary>
+    [Export] public float LevelSpacing { get; set; } = PartLayout.LevelHeight;
 
     /// <summary>Hoist rate, metres per second. Comfortably under gravity, so a
     /// descending carriage keeps its load rather than dropping out from under
@@ -312,12 +316,14 @@ public partial class VerticalLift : Node3D, IPart
         // What counts as "a carton is aboard". Deliberately inset from the deck
         // ends: a carton still straddling the mouth is not yet aboard, and
         // closing the gate underneath one is how a gate breaks its own load.
+        // The inset is applied to the carton's centre (DeckHasCarton), not to
+        // any overlap -- see there for why.
         _deckZone = new Area3D { Name = "DeckZone", Monitoring = true };
         _deckZone.AddChild(new CollisionShape3D
         {
             Shape = new BoxShape3D
             {
-                Size = new Vector3(DeckLength * 0.62f, 0.34f, DeckWidth * 0.9f),
+                Size = new Vector3(DeckLength * ZoneFraction, 0.34f, DeckWidth * 0.9f),
             },
             Position = new Vector3(0, DeckTopLocal + 0.17f, 0),
         });
@@ -492,12 +498,35 @@ public partial class VerticalLift : Node3D, IPart
         _carriage.ConstantLinearVelocity = driving ? new Vector3(TransferSpeed, 0, 0) : Vector3.Zero;
     }
 
+    /// <summary>How much of the deck's length the "aboard" zone covers,
+    /// centred on the carriage.</summary>
+    private const float ZoneFraction = 0.62f;
+
+    /// <summary>
+    /// A carton is aboard when its <em>centre</em> is over the inset zone.
+    ///
+    /// It used to be any carton the zone overlapped, which contradicted the
+    /// zone's own comment: an Area3D reports a body the moment the two touch,
+    /// so a 0.20 m carton counted as aboard with its centre 0.24 m from the
+    /// shaft's axis -- its rear edge still over the entry blade at -0.34. A
+    /// program that did the right thing and stopped the deck on `occupied`
+    /// (IP-15's lesson) parked the carton straddling the mouth, and the gate,
+    /// which rises on `occupied`, came up underneath it. Measured on the
+    /// centre, the carton is fully on the deck when the bit rises, with the
+    /// blade 8 cm clear behind it, and the bit falls on discharge as the
+    /// carton's centre leaves the deck's middle -- "no longer aboard" is not
+    /// "clear of the shaft", which is what an outfeed eye is for.
+    /// </summary>
     private bool DeckHasCarton()
     {
         if (_deckZone is null) return false;
+        const float halfX = DeckLength * ZoneFraction / 2.0f;
+        const float halfZ = DeckWidth * 0.9f / 2.0f;
         foreach (var body in _deckZone.GetOverlappingBodies())
         {
-            if (body is BoxPhysics carton && IsInstanceValid(carton)) return true;
+            if (body is not BoxPhysics carton || !IsInstanceValid(carton)) continue;
+            var local = _carriage.ToLocal(carton.GlobalPosition);
+            if (Mathf.Abs(local.X) <= halfX && Mathf.Abs(local.Z) <= halfZ) return true;
         }
         return false;
     }

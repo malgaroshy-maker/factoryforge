@@ -226,6 +226,14 @@ public partial class SceneEditor
         {
             TogglePartNames();
         }
+        else if (keyEvent.Keycode == Key.Pageup && !keyEvent.CtrlPressed)
+        {
+            StepLevel(+1);
+        }
+        else if (keyEvent.Keycode == Key.Pagedown && !keyEvent.CtrlPressed)
+        {
+            StepLevel(-1);
+        }
         else if (keyEvent.Keycode == Key.Escape)
         {
             ClearPreview();

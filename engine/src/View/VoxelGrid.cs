@@ -74,6 +74,19 @@ public partial class VoxelGrid : Node3D
         });
     }
 
+    /// <summary>
+    /// Draw the grid at a raised floor rather than on the ground (IP-15): the
+    /// top of the deck parts on the editor's active level stand on. The grid is
+    /// what says where a part will land, and a grid left on the ground while
+    /// parts go down a metre above it says the wrong thing. Only the lines
+    /// move; the reference cube stays on the ground it measures from.
+    /// </summary>
+    public void ShowFloorAt(float floorY)
+    {
+        if (_gridMeshInstance is null) return;
+        _gridMeshInstance.Position = new Vector3(0, floorY, 0);
+    }
+
     public VoxelCoord WorldToVoxel(Vector3 worldPos)
     {
         int x = Mathf.RoundToInt(worldPos.X / CellSize);

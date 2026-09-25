@@ -377,6 +377,10 @@ public partial class Main : Node
         // tool stays armed after a placement (BF-01) and is put down by four
         // things the palette never hears about.
         editor.PlacementArmedChanged += (partType) => paletteUI.SetArmed(partType);
+        // Levels (IP-15): the palette's buttons ask, the editor decides, and
+        // the label follows the editor -- PgUp/PgDn change it too.
+        paletteUI.LevelStepRequested += (delta) => editor.StepLevel(delta);
+        editor.ActiveLevelChanged += (level) => paletteUI.ShowLevel(level);
 
         // The box-select rectangle. Added before the rest of the UI so it sits
         // under the panels: a rectangle drawn over the palette would obscure
