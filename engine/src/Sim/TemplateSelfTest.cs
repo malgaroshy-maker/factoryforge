@@ -104,11 +104,17 @@ public partial class TemplateSelfTest : Node
         }
 
         // Every part must have registered its I/O, or the template looks right
-        // and exposes nothing for a PLC to talk to. Chute is the one part with
-        // no tags of its own by design.
+        // and exposes nothing for a PLC to talk to. A part that declares no tags
+        // by design (the chute, the mezzanine deck) is asked, not guessed from
+        // its id -- the id is the scene author's to choose.
         foreach (string id in ids)
         {
-            if (id.Contains("chute")) continue;
+            if (Editor.NodeFor(id) is Parts.IPart part)
+            {
+                var declared = new Parts.PartTagBuilder(null, id, 0);
+                part.DeclareTags(declared);
+                if (declared.Suffixes.Count == 0) continue;
+            }
             Expect(PartTagManager.HasTagsFor(id, Tags), $"{name}: '{id}' registered tags");
         }
 
