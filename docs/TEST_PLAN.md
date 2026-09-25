@@ -154,21 +154,67 @@ each driver module sets.
 
 ### H. Scene exercises (`tools/try_scene.py`)
 
-| # | Check | Why |
+One check per scene in `engine/templates/manifest.json`, numbered in manifest
+order. Since IP-20 every **graded** scene is driven by the grader's own `good`
+reference controller (`grading/reference/<scene>.py`) — the same Python,
+through the same `TagBusClient` a student's sidecar uses, over the real tag
+bus, against the headless rigid-body engine — and passes only if the scene
+*completes* by a measure read from what the engine reports (counters, sensors,
+analog inputs), never from what the controller claims. Before IP-20 this
+section ran a second, separately written controller per scene (3281 lines of
+them), so the grader's controller and the 3D engine were never put together.
+
+The engine has nobody at its panel, so each scene's `Trial` carries the grader's
+examiner steps, done by forcing the panel input for `PRESS` (0.2 s, the
+engine's own hold, IP-31/IP-34) and releasing it. Only panel steps are copied;
+the grader's changes to the machinery (a slower belt, a re-rated pump) cannot
+be made over the bus and stay the grader's.
+
+| Scene | Examiner | Completes when (engine-side) |
 |---|---|---|
-| H1 | `sorting-by-height`: `try_scene.py` drives it to `tall=5 short=5` | the exact `drive_engine.py` contract, run through the newer self-contained script |
-| H2 | `start-stop-station`: the full Start → E-stop → Start-while-tripped (refused) → Reset → Start sequence, **then a production run** — `counter.count` must advance, and the E-stop is **timed** against §4.2's 200 ms | mirrors `StartStopStationProfile` and C10, from the outside. The sequence alone used to end with `produced=0`: it fitted inside one emitter half-period, so the line never made anything |
-| H3 | `tank-level-control`: the same controller run at **two** setpoints, with both times reported — reaches and holds 70%, then reaches 20% | mirrors `TankLevelControlProfile` / C11. One setpoint proves the controller runs; two prove the process, since outflow follows Torricelli and the drain valve loses authority as the tank empties (§4.3) |
-| H4 | `light-curtain-sorting`: **conservation** — `tall + short` equals the cartons emitted, after a drain phase, and nothing measured below the threshold is diverted | mirrors `LightCurtainSortingProfile` / C12. "Both counters advanced" passes while the diverter drops cartons on the floor or double-counts them, which is this scene's most likely failure |
-| H5 | `roller-line-weighing`: cartons weighed (counted by scale rising edges), the scale returns to zero between them, and metal detections are non-zero **and strictly fewer** than cartons | mirrors `RollerLineWeighingProfile` / C13. "Metal was seen once" passes for a sensor that fires on everything — the exact confusion this scene exists to clear up |
-| H6 | `pick-and-place-cell`: a full index → lower → grip → lift → traverse → release cycle, with the carton it placed reaching the outfeed; the drive's **actual speed measurably lagging its reference** during the ramp; real item codes read; and a seized gantry freezing where it is | mirrors `PickAndPlaceCellProfile`. The 200 ms E-stop contract is measured against `infeed.run`, not the belt's last revolution: a VFD asked to stop *ramps down*, which is why a real E-stop circuit removes power. The coast-down is timed separately, on its own Stop press |
-| H7 | `heat-treat-station`: the **standing offset measured, not asserted** — the plant is held with the integral term switched off and the steady-state error recorded, then switched on and the error checked to close; then a failed element cools while the heater command is held at 100 % | mirrors `HeatTreatStationProfile`. Nothing else in the project demonstrates *why* integral action exists rather than stating that it does |
+| `sorting-by-height` | Start 1 s; the IP-35 sheet from 16 s (strike once no tall carton is committed to the plate, release, Start alone, Reset, Start) | ≥ 6 tall and 6 short seen; `counter.tall` equals the cartons `sensor_high` saw and `counter.short` the rest, less only those seen in the last 7 s; no sensor changed from 0.5 s after the strike to the restart, and the line ran again |
+| `start-stop-station` | the grader's sheet: pot 40, Start, strike 12 s, release, Start alone, Reset, Start, Stop 24 s, Reset, pot 4, Start 27 s | exactly 4 cartons cross `part_present` after the last Start, then nothing for ≥ 8 s; ≥ 4 made before the strike; nothing moved while tripped |
+| `tank-level-control` | pot 70, Start, pot 22 at 30 s | the grader's own `_phase_stats` on `tank.level`, with `grade_tank`'s limits (3 % settled, 3 % ripple, 6 % overshoot, 40 % travel) |
+| `heat-treat-station` | pot 125, Start, pot 200 at 30 s | the same on `oven.temperature` with `grade_oven`'s limits (3 / 5 / 12 C, 80 C travel) |
+| `cooling-tunnel` | pot 160, Start, 75 at 30 s, 120 at 55 s | the oven's limits per phase, within 3 C of 75 C inside 10 s of the drop (the room alone cannot), and `fan.airflow` ≥ 50 % after it |
+| `light-curtain-sorting` | Start; pot to 0.40 m at 32 s | every carton diverted or passed as `height_gauge.height` against the pot *at that moment* says, counted by the two removers (7 s lag), ≥ 4 each way, and cartons pass after the pot goes above them all |
+| `roller-line-weighing` | Start; pot to 1500 g at 30 s | ≥ 8 loads on `scale.weight`; the outfeed counts exactly the loads (so no two cartons shared the deck); every load over the pot rejected and no other |
+| `pick-and-place-cell` | Start | ≥ 4 releases of `gantry.holding`, each over `PP_PLACE_AT` on the rail, every one reaching `outfeed.count` |
+| `accumulation-buffer` | Start | ≥ 3 blade drops (`stop.down`); each release lets out 1..2× the pot's window in cartons; blade up ≥ half the run |
+| `guarded-cell` | Reset 2 s, Start 6 s | ≥ 4 transferred; both relay channels closed by Start; the contactor stays in (scanner never stopped the cell); transfer count equals the push eye's |
+| `batch-dosing` | Reset+Start 1 s, Stop 32 s, Reset+Start 35 s | each batch: `meter.total` within 1.5 L of the pot, `tank.level` rose by what those litres are (± 1.5 %), pump stopped by the batch's end |
+| `star-delta-start` | Start 1 s, Stop 12 s | delta pulls in at ≥ pot − 3 % speed, after `staraux` opened; breaker never trips; ≥ 95 % speed; Stop drops the main within 0.5 s |
+| `servo-positioning` | Start; pot to 550 mm at 11 s | ≥ 3 visits to station A, ≥ 1 to the first B and ≥ 2 to 550 mm, by `axis.position` inside the axis window; `axis.error` never raised |
+| `air-receiver` | Start; pot to 5.0 bar at 25 s | `receiver.pressure` scaled by 27648 held in the grader's band (pot − 0.5 .. pot, ± 0.25) in each phase once settled; the valve opened |
+| `press-station` | pot 1.2 s, selector AUTO, Start, selector OFF at 19 s | ≥ 3 strokes to `bdc.no` with returns to `ram.retracted`; each dwell pot − 0.3 .. pot + 1.0 s; no stroke after OFF |
+| `rotary-index` | Start | ≥ 3 pushes, each with `table.atindex` made; `done.count` equals the pushes |
+| `pivot-divert` | Start | ≥ 3 tall and 3 short seen by the two eyes; chute count equals tall, far count equals short (8 s lag) |
+| `palletising-cell` | — | not graded, so no reference: `try_scene.py` keeps its own controller for it (IK, layer pattern, full pallet refusal, staged moves) |
+
+**Coverage rule.** Every manifest scene is in exactly one of `TRIALS`
+(graded: the grader's reference), `SOLVERS` (ungraded: a controller of its
+own) or `EXEMPT` (a named reason, reported as SKIP). A scene in none of them
+**fails** H with "no trial". `EXEMPT` is empty today. A new graded scene is
+done when it has a `TRIALS` entry, not an `EXEMPT` one.
+
+`try_scene.py --reference <name>` runs a wrong reference instead; it should
+fail. `--scene-file` opens a modified scene in the engine while the reference
+keeps reading the shipped template — the way to show that a disagreement
+between the two fails here. `--save`/`--replay` keep a run's timeline and
+re-measure it without an engine.
+
+What left with the old controllers: the fault-injection legs (a drive, valve,
+pump, element, gantry or stop seized under a running controller) and the
+E-stop timing against 200 ms on every scene. Both checked the controllers this
+file used to carry, which no longer exist; what each fault does to its part
+is asserted by the C self-tests (`fault`, `controlparts`, `lineparts`,
+`handlingparts`, `industrialparts`).
 
 Needs no display — the spike behind UX-10 proved templates simulate headless
 — so this runs in the same job as A/C/E, not behind `--gui`. Each check
-spawns its own engine, drives it exactly the way a PLC would (writing
-outputs, forcing the panel inputs a human operator would for
-`start-stop-station`), and tears it down: the seam UX-42's tag-set check
+spawns its own engine, drives it exactly the way a PLC would (the reference
+writes outputs; the examiner forces the panel inputs a human operator
+would), and tears it down: the seam UX-42's tag-set check
 does not reach, since that one only checks the tags exist, not that the
 scene actually does anything when driven.
 

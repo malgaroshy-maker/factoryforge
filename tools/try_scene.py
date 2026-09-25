@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Run a shipped scene headless, drive it the way a PLC would, and check it
-actually works -- before you write a real one against it.
+"""Run a shipped scene headless, drive it with the grader's own `good`
+controller, and check the scene completes on the real engine.
 
     python tools/try_scene.py --list
     python tools/try_scene.py --scene sorting-by-height
-    python tools/try_scene.py --scene tank-level-control --duration 20 --verbose
+    python tools/try_scene.py --scene tank-level-control --verbose
+    python tools/try_scene.py --scene batch-dosing --reference timed
+    python tools/try_scene.py --scene pivot-divert --scene-file my_copy.json
 
 Spawns the engine itself (headless, the scene's own template if it has one)
 and tears it down when done -- no separate `godot --headless ...` command to
@@ -15,25 +17,49 @@ leaving the scene more dead than doing nothing at all.
 One RESULT line, exit 0 on a real pass and 1 otherwise -- the same convention
 tools/check_protocol.py and tools/check_force_while_paused.py already set.
 
-Every scene is driven **from its control panel** (OP-02): the run starts
-stopped, presses Start, checks that Stop and a normally-closed E-stop really
-stop the line, and reads the scene's one setpoint off the panel's pot rather
-than a constant in this file. That is not decoration -- it is the only way to
-check that pressing a button in the running app does anything, and four of the
-five scenes used to ignore their panel completely.
+**One reference controller per scene (IP-20).** Every graded scene has a
+`good` reference controller in `sidecar/factoryforge_sidecar/grading/
+reference/`, and this is the program that drives it here: the same Python,
+through the same `TagBusClient` a student's sidecar uses, over the real tag
+bus, against the real rigid-body engine. This file used to carry a second
+controller per scene, written separately from the grader's -- 3281 lines of
+them -- so the two could disagree about a scene and nothing would say so. The
+grader's plant model is read from the template (IP-19), which makes its tag
+set and its numbers agree with the engine's; this is the behavioural half. If
+`good` passes the grader's model and cannot complete the scene in the 3D
+engine, the model and the engine disagree about how the plant behaves, and
+this fails.
 
-Assertions are band-based rather than exact counts: these run real rigid-body
-physics, and no such run can promise a number (§4). What each scene *can*
-promise is conservation, timing, and that turning the knob changes what the
-line does. The exact tall=5/short=5 regression contract lives in
-tools/drive_engine.py, against `--deterministic` -- a count like that needs a
-belt that runs for a fixed length of time, which is the one thing an operator
-sequence deliberately does not give it.
+**The examiner.** The grader's plant model runs its own exam: it presses
+Start, turns the pot, strikes the mushroom (`grading/plant.py`, `Script`).
+The engine has nobody at its panel, so each scene's `Trial` below carries the
+examiner's steps, done over the bus the only way a client can touch an input:
+a force, held for `PRESS` -- the engine's own momentary hold, 0.2 s
+(`ButtonPanel.DefaultPressHold`, IP-31), which is also what the grader's hand
+holds (IP-34) -- and then released. Only the panel steps are copied. The
+grader's exams also reach into the machinery (a slower belt, a re-rated
+pump), which nothing on the bus can do; those are the grader's business and
+are not repeated here.
 
-Each scene's driving logic mirrors its engine-side demo profile under
-engine/src/Sim/DemoProfiles/, so a regression in either one fails the same
-way, and this doubles as a check that the engine behaves correctly when driven
-purely over the wire -- the same seam a real PLC uses.
+**What "completes" means.** Each `Trial` has its own engine-side measure,
+built only from what the engine reports -- counters, sensors, analog inputs --
+never from what the controller claims about itself. It is not the grader's
+rubric: several rubrics read plant ledgers that have no tag (which carton went
+where), and Jolt is not reproducible (§4), so every measure is a band, not an
+exact count. What each one has to show is that real work happened (AGENTS.md
+gotcha 16) and that the work is the scene's own: cartons in the lane their
+height says, a batch on its number, a temperature held. Each Trial's
+docstring says why that measure and not another.
+
+`--reference` runs another of the scene's references instead of `good`. A
+wrong one should not complete: that is how a measure is shown to have teeth
+(gotcha 24). `--scene-file` opens a scene file in the engine in place of the
+template, while the reference keeps reading the shipped template -- the way to
+show a mismatch between the two fails here.
+
+Scenes with no grader reference keep a controller of their own at the end of
+this file (`SOLVERS`); today that is only the palletising cell, which has no
+graded exam.
 """
 from __future__ import annotations
 
@@ -48,7 +74,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Awaitable, Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "engine"
@@ -56,6 +84,7 @@ MANIFEST = ENGINE / "templates" / "manifest.json"
 sys.path.insert(0, str(ROOT / "sidecar"))
 logging.disable(logging.WARNING)
 
+from factoryforge_sidecar import protocol as proto  # noqa: E402
 from factoryforge_sidecar.tagbus import TagBusClient  # noqa: E402
 
 #: The engine's tag bus. FF_BUS_PORT lets this run against a port other
@@ -90,14 +119,16 @@ def port_listening() -> bool:
 
 class Engine:
     """The headless subprocess. Output goes to a temp file rather than a
-    pipe: an unread PIPE can deadlock the child once its buffer fills, and a
-    file gives something to show the user if the connect step times out."""
+    pipe: an unread PIPE can deadlock the child once its buffer fills
+    (AGENTS.md gotcha 15), and a file gives something to show the user if
+    the connect step times out."""
 
-    def __init__(self, godot: str, entry: dict) -> None:
+    def __init__(self, godot: str, entry: dict, scene_file: str | None = None) -> None:
         args = [godot, "--headless", "--path", str(ENGINE), "--",
                 f"--bus-port={PORT}"]
-        if entry["path"]:
-            args.append(f"--scene={entry['path']}")
+        scene = scene_file or entry["path"]
+        if scene:
+            args.append(f"--scene={scene}")
 
         self._log = tempfile.NamedTemporaryFile(mode="w+", suffix=".log", delete=False)
         self.proc = subprocess.Popen(args, stdout=self._log, stderr=subprocess.STDOUT, text=True)
@@ -142,8 +173,11 @@ async def wait_for_port(timeout: float, proc: subprocess.Popen | None = None) ->
     return f"the engine did not open the port within {timeout:g}s"
 
 
-async def connect(timeout: float = 15.0) -> tuple[TagBusClient, asyncio.Task]:
-    bus = TagBusClient(f"ws://127.0.0.1:{PORT}/tagbus")
+async def connect(bus: TagBusClient | None = None,
+                  timeout: float = 15.0) -> tuple[TagBusClient, asyncio.Task]:
+    """Connect `bus` (a plain client if None) and wait for its describe."""
+    if bus is None:
+        bus = TagBusClient(f"ws://127.0.0.1:{PORT}/tagbus")
     runner = asyncio.create_task(bus.run())
     try:
         await asyncio.wait_for(bus.connected.wait(), timeout=timeout)
@@ -158,6 +192,1033 @@ async def connect(timeout: float = 15.0) -> tuple[TagBusClient, asyncio.Task]:
     return bus, runner
 
 
+# =====================================================================
+#  The grader's reference controllers, on the engine (IP-20)
+# =====================================================================
+
+class Recorder(TagBusClient):
+    """The bus client a reference controller drives the engine through, with a
+    timeline of every value it saw.
+
+    Recorded where frames arrive (`_handle`) and where the controller writes
+    (`write`), not by polling: a poll every few tens of milliseconds can miss
+    a pulse, and on Windows a short sleep does not sleep at all (AGENTS.md
+    gotcha 2). The cache `read()` returns is updated in the same place, so the
+    timeline is exactly what the controller could have seen.
+
+    Every time here is seconds since `open()` -- the moment the reference was
+    attached and the examiner's clock started, the engine-side twin of the
+    grader's window opening.
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url)
+        self.opened: float | None = None
+        #: tag id -> [(perf_counter, visible value)], one entry per change.
+        self._timeline: dict[str, list[tuple[float, object]]] = {}
+        #: What the examiner did, and when (seconds since open).
+        self.events: list[tuple[float, str]] = []
+        #: (perf_counter, engine tick) for every update, to report the
+        #: engine's pace: a slow machine is a reason, not a verdict.
+        self.ticks: list[tuple[float, int]] = []
+        self.tick_ms = proto.DEFAULT_TICK_MS
+
+    # --- recording ---
+
+    def _note(self, tag_id: str) -> None:
+        if tag_id not in self.table:
+            return
+        value = self.read(tag_id)
+        series = self._timeline.setdefault(tag_id, [])
+        if not series or series[-1][1] != value:
+            series.append((time.perf_counter(), value))
+
+    async def _handle(self, msg: dict) -> None:
+        await super()._handle(msg)
+        kind = msg.get("t")
+        if kind == "hello":
+            self.tick_ms = int(msg.get("tick_ms") or self.tick_ms)
+        elif kind == "describe":
+            for tag in self.table:
+                self._note(tag.id)
+        elif kind == "update":
+            if isinstance(msg.get("tick"), int):
+                self.ticks.append((time.perf_counter(), msg["tick"]))
+            for tag_id in proto.parse_values(msg):
+                self._note(tag_id)
+        elif kind == "observe":
+            forced, cleared = proto.parse_observe(msg)
+            for tag_id in [*forced, *cleared]:
+                self._note(tag_id)
+
+    async def write(self, tag_id: str, value) -> None:
+        await super().write(tag_id, value)
+        self._note(tag_id)
+
+    def open(self) -> None:
+        self.opened = time.perf_counter()
+        for tag in self.table:
+            self._note(tag.id)
+
+    def now(self) -> float:
+        if self.ended is not None:
+            return self.ended
+        return time.perf_counter() - (self.opened or time.perf_counter())
+
+    #: Set when the run is over (or loaded from a file), so every measure
+    #: reads the same end however long it takes to compute.
+    ended: float | None = None
+
+    def close(self) -> None:
+        self.ended = self.now()
+
+    # --- keeping a run, to re-measure it without an engine ---
+
+    def dump(self, path: str) -> None:
+        """Write the timeline, so a measure can be re-run on it (`--replay`):
+        how a measure is tuned without re-running Jolt, and how a failing run
+        is kept for somebody to read."""
+        data = {"scene": self.scene, "ended": self.now(), "events": self.events,
+                "tags": [[t.id, t.type, t.kind] for t in self.table],
+                "series": {tag_id: self.series(tag_id) for tag_id in self._timeline}}
+        Path(path).write_text(json.dumps(data), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str) -> "Recorder":
+        from factoryforge_sidecar.tags import Tag, TagTable   # noqa: PLC0415
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        bus = cls("ws://replay")
+        bus.scene = data["scene"]
+        bus.table = TagTable([Tag(i, i, ty, kind) for i, ty, kind in data["tags"]])
+        bus.opened, bus.ended = 0.0, data["ended"]
+        bus.events = [tuple(e) for e in data["events"]]
+        bus._timeline = {k: [tuple(p) for p in v] for k, v in data["series"].items()}
+        return bus
+
+    def event(self, what: str) -> None:
+        self.events.append((round(self.now(), 2), what))
+
+    # --- reading the timeline back ---
+
+    def series(self, tag_id: str) -> list[tuple[float, object]]:
+        base = self.opened or 0.0
+        return [(at - base, value) for at, value in self._timeline.get(tag_id, [])]
+
+    def value(self, tag_id: str, at: float | None = None):
+        """The value `tag_id` had at `at` (seconds since open), or at the end."""
+        found = None
+        for when, value in self.series(tag_id):
+            if at is not None and when > at:
+                break
+            found = value
+        return found
+
+    def num(self, tag_id: str, at: float | None = None) -> float:
+        value = self.value(tag_id, at)
+        return float(value) if value is not None else 0.0
+
+    def rises(self, tag_id: str, start: float = 0.0, end: float = math.inf) -> list[float]:
+        """When `tag_id` went from false to true, inside [start, end]."""
+        out, before = [], None
+        for when, value in self.series(tag_id):
+            if start <= when <= end and value and not before and before is not None:
+                out.append(round(when, 2))
+            before = value
+        return out
+
+    def gain(self, tag_id: str, start: float = 0.0, end: float | None = None) -> float:
+        """How much a counter advanced between two moments."""
+        return self.num(tag_id, end) - self.num(tag_id, start)
+
+    def extreme(self, tag_id: str, start: float = 0.0, end: float = math.inf,
+                pick=max) -> float:
+        values = [float(v) for when, v in self.series(tag_id) if start <= when <= end]
+        values.append(self.num(tag_id, start))
+        return pick(values)
+
+    def seconds_where(self, tag_id: str, test, start: float = 0.0,
+                      end: float | None = None) -> float:
+        """Seconds of [start, end] during which `test(value)` held."""
+        end = self.now() if end is None else end
+        total, value, since = 0.0, self.value(tag_id, start), start
+        for when, new in self.series(tag_id):
+            if when <= start:
+                continue
+            if when >= end:
+                break
+            if value is not None and test(value):
+                total += when - since
+            value, since = new, when
+        if value is not None and test(value):
+            total += end - since
+        return total
+
+    def pace(self) -> float | None:
+        """Engine seconds per wall second since open, from the update ticks;
+        None when too few updates arrived to say."""
+        base = self.opened or 0.0
+        seen = [(at, tick) for at, tick in self.ticks if at >= base]
+        if len(seen) < 2 or seen[-1][0] - seen[0][0] < 1.0:
+            return None
+        return ((seen[-1][1] - seen[0][1]) * self.tick_ms / 1000.0
+                / (seen[-1][0] - seen[0][0]))
+
+
+#: How long the examiner holds a momentary button: the engine's own press,
+#: `ButtonPanel.DefaultPressHold` (IP-31), which the grader's examiner holds
+#: too (IP-34) and `tests/test_grade_templates.py` pins to the C#.
+from factoryforge_sidecar.grading.plant import Panel  # noqa: E402
+PRESS = Panel.PRESS
+
+
+class Examiner:
+    """The grader's examiner, done over the bus.
+
+    Forcing is the only way a bus client can move an input, and it is what a
+    hand on the panel looks like from the controller's side: `ButtonPanel`
+    publishes the forced value and, for the pot, turns its pointer to match.
+    Every force it makes it also clears, at the end if not before, so an
+    attached engine is left as it was found.
+    """
+
+    def __init__(self, bus: Recorder) -> None:
+        self.bus = bus
+        self.held: set[str] = set()
+
+    async def press(self, tag_id: str) -> None:
+        self.bus.event(f"press {tag_id}")
+        await self.force(tag_id, True, note=False)
+        await asyncio.sleep(PRESS)
+        await self.release(tag_id, note=False)
+
+    async def force(self, tag_id: str, value, note: bool = True) -> None:
+        if note:
+            self.bus.event(f"{tag_id} := {value}")
+        self.held.add(tag_id)
+        await self.bus.force({tag_id: value})
+
+    async def release(self, tag_id: str, note: bool = True) -> None:
+        if note:
+            self.bus.event(f"release {tag_id}")
+        self.held.discard(tag_id)
+        await self.bus.force(clear=[tag_id])
+
+    async def run(self, steps: list[tuple[float, Callable]]) -> None:
+        """Each step at its time since open, each in a task of its own so a
+        press being held does not delay the step after it."""
+        started = []
+        for at, step in sorted(steps, key=lambda s: s[0]):
+            wait = at - self.bus.now()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            started.append(asyncio.create_task(step(self)))
+        if started:
+            await asyncio.gather(*started)
+
+    async def let_go(self) -> None:
+        if self.held:
+            await self.bus.force(clear=sorted(self.held))
+            self.held.clear()
+
+
+# --- the examiner's steps ------------------------------------------------
+
+Step = Callable[[Examiner], Awaitable[None]]
+
+
+def press(button: str, prefix: str = "panel") -> Step:
+    async def step(ex: Examiner) -> None:
+        await ex.press(f"{prefix}.{button}")
+    return step
+
+
+def strike() -> Step:
+    """The mushroom, struck: `panel.estop` is normally closed, true = healthy."""
+    async def step(ex: Examiner) -> None:
+        await ex.force("panel.estop", False)
+    return step
+
+
+def release_estop() -> Step:
+    async def step(ex: Examiner) -> None:
+        await ex.release("panel.estop")
+    return step
+
+
+def turn(tag_id: str, value) -> Step:
+    """Set an input and leave it set: a pot, or a selector's detent."""
+    async def step(ex: Examiner) -> None:
+        await ex.force(tag_id, value)
+    return step
+
+
+#: Start at 1.0 s, as eight of the graded exams do, and the grader's
+#: `SORT_START_AT`: late enough that the controller has scanned its inputs.
+START = [(1.0, press("start"))]
+
+
+Check = tuple[bool, str]
+
+
+@dataclass
+class Trial:
+    """One scene's run on the engine: how long, what the examiner does, and
+    what the engine has to report for the scene to have completed."""
+    duration: float
+    measure: Callable[[Recorder], list[Check]]
+    steps: list[tuple[float, Step]] = field(default_factory=lambda: list(START))
+
+
+
+# =====================================================================
+#  Per scene: what "completes" means on the engine
+# =====================================================================
+#
+# Every measure reads inputs -- what the engine reports -- and never takes
+# the controller's word for anything. Where a measure compares the controller
+# with the plant, it is to ask whether the plant did what was commanded.
+#
+# Counters are compared with the sensors upstream of them rather than with a
+# fixed number: "every carton the tall beam saw reached the tall lane" is true
+# of a working line at any belt speed and false of a mistimed one, where "at
+# least five in the chute" is true of both. A carton still between its sensor
+# and its counter when the run ends is not a missorted one, so a lane may be
+# short by the cartons seen in the last `lag` seconds and by nothing else.
+
+def lane(bus: Recorder, name: str, seen: list[float], counter: str,
+         lag: float, end: float | None = None) -> Check:
+    """The cartons counted into a lane against the cartons that should have
+    gone there, allowing only for those still on their way."""
+    end = bus.now() if end is None else end
+    counted = int(bus.gain(counter, 0.0, end))
+    settled = sum(1 for t in seen if t <= end - lag)
+    return (settled <= counted <= len(seen),
+            f"{name}: {counted} counted against {len(seen)} that should go there "
+            f"({settled} of them more than {lag:g}s before the end)")
+
+
+def unpaired(every: list[float], tall: list[float]) -> list[float]:
+    """The short cartons, from a beam every carton breaks and a later one only
+    tall cartons reach: each tall edge claims the latest unclaimed edge of the
+    first beam before it, and what nobody claims is short. By order, not by a
+    travel time, so a belt stopped between the two beams (an E-stop) does not
+    turn a tall carton into a short one. Cartons cannot overtake on a belt,
+    and they are further apart than the two beams, so the order is enough."""
+    claimed: set[int] = set()
+    for h in tall:
+        before = [i for i, t in enumerate(every) if t < h and i not in claimed]
+        if before:
+            claimed.add(before[-1])
+    return [t for i, t in enumerate(every) if i not in claimed]
+
+
+def at_least(value: float, floor: float, what: str) -> Check:
+    return value >= floor, f"{what}: {value:g} (at least {floor:g})"
+
+
+def quiet(bus: Recorder, tags: list[str], start: float, end: float, what: str) -> Check:
+    """Nothing moved on the line between two moments: the sensors along it
+    never changed. How an E-stop is seen from the plant's side."""
+    moved = [(t, tag) for tag in tags for t, _ in bus.series(tag) if start < t < end]
+    return (not moved,
+            f"{what}: no sensor changed between {start:.1f}s and {end:.1f}s"
+            if not moved else
+            f"{what}: {tag_list(moved)} changed between {start:.1f}s and {end:.1f}s")
+
+
+def tag_list(moved) -> str:
+    return ", ".join(sorted({f"{tag} at {t:.1f}s" for t, tag in moved})[:4])
+
+
+def resample(bus: Recorder, tag_id: str, step: float = 0.05) -> list[tuple[float, float]]:
+    """A tag as a uniform trace, the way the grader's plant records one every
+    tick. The bus publishes a value only when it changes, so a measurement
+    that sits still would otherwise count once however long it sat."""
+    series = [(t, float(v)) for t, v in bus.series(tag_id)]
+    out, i, value = [], 0, float(bus.value(tag_id, 0.0) or 0.0)
+    t = 0.0
+    while t <= bus.now():
+        while i < len(series) and series[i][0] <= t:
+            value = series[i][1]
+            i += 1
+        out.append((round(t, 3), value))
+        t += step
+    return out
+
+
+# --- the operator sheet -------------------------------------------------
+#
+# The two scenes whose grader exams mark the E-stop contract (IP-35) get the
+# same sheet here: Start, the mushroom struck mid-run, released, Start alone,
+# Reset, then Start. The engine side of it is that the line really stood
+# still from the strike until the last Start -- no sensor along it changed --
+# and ran again afterwards.
+
+def operator_sheet(reach_at: float, clear=None, wait: float = 4.0) -> list[tuple[float, Step]]:
+    """The sheet as one step, because its times run from the strike and the
+    strike can wait: `clear(bus)` is the examiner looking for a moment when
+    stopping the belt cannot missort a carton -- the grader's sorting exam
+    waits for exactly that (`SortingExam._plate_is_clear`), for at most
+    `wait` seconds, and then strikes anyway."""
+    async def sheet(ex: Examiner) -> None:
+        deadline = ex.bus.now() + wait
+        while clear is not None and not clear(ex.bus) and ex.bus.now() < deadline:
+            await asyncio.sleep(0.05)
+        struck = ex.bus.now()
+        await strike()(ex)
+        for after, step in ((2.0, release_estop()),
+                            (3.0, press("start")),      # must not restart: latched
+                            (4.5, press("reset")),      # must not restart either
+                            (6.0, press("start"))):     # this one must
+            await asyncio.sleep(max(struck + after - ex.bus.now(), 0.0))
+            await step(ex)
+    return [(reach_at, sheet)]
+
+
+def struck_at(bus: Recorder) -> float | None:
+    return next((t for t, what in bus.events if what == "panel.estop := False"), None)
+
+
+def sheet_checks(bus: Recorder, sensors: list[str]) -> list[Check]:
+    # Half a second of grace after the strike: the controller has to see it,
+    # and a carton already crossing a beam finishes crossing it -- the belt
+    # stops, the carton's edge does not move back out.
+    strike_at = struck_at(bus)
+    if strike_at is None:
+        return [(False, "the examiner never struck the mushroom")]
+    restart = strike_at + 6.0
+    stood = quiet(bus, sensors, strike_at + 0.5, restart,
+                  "the mushroom stopped the line, and only Reset then Start restarted it")
+    ran = any(t > restart for tag in sensors for t, _ in bus.series(tag))
+    return [stood, (ran, "the line ran again after Reset then Start"
+                    if ran else "the line never ran again after Reset then Start")]
+
+
+# --- sorting by height ----------------------------------------------------
+
+#: The examiner reaches for the mushroom here, as the grader's does
+#: (`SORT_STRIKE_FROM`), and strikes once no tall carton is committed to the
+#: plate: none has broken the high beam in the time a carton takes from the
+#: beam to past the far edge of the pusher's catch.
+SORT_STRIKE_FROM = 16.0
+
+
+def sorting_plate_clear(bus: Recorder) -> bool:
+    from factoryforge_sidecar import sorting_scene as line   # noqa: PLC0415
+    beam = line.SENSOR_HIGH_POS - line.SENSOR_WINDOW / 2
+    committed = (line.PUSHER_POS + line.PUSHER_CATCH - beam) / line.BELT_SPEED
+    last = bus.rises("sensor_high.detect", -1.0)
+    return not last or bus.now() - last[-1] > committed + 0.2
+
+
+def measure_sorting_by_height(bus: Recorder) -> list[Check]:
+    """Every carton goes to the lane its height says, on real physics.
+
+    `sensor_low` sees every carton and `sensor_high` only the tall ones, so
+    the engine itself says which carton was which. `counter.tall` is the
+    chute's remover and `counter.short` the end of the belt's. The reference
+    fires the pusher on a delay the grader works out from `sorting_scene.py`
+    (`_beam_to_pusher_window`); if the engine's belt, beam or pusher is not
+    where that model says, tall cartons sail past the plate and this lane
+    count comes up short -- which is what a mismatch looks like here.
+    """
+    tall = bus.rises("sensor_high.detect")
+    every = bus.rises("sensor_low.detect")
+    short = unpaired(every, tall)
+    # From the high beam at 2.0 m, 3.5 m of belt at 0.5 m/s to the far
+    # remover; the chute is nearer. Seven seconds covers both with room.
+    return [
+        (len(tall) >= 6 and len(short) >= 6,
+         f"tall={int(bus.gain('counter.tall'))} short={int(bus.gain('counter.short'))}, "
+         f"of {len(tall)} tall and {len(short)} short seen"),
+        lane(bus, "the chute", tall, "counter.tall", 7.0),
+        lane(bus, "the end of the belt", short, "counter.short", 7.0),
+        *sheet_checks(bus, ["sensor_low.detect", "sensor_high.detect"]),
+    ]
+
+
+# --- start / stop station -------------------------------------------------
+
+SS_BATCH = 4
+SS_BATCH_AT = 27.0
+
+
+def measure_start_stop_station(bus: Recorder) -> list[Check]:
+    """The contract, then a batch the line stops itself at.
+
+    The grader's sheet, as it presses it: a batch too big to reach while the
+    mushroom is tried, then Stop, Reset, the pot to four, and Start. On the
+    engine, "made exactly four" is four cartons crossing `part_present`
+    after that last Start -- the engine's own eye, not the count the
+    controller displays -- and then nothing crossing it again, because the
+    belt stopped with nobody pressing anything.
+    """
+    batch = bus.rises("part_present.detect", SS_BATCH_AT)
+    last = batch[-1] if batch else None
+    stopped = last is not None and bus.now() - last >= 8.0
+    return [
+        (len(batch) == SS_BATCH,
+         f"batch={len(batch)} of {SS_BATCH} crossed the eye after its Start"
+         + (f", the last at {last:.1f}s" if last else "")),
+        (stopped, "then the line stood still for the rest of the run"
+         if stopped else "the line did not stand still after the batch"),
+        at_least(len(bus.rises("part_present.detect", 1.0, SS_STRIKE_AT)), 4,
+                 "cartons made before the mushroom"),
+        at_least(bus.gain("counter.count"), SS_BATCH + 4,
+                 "cartons the remover took over the run"),
+        *sheet_checks(bus, ["part_present.detect"]),
+    ]
+
+
+SS_STRIKE_AT = 12.0
+SS_STEPS = [(0.5, turn("panel.setpoint", 40.0)), (1.0, press("start")),
+            *operator_sheet(SS_STRIKE_AT),
+            (24.0, press("stop")), (26.0, press("reset")),
+            (26.5, turn("panel.setpoint", float(SS_BATCH))),
+            (SS_BATCH_AT, press("start"))]
+
+
+# --- the regulators -------------------------------------------------------
+#
+# The tank, the oven and the cooling tunnel are marked on their trace, and the
+# grader's own statistics are the right ones to apply to it: settled error,
+# ripple and overshoot per phase of the pot (`grading/scenes/_regulator.py`),
+# with the grader's own limits, on the engine's trace instead of the model's.
+# The pot moves as the grader's exam moves it -- one of its seeded values.
+
+def regulator_checks(bus: Recorder, tag_id: str, phases: list[tuple[float, float]],
+                     *, settled: float, ripple: float, overshoot: float,
+                     moved: float, unit: str) -> list[Check]:
+    from factoryforge_sidecar.grading.scenes._regulator import _phase_stats  # noqa: PLC0415
+    trace = resample(bus, tag_id)
+    values = [v for _, v in trace]
+    span = max(values) - min(values) if values else 0.0
+    checks: list[Check] = []
+    stats = []
+    for index, (start, setpoint) in enumerate(phases):
+        until = phases[index + 1][0] if index + 1 < len(phases) else bus.now()
+        stats.append(_phase_stats(trace, {"setpoint": setpoint, "from": start, "to": until}))
+    headline = " | ".join(
+        f"{s['setpoint']:g}{unit}: off {s['settled_error']}, ripple {s['ripple']}, "
+        f"over {s['overshoot']}" for s in stats)
+    checks.append((span >= moved, f"{headline} (travelled {span:.1f}{unit})"))
+    for s in stats:
+        sp = s["setpoint"]
+        if s["settled_error"] is None:
+            checks.append((False, f"no trace in the phase at {sp:g}{unit}"))
+            continue
+        checks.append((s["settled_error"] <= settled,
+                       f"at {sp:g}{unit}: settled {s['settled_error']}{unit} off "
+                       f"(at most {settled:g})"))
+        checks.append((s["ripple"] <= ripple,
+                       f"at {sp:g}{unit}: {s['ripple']}{unit} peak to peak (at most {ripple:g})"))
+        checks.append((s["overshoot"] <= overshoot,
+                       f"at {sp:g}{unit}: {s['overshoot']}{unit} past the setpoint "
+                       f"(at most {overshoot:g})"))
+    return checks
+
+
+def pot_phases(phases: list[tuple[float, float]]) -> list[tuple[float, Step]]:
+    return [(at, turn("panel.setpoint", value)) for at, value in phases]
+
+
+TANK_PHASES = [(0.2, 70.0), (30.0, 22.0)]
+
+
+def measure_tank_level_control(bus: Recorder) -> list[Check]:
+    """Hold the level the pot asks for, high and then low: the grader's
+    `grade_tank` limits (3 % settled, 3 % ripple, 6 % overshoot, 40 % of
+    travel) on `tank.level` as the engine reports it."""
+    return regulator_checks(bus, "tank.level", TANK_PHASES, settled=3.0, ripple=3.0,
+                            overshoot=6.0, moved=40.0, unit="%")
+
+
+OVEN_PHASES = [(0.2, 125.0), (30.0, 200.0)]
+
+
+def measure_heat_treat_station(bus: Recorder) -> list[Check]:
+    """Hold the plate at the pot's temperature, twice: `grade_oven`'s limits
+    (3 C settled, 5 C ripple, 12 C overshoot, 80 C of travel) on
+    `oven.temperature`. A P-only loop parks 9.5 C short of 125 on the
+    template's plate, so passing the settled check here is the integral term
+    working against the engine's heater, not the model's."""
+    return regulator_checks(bus, "oven.temperature", OVEN_PHASES, settled=3.0,
+                            ripple=5.0, overshoot=12.0, moved=80.0, unit="C")
+
+
+CT_PHASES = [(0.2, 160.0), (30.0, 75.0), (55.0, 120.0)]
+
+
+def measure_cooling_tunnel(bus: Recorder) -> list[Check]:
+    """The oven's three numbers per phase, and the split range's own lesson:
+    after the recipe drops the product is within 3 C of the new setpoint in
+    10 s (`CT_ARRIVE_WITHIN`), which the room alone cannot do -- so the fan
+    really did cool it, on the engine's fan and the engine's plate."""
+    checks = regulator_checks(bus, "oven.temperature", CT_PHASES, settled=3.0,
+                              ripple=5.0, overshoot=12.0, moved=80.0, unit="C")
+    drop, low = CT_PHASES[1]
+    arrived = next((t for t, v in resample(bus, "oven.temperature")
+                    if t >= drop and v <= low + 3.0), None)
+    took = None if arrived is None else arrived - drop
+    checks.append((took is not None and took <= 10.0,
+                   f"after the drop to {low:g} C it was within 3 C in "
+                   f"{took:.1f}s (at most 10s)" if took is not None
+                   else f"it never came within 3 C of {low:g} C"))
+    checks.append(at_least(round(bus.extreme("fan.airflow", drop), 1), 50.0,
+                           "peak airflow after the drop, %"))
+    return checks
+
+
+# --- light curtain sorting ------------------------------------------------
+
+LC_POT_THEN_AT = 32.0
+#: Above the tallest carton the template's emitter makes (0.30 m), so once the
+#: pot is here nothing may be diverted: the line has to follow the knob.
+LC_POT_THEN = 0.40
+
+
+def measure_light_curtain_sorting(bus: Recorder) -> list[Check]:
+    """Divert on the measured height against the pot as it was when the
+    carton was measured. `height_gauge.height` is the light array's own
+    reading, so the lane every carton should take comes from the engine; the
+    pot moves above every carton at 32 s, and from then on the diverter must
+    let everything through. `tall_count` is the chute's remover."""
+    blocked = bus.rises("height_gauge.blocked")
+    divert, through = [], []
+    for t in blocked:
+        # The array reports the highest beam blocked; read it a moment after
+        # the edge, once the whole carton is in the curtain.
+        height = bus.num("height_gauge.height", t + 0.3)
+        (divert if height >= bus.num("panel.setpoint", t) else through).append(t)
+    return [
+        (len(divert) >= 4 and len(through) >= 4,
+         f"diverted={int(bus.gain('tall_count.count'))} "
+         f"through={int(bus.gain('short_count.count'))}, of {len(divert)} and "
+         f"{len(through)} the curtain and the pot said"),
+        lane(bus, "the chute", divert, "tall_count.count", 7.0),
+        lane(bus, "the end of the belt", through, "short_count.count", 7.0),
+        (any(t > LC_POT_THEN_AT + 1.0 for t in through),
+         "cartons ran past after the pot went above them all"),
+    ]
+
+
+# --- roller line with weighing --------------------------------------------
+
+def measure_roller_line_weighing(bus: Recorder) -> list[Check]:
+    """Every carton weighed on its own, and every one weighed reaching the
+    outfeed. The reference spaces its feed from the infeed's speed and the
+    deck's length as the grader's model has them; on an engine where those
+    differ, two cartons share the deck and read as one load -- and then the
+    outfeed counts more cartons than the scale saw loads."""
+    loaded = [t for t, v in threshold_rises(bus, "scale.weight", 20.0)]
+    # The verdict, against the engine's own weights: every load whose peak was
+    # over the pot is rejected (`panel.red` rises once it leaves the deck) and
+    # no other is. The pot drops to 1500 g at 30 s, as the grader's exam
+    # drops it, so a tall cardboard carton changes sides.
+    wrong = []
+    for t in loaded:
+        off = next((u for u, v in bus.series("scale.weight") if u > t and float(v) <= 20.0),
+                   None)
+        if off is None:
+            continue
+        peak = bus.extreme("scale.weight", t, off)
+        over = peak > bus.num("panel.setpoint", off)
+        rejected = bool(bus.rises("panel.red", off - 0.1, off + 0.6))
+        if over != rejected:
+            wrong.append(f"{peak:.0f} g at {off:.1f}s")
+    return [
+        (len(loaded) >= 8,
+         f"weighed={len(loaded)} outfeed={int(bus.gain('outfeed.count'))} "
+         f"rejected={len(bus.rises('panel.red'))}"),
+        lane(bus, "the outfeed", loaded, "outfeed.count", 5.0),
+        (not wrong, "every load over the pot was rejected and no other"
+         if not wrong else f"judged wrongly: {wrong[:4]}"),
+    ]
+
+
+def threshold_rises(bus: Recorder, tag_id: str, level: float) -> list[tuple[float, float]]:
+    out, above = [], None
+    for t, v in bus.series(tag_id):
+        now = float(v) > level
+        if now and above is False and t >= 0.0:
+            out.append((t, float(v)))
+        above = now
+    return out
+
+
+
+
+# --- pick and place cell --------------------------------------------------
+
+def measure_pick_and_place_cell(bus: Recorder) -> list[Check]:
+    """Cartons picked off the station and put down at the outfeed.
+
+    `gantry.holding` is the vacuum's own feedback: a rise is a carton in the
+    cup. Every carton let go must be let go over the outfeed -- the rail
+    within reach of the place position the grader's model uses
+    (`PP_PLACE_AT`) -- and reach the outfeed's remover. A cup that lets go
+    anywhere else, or cartons the remover never sees, is the engine's gantry
+    and the model's disagreeing about where the outfeed is.
+    """
+    from factoryforge_sidecar.grading.scenes.pick_and_place_cell import PP_PLACE_AT  # noqa: PLC0415
+    held = [t for t, v in bus.series("gantry.holding") if v and t >= 0.0]
+    released = [t for t, v in bus.series("gantry.holding") if not v and t > 0.0
+                and any(h < t for h in held)]
+    wild = [round(bus.num("gantry.position", t), 1) for t in released
+            if abs(bus.num("gantry.position", t) - PP_PLACE_AT) > 5.0]
+    return [
+        (len(released) >= 4,
+         f"placed={len(released)} outfeed={int(bus.gain('outfeed.count'))}"),
+        (not wild, "every carton was let go over the outfeed"
+         if not wild else f"cartons let go at {wild} % of the rail, not {PP_PLACE_AT:.0f}"),
+        lane(bus, "the outfeed", released, "outfeed.count", 3.0),
+    ]
+
+
+# --- accumulation buffer --------------------------------------------------
+
+def measure_accumulation_buffer(bus: Recorder) -> list[Check]:
+    """A queue held against a running belt, then let out a pot's worth at a
+    time.
+
+    The blade is `stop.up` / `stop.down`: the engine's own position switches.
+    Each time it drops, the encoder's count while it is down is the window
+    the pot asks for, and the cartons the remover takes in the seconds after
+    are the ones that got out. Real work is several releases, each letting
+    out cartons -- not none (the blade never drops) and not the whole buffer
+    (it never comes back up).
+
+    The window is a length of belt, so it is about a pot's worth of cartons
+    nose to tail: 120 pulses at 100 a metre is 1.2 m, six 0.2 m cartons. On
+    the engine a release lets out six to eight (the queue is compressed
+    against the blade, and a carton already on its way through counts too),
+    so the band is one to twice that -- what it has to catch is a release of
+    nothing, or a blade that never comes back up and lets out everything.
+    The last release is left out: the run can end in the middle of it.
+    """
+    from factoryforge_sidecar.grading.scenes.accumulation_buffer import (  # noqa: PLC0415
+        AB_PITCH, AB_PULSES_PER_METRE)
+    drops = bus.rises("stop.down")
+    counts = []
+    for i, t in enumerate(drops):
+        until = drops[i + 1] if i + 1 < len(drops) else bus.now()
+        counts.append(int(bus.gain("released.count", t, until)))
+    window = bus.num("panel.setpoint")
+    expect = window / (AB_PITCH * AB_PULSES_PER_METRE)
+    judged = counts[:-1] if len(counts) > 1 else counts
+    return [
+        (len(drops) >= 3,
+         f"releases={len(drops)} released={int(bus.gain('released.count'))} "
+         f"per release={counts}"),
+        (bool(judged) and all(1 <= c <= 2 * expect for c in judged),
+         f"each release let out 1..{2 * expect:.0f} cartons for a {window:g}-pulse "
+         f"window of about {expect:.0f} (got {judged})"),
+        (bus.seconds_where("stop.up", bool, 5.0) >= 0.5 * (bus.now() - 5.0),
+         f"the blade was up for {bus.seconds_where('stop.up', bool, 5.0):.0f}s of "
+         f"{bus.now() - 5.0:.0f}s: a buffer, not an open belt"),
+    ]
+
+
+# --- guarded cell ---------------------------------------------------------
+
+GC_START_AT = 6.0
+
+
+def measure_guarded_cell(bus: Recorder) -> list[Check]:
+    """Reset closes the relay, Start runs the cell, and cartons are pushed
+    across the scanner's field into the transfer chute without it stopping
+    the cell.
+
+    All of it is the engine's: `relay.k1`/`k2` are the relay's contacts,
+    `starter.aux` the contactor's, `scanner.stop` the scanner's own verdict.
+    The reference mutes the scanner on the pot's window and times the push
+    from `GC_PUSH_DELAY`, both worked out from the grader's model; a scanner
+    field or a cylinder that is not where the model has it stops the cell or
+    misses the carton, and the transfer count stays short.
+    """
+    pushed = bus.rises("push_eye.detect", GC_START_AT)
+    stops = [t for t, v in bus.series("scanner.stop") if not v and t > GC_START_AT]
+    ran = bus.seconds_where("starter.aux", bool, GC_START_AT)
+    return [
+        (int(bus.gain("transferred.count")) >= 4,
+         f"transferred={int(bus.gain('transferred.count'))} of {len(pushed)} at the "
+         f"push eye, line_end={int(bus.gain('line_end.count'))}"),
+        (bool(bus.value("relay.k1", GC_START_AT)) and bool(bus.value("relay.k2", GC_START_AT)),
+         "Reset closed both relay channels before Start"),
+        (ran >= 0.9 * (bus.now() - GC_START_AT - 1.0),
+         f"the contactor was in for {ran:.0f}s of the {bus.now() - GC_START_AT:.0f}s "
+         f"after Start" + (f"; the scanner stopped the cell at {stops[:3]}" if stops else "")),
+        lane(bus, "the transfer chute", pushed, "transferred.count", 5.0),
+    ]
+
+
+# --- batch dosing ---------------------------------------------------------
+
+BD_SECOND_AT = 35.0
+
+
+def measure_batch_dosing(bus: Recorder) -> list[Check]:
+    """Two batches on the pot's number, as the grader's exam runs them:
+    Reset and Start, the batch, Stop at 32 s, and Reset and Start again.
+
+    `meter.total` is the flow meter's totaliser and `tank.level` the tank the
+    pump feeds, both the engine's. Each batch must leave the totaliser on the
+    pot within the grader's 1.5 L and raise the tank by what those litres
+    are, and the pump must have stopped by itself before the next Start.
+    What the engine cannot do is the grader's re-rated pump -- that stays
+    the grader's -- so both batches here run on the same pump.
+    """
+    from factoryforge_sidecar.grading.scenes.batch_dosing import BD_CAPACITY  # noqa: PLC0415
+    pot = bus.num("panel.setpoint")
+    checks: list[Check] = []
+    heads = []
+    for name, start, end in (("first", 1.0, 32.0), ("second", BD_SECOND_AT, bus.now())):
+        total = bus.num("meter.total", end)
+        rise = bus.num("tank.level", end) - bus.num("tank.level", start)
+        flow_end = bus.num("pump.flow", end - 1.0)
+        heads.append(f"{name} {total:g} L")
+        checks.append((abs(total - pot) <= 1.5,
+                       f"{name} batch: the meter read {total:g} L against a {pot:g} L pot "
+                       f"(within 1.5)"))
+        expect = pot / BD_CAPACITY * 100.0
+        checks.append((abs(rise - expect) <= 1.5,
+                       f"{name} batch: the tank rose {rise:.1f} % for {expect:.1f} %"))
+        checks.append((flow_end < 1.0,
+                       f"{name} batch: the pump had stopped by its end ({flow_end:.1f} L/min)"))
+    return [(all(ok for ok, _ in checks), ", ".join(heads) + f" on a {pot:g} L pot"), *checks]
+
+
+BD_STEPS = [(1.0, press("reset")), (1.0, press("start")), (32.0, press("stop")),
+            (BD_SECOND_AT, press("reset")), (BD_SECOND_AT, press("start"))]
+
+
+# --- star-delta start -----------------------------------------------------
+
+SD_STOP_AT = 12.0
+
+
+def measure_star_delta_start(bus: Recorder) -> list[Check]:
+    """A start in star, a changeover at the pot's speed with the star
+    contacts open first, and a run in delta -- on the engine's motor.
+
+    Every number here is the starter's feedback: `motor.speed`, the three
+    auxiliary contacts, `motor.breaker`. The breaker never trips (star and
+    delta never together), delta pulls in only once `staraux` has dropped,
+    and the speed at the changeover is the pot's. Stop drops the main.
+    """
+    pot = bus.num("panel.setpoint")
+    delta = bus.rises("motor.deltaaux")
+    star_off = [t for t, v in bus.series("motor.staraux") if not v and t > 0.0]
+    at = delta[0] if delta else None
+    speed = bus.num("motor.speed", at - 0.05) if at is not None else 0.0
+    top = bus.extreme("motor.speed", 1.0, SD_STOP_AT)
+    breaker_fell = [t for t, v in bus.series("motor.breaker") if not v]
+    main_open = [t for t, v in bus.series("motor.mainaux") if not v and t > SD_STOP_AT]
+    return [
+        (at is not None and not breaker_fell and top >= 95.0,
+         f"changeover at {speed:.1f} % (pot {pot:g} %), ran at {top:.1f} %"
+         + (f"; breaker tripped at {breaker_fell[0]:.1f}s" if breaker_fell else "")),
+        (at is not None and speed >= pot - 3.0,
+         f"delta came in at {speed:.1f} % of speed, the pot says {pot:g} %"),
+        (at is not None and any(t <= at for t in star_off),
+         "the star contacts opened before delta closed"),
+        (not breaker_fell, "the breaker never tripped"),
+        (bool(main_open) and main_open[0] - SD_STOP_AT <= 0.5,
+         "Stop dropped the main contactor" if main_open else "Stop never dropped the main"),
+    ]
+
+
+# --- servo positioning ----------------------------------------------------
+
+SV_POT_AT = 11.0
+SV_POT_THEN = 550.0
+
+
+def measure_servo_positioning(bus: Recorder) -> list[Check]:
+    """The carriage shuttles between station A and the pot's station B, and
+    follows the pot when it moves (to 550 mm at 11 s, one of the grader's
+    values). Arrivals are `axis.position` inside the axis's own window of
+    each station -- the engine's encoder -- counted once per visit."""
+    from factoryforge_sidecar.grading.scenes.servo_positioning import (  # noqa: PLC0415
+        SV_STATION_A, SV_WINDOW)
+
+    def visits(where: float, start: float, end: float) -> int:
+        n, inside = 0, False
+        for t, v in bus.series("axis.position"):
+            now = abs(float(v) - where) <= SV_WINDOW
+            if now and not inside and start <= t <= end:
+                n += 1
+            inside = now
+        return n
+
+    first_b = bus.num("panel.setpoint", SV_POT_AT - 0.5)
+    a = visits(SV_STATION_A, 0.0, bus.now())
+    b1 = visits(first_b, 0.0, SV_POT_AT)
+    b2 = visits(SV_POT_THEN, SV_POT_AT, bus.now())
+    errors = bus.rises("axis.error", -1.0)
+    return [
+        (a >= 3 and b1 >= 1 and b2 >= 2,
+         f"visits: A={a}, B at {first_b:g} mm={b1}, B at {SV_POT_THEN:g} mm={b2}"),
+        (not errors, "the drive never raised an error" if not errors
+         else f"the drive raised an error at {errors[:3]}"),
+    ]
+
+
+# --- air receiver ---------------------------------------------------------
+
+AR_POT_AT = 25.0
+AR_POT_THEN = 5.0
+
+
+def measure_air_receiver(bus: Recorder) -> list[Check]:
+    """The receiver loaded into the band the pot sets, held there, and moved
+    with the pot (6.0 bar, then 5.0 at 25 s, one of the grader's values).
+
+    `receiver.pressure` is the transmitter's raw count, scaled here the way
+    the card is: 27648 at the top of the template's range. The band is the
+    grader's: pot - 0.5 .. pot, with 0.25 bar of slack either side. It is
+    marked once each phase has had time to get there.
+    """
+    from factoryforge_sidecar.grading.scenes.air_receiver import (  # noqa: PLC0415
+        AR_BAND, AR_BAND_SLACK, AR_RANGE_MAX, AR_RANGE_MIN)
+
+    def bar(raw: float) -> float:
+        return AR_RANGE_MIN + raw / 27648.0 * (AR_RANGE_MAX - AR_RANGE_MIN)
+
+    trace = [(t, bar(v)) for t, v in resample(bus, "receiver.pressure")]
+    checks: list[Check] = []
+    marked = []
+    for start, end in ((12.0, AR_POT_AT), (AR_POT_AT + 12.0, bus.now())):
+        pot = bus.num("panel.setpoint", end - 0.1)
+        inside = [p for t, p in trace if start <= t <= end]
+        lo, hi = (min(inside), max(inside)) if inside else (0.0, 0.0)
+        marked.append(f"{pot:g} bar: {lo:.2f}..{hi:.2f}")
+        checks.append((bool(inside) and lo >= pot - AR_BAND - AR_BAND_SLACK
+                       and hi <= pot + AR_BAND_SLACK,
+                       f"with the pot at {pot:g} bar the receiver held {lo:.2f}..{hi:.2f} "
+                       f"bar ({start:g}s to {end:.0f}s)"))
+    opened = bool(bus.value("valve.opened", 5.0))
+    checks.append((opened, "the isolation valve opened when commanded"))
+    return [(all(ok for ok, _ in checks), "; ".join(marked)), *checks]
+
+
+# --- press station --------------------------------------------------------
+
+PS_OFF_AT = 19.0
+
+
+def measure_press_station(bus: Recorder) -> list[Check]:
+    """AUTO on Start cycles the ram down to bottom dead centre, dwells for the
+    pot's time and returns; OFF stops it. `bdc.no` is the limit switch the
+    ram's plate trips at the bottom and `ram.retracted` the cylinder's reed,
+    both the engine's -- so the ram really travelled the stroke the grader's
+    model gives it, and dwelled where the switch says it is.
+
+    The switch closes a little before bottom dead centre and opens a little
+    after the ram leaves it, so it reads closed for the pot's dwell plus the
+    travel either side: about 0.45 s more on the template's ram. The pot is
+    turned to 1.2 s first, one of the grader's own dwells, so the dwell is the
+    pot's and not the template's default."""
+    pot = bus.num("panel.setpoint")
+    bdc = bus.rises("bdc.no", 1.0, PS_OFF_AT)
+    dwell = [bus.seconds_where("bdc.no", bool, t, t + pot + 3.0) for t in bdc]
+    back = bus.rises("ram.retracted", 1.0, PS_OFF_AT + 4.0)
+    later = bus.rises("bdc.no", PS_OFF_AT + 1.5)
+    return [
+        (len(bdc) >= 3 and len(back) >= len(bdc) - 1,
+         f"strokes={len(bdc)} returns={len(back)} dwells={[round(d, 1) for d in dwell]}s "
+         f"for a {pot:g}s pot"),
+        (bool(dwell) and all(pot - 0.3 <= d <= pot + 1.0 for d in dwell),
+         f"each stroke dwelled at bottom for the pot's {pot:g}s (the switch closed "
+         f"{pot - 0.3:g}..{pot + 1.0:g}s)"),
+        (not later, "OFF stopped the ram" if not later else f"the ram stroked after OFF at {later}"),
+    ]
+
+
+PS_STEPS = [(0.3, turn("panel.setpoint", 1.2)), (0.5, turn("mode.position", 2)),
+            (1.0, press("start")), (PS_OFF_AT, turn("mode.position", 1))]
+
+
+# --- rotary index ---------------------------------------------------------
+
+def measure_rotary_index(bus: Recorder) -> list[Check]:
+    """Drop a carton on the deck, turn a quarter, push it off onto the
+    outfeed, turn home. `table.atindex`/`athome` are the deck's limit
+    switches and `pusher.extended` the cylinder's reed; the rod is only out
+    while the deck is at index, and every carton pushed reaches `done`."""
+    pushes = bus.rises("pusher.extended")
+    bad = [t for t in pushes if not bus.value("table.atindex", t)]
+    return [
+        (len(pushes) >= 3, f"pushed={len(pushes)} done={int(bus.gain('done.count'))} "
+                           f"indexes={len(bus.rises('table.atindex'))}"),
+        (not bad, "the rod only came out with the deck at index"
+         if not bad else f"the rod came out off index at {bad[:3]}"),
+        lane(bus, "the outfeed", pushes, "done.count", 6.0),
+    ]
+
+
+# --- pivot divert ---------------------------------------------------------
+
+def measure_pivot_divert(bus: Recorder) -> list[Check]:
+    """Tall cartons into the chute, short ones on to the end, by a blade that
+    swings across a running belt. `entry_eye` sees every carton and
+    `tall_eye` only the tall ones, so the engine says which is which; the
+    counts are the two removers'. The blade's hold is ended by the chute's
+    count, so a blade that does not divert on the engine holds forever and
+    every carton after it goes into the chute."""
+    tall = bus.rises("tall_eye.detect")
+    every = bus.rises("entry_eye.detect")
+    short = [t for t in every if not any(abs(h - t) <= 0.4 for h in tall)]
+    return [
+        (len(tall) >= 3 and len(short) >= 3,
+         f"chute={int(bus.gain('tall_count.count'))} far={int(bus.gain('short_count.count'))}, "
+         f"of {len(tall)} tall and {len(short)} short seen"),
+        lane(bus, "the chute", tall, "tall_count.count", 8.0),
+        lane(bus, "the far end", short, "short_count.count", 8.0),
+    ]
+
+
+TRIALS: dict[str, Trial] = {
+    "sorting-by-height": Trial(60.0, measure_sorting_by_height,
+                               [*START, *operator_sheet(SORT_STRIKE_FROM, sorting_plate_clear)]),
+    "start-stop-station": Trial(60.0, measure_start_stop_station, SS_STEPS),
+    "tank-level-control": Trial(65.0, measure_tank_level_control,
+                                [*pot_phases(TANK_PHASES), *START]),
+    "heat-treat-station": Trial(65.0, measure_heat_treat_station,
+                                [*pot_phases(OVEN_PHASES), *START]),
+    "cooling-tunnel": Trial(80.0, measure_cooling_tunnel,
+                            [*pot_phases(CT_PHASES), *START]),
+    "light-curtain-sorting": Trial(65.0, measure_light_curtain_sorting,
+                                   [*START, (LC_POT_THEN_AT, turn("panel.setpoint", LC_POT_THEN))]),
+    "roller-line-weighing": Trial(70.0, measure_roller_line_weighing,
+                                  [*START, (30.0, turn("panel.setpoint", 1500.0))]),
+
+
+    "pick-and-place-cell": Trial(75.0, measure_pick_and_place_cell),
+    "accumulation-buffer": Trial(80.0, measure_accumulation_buffer),
+    "guarded-cell": Trial(70.0, measure_guarded_cell,
+                          [(2.0, press("reset")), (GC_START_AT, press("start"))]),
+    "batch-dosing": Trial(70.0, measure_batch_dosing, BD_STEPS),
+    "star-delta-start": Trial(16.0, measure_star_delta_start,
+                              [*START, (SD_STOP_AT, press("stop"))]),
+    "servo-positioning": Trial(30.0, measure_servo_positioning,
+                               [*START, (SV_POT_AT, turn("panel.setpoint", SV_POT_THEN))]),
+    "air-receiver": Trial(45.0, measure_air_receiver,
+                          [*START, (AR_POT_AT, turn("panel.setpoint", AR_POT_THEN))]),
+    "press-station": Trial(24.0, measure_press_station, PS_STEPS),
+    "rotary-index": Trial(60.0, measure_rotary_index),
+    "pivot-divert": Trial(60.0, measure_pivot_divert),
+}
+
+
+# =====================================================================
+#  Scenes with no grader reference: a controller of their own
+# =====================================================================
+#
+# Only the palletising cell, which has no graded exam and so no reference to
+# borrow. Everything below is its controller and the operator-station helpers
+# it is built from -- what this whole file used to be for every scene.
+
 def bit(bus: TagBusClient, tag_id: str) -> bool:
     return bool(bus.read(tag_id)) if bus.table.get(tag_id) is not None else False
 
@@ -166,12 +1227,9 @@ def num(bus: TagBusClient, tag_id: str) -> float:
     return float(bus.read(tag_id)) if bus.table.get(tag_id) is not None else 0.0
 
 
-async def press(bus: TagBusClient, tag_id: str, hold: float = 0.15) -> None:
-    """A momentary operator press: force the input high just long enough for
-    the engine to see a rising edge, then release it. Real panel presses stay
-    high for exactly one physics tick (ButtonPanel.Press); this holds it for
-    several, which still reads as one edge, since nothing here is watching
-    for it to drop and come back."""
+async def operator_press(bus: TagBusClient, tag_id: str, hold: float = PRESS) -> None:
+    """A momentary operator press: force the input high for as long as the
+    engine's own panel holds a click (`PRESS`, IP-31), then release it."""
     await bus.force({tag_id: True})
     await asyncio.sleep(hold)
     await bus.force(clear=[tag_id])
@@ -345,7 +1403,7 @@ async def exercise_interlocks(bus: TagBusClient, station: Station, check: Checks
     check(not is_moving(), f"initial: {what_moves} is off before anyone presses Start")
     check(bit(bus, "panel.estop"), "initial: the E-stop circuit reads healthy (NC)")
 
-    await press(bus, "panel.start")
+    await operator_press(bus, "panel.start")
     await asyncio.sleep(0.4)
     check(is_moving(), f"after Start: {what_moves} runs")
     check(bit(bus, "panel.green"), "after Start: the panel's green lamp is lit")
@@ -365,7 +1423,7 @@ async def exercise_interlocks(bus: TagBusClient, station: Station, check: Checks
     await asyncio.sleep(0.2)
     check(bit(bus, "panel.red"), "after E-stop: the panel's red lamp is lit")
 
-    await press(bus, "panel.start")
+    await operator_press(bus, "panel.start")
     await asyncio.sleep(0.3)
     check(not is_moving(), "Start while tripped: does NOT restart the line")
 
@@ -373,2320 +1431,16 @@ async def exercise_interlocks(bus: TagBusClient, station: Station, check: Checks
     await asyncio.sleep(0.2)
     check(not is_moving(), "releasing the mushroom alone does not restart the line")
 
-    await press(bus, "panel.reset")
+    await operator_press(bus, "panel.reset")
     await asyncio.sleep(0.3)
     check(not bit(bus, "panel.red"), "after Reset: the fault is cleared")
     check(not is_moving(), "after Reset: still stopped until someone presses Start")
 
-    await press(bus, "panel.start")
+    await operator_press(bus, "panel.start")
     await asyncio.sleep(0.4)
     check(is_moving(), "Start after Reset: the line runs again")
 
     return estop_ms
-
-
-async def exercise_fault(bus: TagBusClient, station: Station, check: Checks,
-                         is_moving, fault_tag: str, what_moves: str) -> float:
-    """Fail a drive under a running line, and check the line notices (FI-01).
-
-    Until drives could fail, every actuator in the library did exactly what it
-    was told, so a command and reality could never disagree -- and an interlock
-    exists precisely because the plant does not always obey. This is the other
-    half of the operator contract, and it is checked the same way on every
-    scene that has a drive to fail.
-
-    Assumes the line is running on entry, and leaves it running.
-    """
-    check(not bit(bus, fault_tag), f"before the fault: {fault_tag} is clear")
-    check(is_moving(), f"before the fault: {what_moves} is running")
-
-    raised = time.perf_counter()
-    await bus.force({fault_tag: True})
-    while time.perf_counter() - raised < 1.0:
-        if not is_moving():
-            break
-        await asyncio.sleep(0.005)
-    trip_ms = (time.perf_counter() - raised) * 1000.0
-
-    check(not is_moving(), f"a faulted drive stops {what_moves}")
-    check(trip_ms <= ESTOP_LIMIT * 1000.0,
-          f"the controller trips within {ESTOP_LIMIT * 1000:.0f}ms of the fault "
-          f"(took {trip_ms:.0f}ms)")
-    await asyncio.sleep(0.2)
-    check(bit(bus, "panel.red"), "a faulted drive lights the panel's red lamp")
-
-    # The one students get wrong. Resetting a live fault must do nothing, and
-    # Start after that must do nothing either.
-    await press(bus, "panel.reset")
-    await asyncio.sleep(0.3)
-    check(bit(bus, "panel.red"), "Reset while the fault stands does not clear it")
-    await press(bus, "panel.start")
-    await asyncio.sleep(0.3)
-    check(not is_moving(), "and Start while the fault stands does not restart the line")
-
-    await bus.force(clear=[fault_tag])
-    await asyncio.sleep(0.3)
-    check(not is_moving(),
-          "clearing the fault alone does not restart the line -- the trip is still latched")
-
-    await press(bus, "panel.reset")
-    await asyncio.sleep(0.3)
-    check(not bit(bus, "panel.red"), "Reset after the fault is gone clears it")
-
-    await press(bus, "panel.start")
-    await asyncio.sleep(0.4)
-    check(is_moving(), f"Start then brings {what_moves} back")
-
-    return trip_ms
-
-
-async def check_quiet_after_stop(bus: TagBusClient, station: Station, check: Checks,
-                                 is_moving, counter_tag: str) -> None:
-    """Press Stop and prove the line really stopped -- not just that a lamp
-    went out. A counter that keeps advancing after Stop is the failure this
-    catches, and it is invisible from the indicators."""
-    await press(bus, "panel.stop")
-    await asyncio.sleep(0.3)
-    check(not is_moving(), "after Stop: the line is off")
-    check(not bit(bus, "panel.green"), "after Stop: green is out")
-
-    settled = num(bus, counter_tag)
-    await asyncio.sleep(0.8)
-    check(num(bus, counter_tag) == settled,
-          f"after Stop: {counter_tag} stops advancing (was {settled:.0f}, "
-          f"now {num(bus, counter_tag):.0f})")
-
-
-# --- per-scene drivers --------------------------------------------------
-# Each mirrors its engine-side profile under engine/src/Sim/DemoProfiles/.
-
-
-async def drive_sorting_by_height(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """The reference line, now driven from the panel (OP-03).
-
-    Its analog knob is the timing pot every real diverter has: how long after
-    the tall beam breaks the pusher fires. Too short and the plate hits the
-    carton on the nose; too long and it sails past. The pot is checked the way
-    that matters -- by measuring what the controller actually does with it,
-    not by reading the tag back -- because a driver that reads the setpoint and
-    then ignores it looks identical from the bus.
-    """
-    EMIT_HALF_PERIOD = 1.5
-    PUSH_HOLD = 0.5
-
-    check = Checks(verbose)
-    state = {"high_mem": False, "extend_at": None, "retract_at": None,
-             "broke_at": None, "delays": [], "emit_flag": False,
-             "elapsed": 0.0, "next_toggle": 0.0, "feeding": False}
-
-    async def tick(dt: float) -> None:
-        s = state
-        station.scan()
-        now = time.perf_counter()
-        s["elapsed"] += dt
-
-        # A checkweigher can only weigh one carton at a time, and this line has
-        # no spacing control of its own -- so the controller provides it, by
-        # holding the feed while the scale is loaded. Without this, two cartons
-        # occasionally share the deck: they read as one peak, so the run counts
-        # fewer cartons than it fed and one metal carton's reject merges into
-        # its neighbour's. That is what "2 over limit, 3 metal" meant when this
-        # exercise failed under load, and it is a real requirement of real
-        # checkweighers rather than a workaround for this one.
-        scale_loaded = num(bus, "scale.weight") > 20.0
-
-        if station.running and s["feeding"] and not scale_loaded:
-            if s["elapsed"] >= s["next_toggle"]:
-                s["emit_flag"] = not s["emit_flag"]
-                s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-        else:
-            s["emit_flag"] = False
-            s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-
-        high = bit(bus, "sensor_high.detect")
-        if high and not s["high_mem"] and station.running:
-            # The pot, read fresh every scan rather than latched at startup:
-            # turning it must change the next carton, not the next run.
-            s["broke_at"] = now
-            s["extend_at"] = now + station.setpoint
-        s["high_mem"] = high
-
-        extend = bit(bus, "pusher.extend")
-        if s["extend_at"] is not None and now >= s["extend_at"] and station.running:
-            extend = True
-            if s["broke_at"] is not None:
-                s["delays"].append(now - s["broke_at"])
-            s["retract_at"] = now + PUSH_HOLD
-            s["extend_at"] = None
-        if s["retract_at"] is not None and now >= s["retract_at"]:
-            extend = False
-            s["retract_at"] = None
-        if not station.running:
-            extend = False
-            s["extend_at"] = None
-
-        await write_present(bus, {
-            "conveyor.rotate": station.running,
-            "emitter.emit": s["emit_flag"],
-            "pusher.extend": extend,
-            **station.lamps(),
-        })
-
-    station = Station(bus, faults=("conveyor.fault", "pusher.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = -1.0
-    tall = short = 0
-    nominal_delays: list[float] = []
-
-    try:
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "conveyor.rotate"), "the belt")
-        fault_ms = await exercise_fault(bus, station, check,
-                                        lambda: bit(bus, "conveyor.rotate"),
-                                        "conveyor.fault", "the belt")
-
-        # --- production, at the pot's own setting --------------------------
-        tall_before, short_before = num(bus, "counter.tall"), num(bus, "counter.short")
-        nominal = station.setpoint
-        check.note(f"diverter pot reads {nominal:.2f}s")
-        state["delays"].clear()
-        state["feeding"] = True
-        await asyncio.sleep(max(duration - 6.0, 4.0))
-        state["feeding"] = False
-        await asyncio.sleep(6.0)                 # drain: let the lane clear
-
-        tall = int(num(bus, "counter.tall") - tall_before)
-        short = int(num(bus, "counter.short") - short_before)
-        nominal_delays = list(state["delays"])   # noqa: F841 — reused below
-
-        if nominal_delays:
-            mean = sum(nominal_delays) / len(nominal_delays)
-            check(abs(mean - nominal) < 0.15,
-                  f"the pusher fires {nominal:.2f}s after the beam, as the pot says "
-                  f"(measured {mean:.2f}s over {len(nominal_delays)} cartons)")
-
-        # A band, not an exact count: this is real Jolt physics, and no
-        # rigid-body run can promise a number the way the deterministic scene
-        # can. Conservation is the assertion that actually catches a broken
-        # diverter -- every carton the emitter made has to end up in one of
-        # the two counters.
-        check(tall > 0 and short > 0,
-              f"production: both counters advance (got tall={tall} short={short})")
-
-        # --- turn the pot, and prove the line follows it -------------------
-        # Timing, not counts: physics variance makes "how many were missed"
-        # a poor assertion, while "the pusher fired later" is exactly what
-        # turning the knob is supposed to mean and is not noisy at all.
-        await turn_pot(bus, 1.80)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - 1.80) < 0.01,
-              f"turning the pot to its stop reads back 1.80s (got {station.setpoint:.2f})")
-        state["delays"].clear()
-        state["feeding"] = True
-        await asyncio.sleep(8.0)
-        state["feeding"] = False
-        await asyncio.sleep(3.0)
-
-        slow_delays = list(state["delays"])
-        if check(bool(slow_delays), "the line kept running after the pot was turned"):
-            slow_mean = sum(slow_delays) / len(slow_delays)
-            check(abs(slow_mean - 1.80) < 0.15,
-                  f"the pusher now fires 1.80s after the beam (measured {slow_mean:.2f}s)")
-            if nominal_delays:
-                print(f"       pot at {nominal:.2f}s -> pusher fired at "
-                      f"{sum(nominal_delays) / len(nominal_delays):.2f}s; "
-                      f"pot at 1.80s -> {slow_mean:.2f}s. The knob is the timing, "
-                      f"and a diverter mistimed by a second misses the carton.")
-
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: bit(bus, "conveyor.rotate"), "counter.short")
-    finally:
-        stop_event.set()
-        await task
-        await bus.force(clear=["panel.setpoint", *station.faults])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"tall={tall} short={short} estop={estop_ms:.0f}ms fault={fault_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_start_stop_station(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Operator interlocks, then a real batch (§4.2, OP-04).
-
-    The interlock half checks the contract a student gets wrong: momentary
-    buttons, an E-stop wired normally closed, and a latch Start cannot clear.
-    The batch half is what the pot is for -- it is a *count*, and the line
-    stops itself when it has made that many. That is a far better exercise
-    than "run until the clock runs out": it has a right answer the run either
-    hits exactly or does not.
-    """
-    EMIT_HALF_PERIOD = 1.5
-
-    check = Checks(verbose)
-    state = {"produced": 0, "prev_present": False, "emit_flag": False,
-             "feeding": False, "elapsed": 0.0, "next_toggle": EMIT_HALF_PERIOD,
-             "batch_done": False}
-
-    async def tick(dt: float) -> None:
-        s = state
-        target = int(round(station.setpoint))
-        was_done = target > 0 and s["produced"] >= target
-
-        edges = station.scan()
-
-        # Start on a finished batch starts the next one, the way a real batch
-        # controller works. Without this the panel would have a Start button
-        # that does nothing until someone found a way to zero the count, which
-        # is not a control system. Mirrors StartStopStationProfile.
-        if edges["start"] and was_done:
-            s["produced"] = 0
-
-        present = bit(bus, "part_present.detect")
-        if present and not s["prev_present"] and station.running:
-            s["produced"] += 1
-        s["prev_present"] = present
-
-        # The batch interlock: at target, the line stops itself.
-        s["batch_done"] = target > 0 and s["produced"] >= target
-        if s["batch_done"] and station.running:
-            station.running = False
-
-        s["elapsed"] += dt
-        if station.running and s["feeding"]:
-            if s["elapsed"] >= s["next_toggle"]:
-                s["emit_flag"] = not s["emit_flag"]
-                s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-        else:
-            s["emit_flag"] = False
-            s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-
-        await write_present(bus, {
-            "belt.rotate": station.running,
-            "emitter.emit": s["emit_flag"],
-            "produced.value": s["produced"],
-            **station.lamps(),
-        })
-
-    station = Station(bus, faults=("belt.fault",))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = -1.0
-    batch = 4
-
-    try:
-        # A batch big enough that the interlock sequence cannot accidentally
-        # complete it before the production phase starts.
-        await turn_pot(bus, 40)
-        await asyncio.sleep(0.2)
-
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "belt.rotate"), "the belt")
-        check(bit(bus, "tower.green") and not bit(bus, "tower.yellow"),
-              "running: the tower shows green only")
-        fault_ms = await exercise_fault(bus, station, check,
-                                        lambda: bit(bus, "belt.rotate"), "belt.fault", "the belt")
-
-        # --- the batch ------------------------------------------------------
-        await press(bus, "panel.stop")
-        await asyncio.sleep(0.3)
-        state["produced"] = 0
-        state["batch_done"] = False
-        await turn_pot(bus, batch)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - batch) < 0.01,
-              f"the batch pot reads {batch} pcs (got {station.setpoint:.0f})")
-
-        before = num(bus, "counter.count")
-        await press(bus, "panel.start")
-        state["feeding"] = True
-        check.note(f"running a batch of {batch}")
-
-        deadline = time.perf_counter() + max(duration, 20.0)
-        while time.perf_counter() < deadline and not state["batch_done"]:
-            await asyncio.sleep(0.05)
-        finished_in = max(duration, 20.0) - (deadline - time.perf_counter())
-        state["feeding"] = False
-
-        check(state["batch_done"],
-              f"the batch completed within its budget (made {state['produced']} of {batch})")
-        check(state["produced"] == batch,
-              f"the line made exactly the batch it was set to (want {batch}, "
-              f"got {state['produced']})")
-        await asyncio.sleep(0.4)
-        check(not bit(bus, "belt.rotate"),
-              "at target the line stops itself -- nobody had to press Stop")
-        check(bit(bus, "tower.yellow") and not bit(bus, "tower.green"),
-              "batch complete: the tower goes yellow, not green")
-
-        # It really stopped: nothing else comes through after the target.
-        settled = state["produced"]
-        await asyncio.sleep(1.5)
-        check(state["produced"] == settled,
-              f"nothing is made past the target (still {state['produced']})")
-
-        counted = int(num(bus, "counter.count") - before)
-        check(counted > 0, f"production: the remover counted cartons too (got {counted})")
-        check(int(num(bus, "produced.value")) == state["produced"],
-              "the display mirrors the sensor edges the controller counted")
-
-        print(f"       batch of {batch} finished in {finished_in:.1f}s; the pot is a "
-              f"count, so the line has a target it either hits exactly or does not.")
-
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: bit(bus, "belt.rotate"), "counter.count")
-    finally:
-        stop_event.set()
-        await task
-        await bus.force(clear=["panel.setpoint", *station.faults])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"batch={batch} produced={state['produced']} "
-          f"counted={int(num(bus, 'counter.count'))} estop={estop_ms:.0f}ms "
-          f"fault={fault_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_tank_level_control(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Hold whatever the pot says, at two very different levels (§4.3, OP-05).
-
-    The two setpoints used to be constants in this file. Now they are one
-    knob, turned mid-run, which is the same experiment with the interesting
-    part put where a student can reach it: outflow follows Torricelli, so the
-    drain valve's authority grows with the square root of level, and a
-    controller tuned near the top of the tank behaves differently near the
-    bottom. Printing both settling times side by side is the point of the
-    exercise.
-
-    A proportional controller with a modest gain, not a saturating one: a gain
-    that pins the valve at 100% until the setpoint arrives is bang-bang
-    control, and bang-bang hides exactly the nonlinearity this scene exists to
-    show.
-    """
-    GAIN = 1.6                # %valve per % of error -- modulates, not saturates
-    BAND_PERCENT = 5.0
-    HOLD = 6.0                # stay inside the band this long to count as settled
-    HIGH, LOW = 70.0, 20.0
-    START_LEVEL = 8.0         # where the setpoint experiment starts from
-
-    check = Checks(verbose)
-    state = {"fill": 0.0, "drain": 0.0}
-
-    async def tick(dt: float) -> None:
-        station.scan()
-        level = num(bus, "tank.level")
-
-        if station.running:
-            error = station.setpoint - level
-            fill = min(max(error * GAIN, 0.0), 100.0)
-            drain = min(max(-error * GAIN, 0.0), 100.0)
-        else:
-            # Stopped means stopped: both valves shut, so a tripped tank holds
-            # its level instead of quietly carrying on filling. This is the
-            # whole reason the scene needed a panel -- an E-stop that leaves
-            # the fill valve open is not an E-stop.
-            fill = drain = 0.0
-
-        state["fill"], state["drain"] = fill, drain
-        await write_present(bus, {"tank.fill": fill, "tank.drain": drain,
-                                  "level_readout.value": round(level),
-                                  **station.lamps()})
-
-    async def settle(setpoint: float, budget: float) -> tuple[float, float, float]:
-        """Turn the pot to `setpoint` and watch. Returns (seconds to reach the
-        band, seconds held continuously inside it at the end, final level)."""
-        await turn_pot(bus, setpoint)
-        await asyncio.sleep(0.2)
-        band = setpoint * BAND_PERCENT / 100.0
-        start = time.perf_counter()
-        reached = -1.0
-        entered: float | None = None
-        level = num(bus, "tank.level")
-
-        while time.perf_counter() - start < budget:
-            await asyncio.sleep(0.05)
-            level = num(bus, "tank.level")
-            inside = abs(setpoint - level) <= band
-            if inside:
-                if entered is None:
-                    entered = time.perf_counter()
-                    if reached < 0:
-                        reached = entered - start
-            else:
-                entered = None            # left the band; the hold clock restarts
-
-            if verbose and int((time.perf_counter() - start) * 2) % 8 == 0:
-                print(f"  sp={setpoint:4.0f} t={time.perf_counter() - start:5.1f}s "
-                      f"level={level:5.1f} fill={state['fill']:5.1f} drain={state['drain']:5.1f}")
-
-        held = time.perf_counter() - entered if entered is not None else 0.0
-        return reached, held, level
-
-    station = Station(bus, faults=("tank.fault",))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = -1.0
-    high_reach = low_reach = -1.0
-    high_held = low_held = high_level = low_level = 0.0
-
-    try:
-        # The tank's "is it running" is the fill valve: an E-stop that stops
-        # the *controller* while leaving a valve cracked open has not stopped
-        # anything, and only watching the valve itself catches that.
-        await turn_pot(bus, 100.0)     # so the controller wants fill, not drain
-        await asyncio.sleep(0.2)
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: num(bus, "tank.fill") > 0.5,
-                                             "the fill valve")
-
-        fault_ms = await exercise_valve_fault(bus, check)
-
-        # Both the interlock and the fault legs leave the tank part full, and
-        # "how long to reach 70%" means nothing measured from an unknown
-        # starting level -- the run that prompted this reported `reached=0.0s`
-        # because the tank was already there. Drain to a known low mark first,
-        # so the two settling times below are a fair comparison of the same
-        # controller against the same process at two ends of its range, and so
-        # they mean the same thing from one run to the next.
-        await settle(START_LEVEL, 25.0)
-        check(num(bus, "tank.level") <= START_LEVEL + 5.0,
-              f"drained to a known starting level before the experiment "
-              f"(at {num(bus, 'tank.level'):.1f}%, wanted {START_LEVEL:.0f}%)")
-
-        budget = max(duration, 40.0)
-        high_reach, high_held, high_level = await settle(HIGH, budget * 0.4)
-        low_reach, low_held, low_level = await settle(LOW, budget * 0.6)
-
-        # The high run gets the strict test -- reach the band and hold it --
-        # because that is the tuning point. The low run is only required to
-        # *reach* it, and the reason is the lesson itself: the same controller
-        # that settles at 70% in ten seconds is still creeping toward 20%
-        # twenty seconds later. Demanding an identical hold at both ends would
-        # be demanding the nonlinearity not exist.
-        check(high_reach >= 0, f"reached {HIGH:.0f}% (got to {high_level:.1f})")
-        if high_reach >= 0:
-            check(high_held >= HOLD,
-                  f"held {HIGH:.0f}% for {HOLD:.0f}s (held {high_held:.1f}s, "
-                  f"level {high_level:.1f})")
-        check(low_reach >= 0,
-              f"reached {LOW:.0f}% within {budget * 0.6:.0f}s (got to {low_level:.1f})")
-
-        await press(bus, "panel.stop")
-        await asyncio.sleep(0.4)
-        check(num(bus, "tank.fill") < 0.5 and num(bus, "tank.drain") < 0.5,
-              "after Stop: both valves are shut, not left where the controller had them")
-        held_level = num(bus, "tank.level")
-        await asyncio.sleep(1.5)
-        check(abs(num(bus, "tank.level") - held_level) < 1.0,
-              f"after Stop: the level holds (was {held_level:.1f}, "
-              f"now {num(bus, 'tank.level'):.1f})")
-    finally:
-        stop_event.set()
-        await task
-        await bus.write_many({"tank.fill": 0.0, "tank.drain": 0.0})
-        await bus.force(clear=["panel.setpoint", *station.faults])
-
-    print(f"RESULT high sp={HIGH:.0f} reached={high_reach:.1f}s held={high_held:.1f}s "
-          f"level={high_level:.1f} | low sp={LOW:.0f} reached={low_reach:.1f}s "
-          f"held={low_held:.1f}s level={low_level:.1f} | estop={estop_ms:.0f}ms "
-          f"fault={fault_ms:.0f}ms")
-    if high_reach >= 0 and low_reach >= 0:
-        print(f"       same controller, same gain, one knob: {high_reach:.1f}s to reach "
-              f"{HIGH:.0f}% but {low_reach:.1f}s to reach {LOW:.0f}% -- outflow follows "
-              f"Torricelli, so process gain falls with level. One PID tuning is not enough.")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def exercise_valve_fault(bus: TagBusClient, check: Checks) -> float:
-    """Seize the fill valve under a running controller (FI-01).
-
-    The tank does not get the shared `exercise_fault`, and the reason is the
-    whole lesson. A stopped drive is obviously stopped. A modulating valve
-    stuck open keeps the process moving while the controller's own output
-    reads zero -- so the command and the plant disagree *and the command looks
-    fine*. Asserting "the commanded tag went to 0" would pass here while the
-    tank overflowed, which is exactly the mistake this scene should teach a
-    student not to make.
-
-    So the observable is the level, not the valve command. Returns how long the
-    controller took to trip.
-    """
-    check(num(bus, "tank.fill") > 5.0,
-          f"before the fault: the fill valve is open (at {num(bus, 'tank.fill'):.0f}%)")
-
-    before = num(bus, "tank.level")
-    raised = time.perf_counter()
-    await bus.force({"tank.fault": True})
-    while time.perf_counter() - raised < 1.0:
-        if bit(bus, "panel.red"):
-            break
-        await asyncio.sleep(0.005)
-    trip_ms = (time.perf_counter() - raised) * 1000.0
-
-    check(bit(bus, "panel.red"), "a seized valve trips the controller")
-    check(trip_ms <= ESTOP_LIMIT * 1000.0,
-          f"the controller trips within {ESTOP_LIMIT * 1000:.0f}ms of the fault "
-          f"(took {trip_ms:.0f}ms)")
-
-    await asyncio.sleep(0.3)
-    check(num(bus, "tank.fill") < 0.5,
-          f"the controller commands the valve shut (writing {num(bus, 'tank.fill'):.0f}%)")
-
-    # The point. The command says shut and the tank keeps filling anyway.
-    await asyncio.sleep(2.0)
-    climbed = num(bus, "tank.level") - before
-    check(climbed > 1.0,
-          f"and the tank keeps filling regardless -- level rose {climbed:.1f}% while "
-          f"the fill command read zero. The valve is not obeying, and the "
-          f"controller's own output cannot tell you that")
-
-    await press(bus, "panel.reset")
-    await asyncio.sleep(0.3)
-    check(bit(bus, "panel.red"), "Reset while the valve is still seized does not clear it")
-
-    await bus.force(clear=["tank.fault"])
-    await asyncio.sleep(0.4)
-    held = num(bus, "tank.level")
-    await asyncio.sleep(1.5)
-    check(abs(num(bus, "tank.level") - held) < 0.5,
-          f"freeing the valve lets the standing shut command take effect "
-          f"(level {held:.1f} -> {num(bus, 'tank.level'):.1f})")
-
-    await press(bus, "panel.reset")
-    await press(bus, "panel.start")
-    await asyncio.sleep(0.4)
-    check(not bit(bus, "panel.red"), "Reset then clears the fault")
-
-    return trip_ms
-
-
-async def drive_light_curtain_sorting(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Sort on the measurement, with the threshold on the panel (§4.4, OP-06).
-
-    The threshold used to be a constant in this file, which made the scene's
-    whole point -- that you sort on a *number*, not on two bits -- something
-    you could only exercise by editing Python. It is the pot now, so the line
-    can be re-sorted mid-shift, and the run proves it by turning the knob past
-    every carton and watching the diverter go quiet.
-
-    The assertion that matters is still conservation: tall + short must equal
-    what was emitted. "Both counters advanced" passes while the diverter drops
-    cartons on the floor or double-counts them.
-    """
-    EMIT_HALF_PERIOD = 1.5
-    PUSH_DELAY = 2.0
-    CLEAR_DWELL = 0.4
-    DRAIN = 6.0
-
-    check = Checks(verbose)
-    state = {"emitted": 0, "emit_flag": False, "elapsed": 0.0, "next_toggle": 0.0,
-             "prev_blocked": False, "extend_at": None, "extending": False,
-             "retract_at": None, "measured": [], "diverted": [], "feeding": False}
-
-    async def tick(dt: float) -> None:
-        s = state
-        station.scan()
-        now = time.perf_counter()
-        s["elapsed"] += dt
-
-        if station.running and s["feeding"]:
-            if s["elapsed"] >= s["next_toggle"]:
-                s["emit_flag"] = not s["emit_flag"]
-                s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-                if s["emit_flag"]:
-                    s["emitted"] += 1          # one carton per rising edge
-        else:
-            s["emit_flag"] = False
-            s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-
-        blocked = bit(bus, "height_gauge.blocked")
-        if blocked and not s["prev_blocked"] and station.running:
-            height = num(bus, "height_gauge.height")
-            s["measured"].append(height)
-            # The pot, read at the moment of the measurement -- turning it
-            # re-sorts the next carton, not the next run.
-            if height >= station.setpoint:
-                s["extend_at"] = now + PUSH_DELAY
-                s["diverted"].append((height, station.setpoint))
-        s["prev_blocked"] = blocked
-
-        extend = bit(bus, "diverter.extend")
-        if not s["extending"] and s["extend_at"] is not None and now >= s["extend_at"]:
-            extend = True
-            s["extending"] = True
-            s["extend_at"] = None
-        if s["extending"] and s["retract_at"] is None and bit(bus, "diverter.extended"):
-            s["retract_at"] = now + CLEAR_DWELL
-        if s["retract_at"] is not None and now >= s["retract_at"]:
-            extend = False
-            s["extending"] = False
-            s["retract_at"] = None
-        if not station.running:
-            extend = False
-            s["extending"] = False
-            s["extend_at"] = s["retract_at"] = None
-
-        await write_present(bus, {"belt.rotate": station.running,
-                                  "emitter.emit": s["emit_flag"],
-                                  "diverter.extend": extend,
-                                  **station.lamps()})
-
-    station = Station(bus, faults=("belt.fault", "diverter.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = -1.0
-    tall = short = 0
-
-    try:
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "belt.rotate"), "the belt")
-        fault_ms = await exercise_fault(bus, station, check,
-                                        lambda: bit(bus, "belt.rotate"), "belt.fault", "the belt")
-
-        threshold = station.setpoint
-        check.note(f"height threshold pot reads {threshold:.2f}m")
-        state["emitted"] = 0
-        state["measured"].clear()
-        state["diverted"].clear()
-        state["feeding"] = True
-        await asyncio.sleep(max(duration - DRAIN, 4.0))
-        state["feeding"] = False
-        await asyncio.sleep(DRAIN)
-
-        tall, short = int(num(bus, "tall_count.count")), int(num(bus, "short_count.count"))
-        counted = tall + short
-        emitted = state["emitted"]
-
-        check(tall > 0 and short > 0,
-              f"both counters advance at {threshold:.2f}m (got tall={tall} short={short})")
-        check(counted == emitted,
-              f"{emitted} cartons emitted and {counted} counted -- "
-              f"{'lost' if counted < emitted else 'double-counted'} {abs(emitted - counted)}")
-        below = [h for h, t in state["diverted"] if h < t]
-        check(not below,
-              f"nothing below the threshold was diverted (diverted {len(below)} that were)")
-
-        # --- turn the pot past every carton --------------------------------
-        # A threshold above the tallest carton must divert nothing. This is
-        # the assertion that separates "reads the setpoint" from "uses it":
-        # a driver that latched the pot at startup passes everything above and
-        # fails here.
-        await turn_pot(bus, 0.50)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - 0.50) < 0.01,
-              f"the pot reads 0.50m at its stop (got {station.setpoint:.2f})")
-        diverted_before = len(state["diverted"])
-        seen_before = len(state["measured"])
-        state["feeding"] = True
-        await asyncio.sleep(9.0)
-        state["feeding"] = False
-        await asyncio.sleep(DRAIN)
-
-        seen = len(state["measured"]) - seen_before
-        newly_diverted = len(state["diverted"]) - diverted_before
-        check(seen > 0, f"the curtain kept measuring after the pot was turned (saw {seen})")
-        check(newly_diverted == 0,
-              f"with the threshold above every carton, nothing is diverted "
-              f"(diverted {newly_diverted} of {seen})")
-        if seen:
-            print(f"       threshold {threshold:.2f}m -> tall={tall} short={short}; "
-                  f"threshold 0.50m -> {seen} measured, none diverted. The knob is "
-                  f"the sorting rule, and no code changed between the two.")
-
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: bit(bus, "belt.rotate"), "short_count.count")
-    finally:
-        stop_event.set()
-        await task
-        await bus.force(clear=["panel.setpoint", *station.faults])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"tall={tall} short={short} measured={len(state['measured'])} "
-          f"estop={estop_ms:.0f}ms fault={fault_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_roller_line_weighing(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Checkweigh against the pot, and cross-check it (§4.5, OP-07).
-
-    The pot is the reject limit in grams. That turns the scale from a readout
-    into a decision, and gives the scene a second, independent opinion about
-    which cartons are steel: the inductive sensor sees metal, the checkweigher
-    sees mass, and on this line those are the same cartons. Two instruments
-    agreeing is a far stronger check than either one being non-zero -- and
-    "metal was seen at least once" passes for a sensor wired to fire on
-    everything, which is the exact confusion this scene exists to clear up.
-    """
-    EMIT_HALF_PERIOD = 1.5
-    ZERO = 0.5                # below this the scale reads empty
-    DRAIN = 5.0
-
-    check = Checks(verbose)
-    state = {"emit_flag": False, "elapsed": 0.0, "next_toggle": 0.0, "feeding": False,
-             "on_scale": False, "peak": 0.0, "peaks": [], "returned_to_zero": 0,
-             "rejects": 0, "metal_hits": 0, "prev_metal": False, "metal_peaks": []}
-
-    async def tick(dt: float) -> None:
-        s = state
-        station.scan()
-        s["elapsed"] += dt
-
-        if station.running and s["feeding"]:
-            if s["elapsed"] >= s["next_toggle"]:
-                s["emit_flag"] = not s["emit_flag"]
-                s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-        else:
-            s["emit_flag"] = False
-            s["next_toggle"] = s["elapsed"] + EMIT_HALF_PERIOD
-
-        metal = bit(bus, "metal_check.detect")
-        if metal and not s["prev_metal"] and station.running:
-            s["metal_hits"] += 1
-        s["prev_metal"] = metal
-
-        weight = num(bus, "scale.weight")
-        if weight > ZERO:
-            if not s["on_scale"]:
-                s["peak"] = 0.0
-            s["on_scale"] = True
-            s["peak"] = max(s["peak"], weight)
-        elif s["on_scale"]:
-            # The carton has left: judge it on its peak, not on whatever the
-            # cell happened to read as it rolled off.
-            s["on_scale"] = False
-            s["returned_to_zero"] += 1
-            s["peaks"].append(s["peak"])
-            over = s["peak"] > station.setpoint
-            if over:
-                s["rejects"] += 1
-                s["metal_peaks"].append(s["peak"])
-            if verbose:
-                print(f"  carton: peak {s['peak']:.0f}g "
-                      f"{'REJECT' if over else 'pass'} (limit {station.setpoint:.0f}g)")
-
-        await write_present(bus, {
-            "infeed.rotate": station.running,
-            "scale.rotate": station.running,
-            "emitter.emit": s["emit_flag"],
-            "weight_readout.value": round(weight),
-            # Red on the panel now means "the last carton was over limit" as
-            # well as "tripped": a reject the operator cannot see is a reject
-            # nobody acts on.
-            "panel.red": station.tripped or bool(s["rejects"]),
-            **{k: v for k, v in station.lamps().items() if k != "panel.red"},
-        })
-
-    station = Station(bus, faults=("infeed.fault", "scale.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = -1.0
-
-    try:
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "scale.rotate"), "the rollers")
-        fault_ms = await exercise_fault(bus, station, check,
-                                        lambda: bit(bus, "scale.rotate"), "scale.fault",
-                                        "the rollers")
-
-        limit = station.setpoint
-        check.note(f"reject limit pot reads {limit:.0f}g")
-        for key in ("peaks", "metal_peaks"):
-            state[key].clear()
-        state["rejects"] = state["metal_hits"] = state["returned_to_zero"] = 0
-        state["feeding"] = True
-        await asyncio.sleep(max(duration - DRAIN, 6.0))
-        state["feeding"] = False
-        await asyncio.sleep(DRAIN)
-
-        weighed = len(state["peaks"])
-        rejects = state["rejects"]
-        metal_hits = state["metal_hits"]
-
-        check(weighed > 0, "the scale weighed something -- scale.weight never left zero")
-        check(state["returned_to_zero"] >= weighed,
-              f"the scale returns to zero between cartons "
-              f"({state['returned_to_zero']} clears for {weighed} cartons)")
-        check(int(num(bus, "outfeed.count")) > 0,
-              f"outfeed.count advanced (got {int(num(bus, 'outfeed.count'))})")
-        check(metal_hits > 0, "metal_check.detect fired for the steel cartons")
-        check(not (weighed > 0 and metal_hits >= weighed),
-              f"metal_check.detect is selective, not a presence sensor "
-              f"({metal_hits} hits for {weighed} cartons)")
-        check(0 < rejects < weighed,
-              f"the checkweigher rejected some cartons and passed others "
-              f"({rejects} of {weighed} over {limit:.0f}g)")
-
-        # Two instruments, one answer. This is the assertion the scene was
-        # missing: mass and material are independent measurements of the same
-        # cartons, so a wiring or threshold mistake in either one shows up as
-        # them disagreeing.
-        check(rejects == metal_hits,
-              f"the checkweigher and the inductive sensor flag the same cartons "
-              f"({rejects} over limit, {metal_hits} metal)")
-
-        # --- turn the pot below every carton -------------------------------
-        await turn_pot(bus, 100)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - 100) < 1.0,
-              f"the pot reads 100g (got {station.setpoint:.0f})")
-        weighed_before, rejects_before = len(state["peaks"]), state["rejects"]
-        state["feeding"] = True
-        await asyncio.sleep(8.0)
-        state["feeding"] = False
-        await asyncio.sleep(DRAIN)
-
-        now_weighed = len(state["peaks"]) - weighed_before
-        now_rejects = state["rejects"] - rejects_before
-        check(now_weighed > 0, f"the scale kept weighing after the pot moved ({now_weighed})")
-        check(now_rejects == now_weighed,
-              f"below every carton, the limit rejects all of them "
-              f"({now_rejects} of {now_weighed})")
-        if now_weighed:
-            print(f"       limit {limit:.0f}g -> {rejects} of {weighed} rejected; "
-                  f"limit 100g -> {now_rejects} of {now_weighed}. Peaks seen: "
-                  f"{sorted({round(p / 100) * 100 for p in state['peaks']})}g.")
-
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: bit(bus, "scale.rotate"), "outfeed.count")
-    finally:
-        stop_event.set()
-        await task
-        await bus.force(clear=["panel.setpoint", *station.faults])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"weighed={len(state['peaks'])} rejects={state['rejects']} "
-          f"metal={state['metal_hits']} outfeed={int(num(bus, 'outfeed.count'))} "
-          f"estop={estop_ms:.0f}ms fault={fault_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_pick_and_place_cell(bus: TagBusClient, duration: float,
-                                    verbose: bool) -> tuple[bool, str]:
-    """Sequence a gantry: index, lower, grip, lift, traverse, release (CP-30).
-
-    Three things are checked here that no other scene can check.
-
-    **The drive really is analog.** The infeed is behind a VFD, so commanding a
-    speed and reading it back must not agree instantly. The run watches the gap
-    between `infeed.speed` and `infeed.actual` while the ramp is moving; a drive
-    that reported its own reference would pass every other assertion in this
-    file and still be a bit output wearing a float's clothes.
-
-    **The grip reports the truth.** After the vacuum closes, `gantry.holding`
-    is true only when a carton was really there. The controller below checks it
-    and goes back to waiting if the cup caught nothing, which is the interlock
-    the scene exists to teach.
-
-    **The sequence is written on feedback, not on timers.** Every transition
-    waits on `inposition`, `lowered`, `raised` or `holding`. A timer-based
-    version passes at one travel speed and fails at another, and the travel
-    speed is a slider in the property panel.
-    """
-    PICK_AT, PLACE_AT = 0.0, 96.0
-    #: Short, because the *queue* bounds the feed here, not the clock: the
-    #: infeed holds while a carton is indexed, so cartons accumulate and the
-    #: next is already waiting when the station clears. A six-second cadence
-    #: added its own dead time on top of the travel and the cycle, and the cell
-    #: managed one carton in thirty seconds.
-    FEED_INTERVAL = 2.0
-    #: Percent of the rail counted as arrived. Wider than the machine's own
-    #: in-position window so the two never disagree in a way that stalls it.
-    ARRIVAL_WINDOW = 2.5
-
-    check = Checks(verbose)
-    state = {
-        "step": "topick",
-        "settle": 0.0,
-        "feed": 1.0,
-        "placed": 0,
-        "attempts": 0,
-        "empty": 0,
-        "max_ramp_gap": 0.0,
-        "codes": set(),
-    }
-
-    async def tick(dt: float) -> None:
-        station.scan()
-        running = station.running
-
-        reference = station.setpoint if running else 0.0
-        actual = num(bus, "infeed.actual")
-        if running and abs(reference - actual) > state["max_ramp_gap"]:
-            state["max_ramp_gap"] = abs(reference - actual)
-
-        at_station = bit(bus, "atstation.detect")
-        writes = {
-            # The infeed runs whenever the line does, and deliberately does
-            # *not* hold while a carton is indexed. Holding it looks like the
-            # obvious accumulation interlock and it jams this line solid: a
-            # carton stopped exactly on the joint between two conveyors rests
-            # against the downstream deck's leading face, and contact slop
-            # means it cannot climb back onto it when the belt restarts.
-            # Carried across at speed it never touches that face.
-            "infeed.run": running,
-            "infeed.speed": reference,
-            # Index the carton to the stop rather than coasting it onto a dead
-            # plate: a repeatable pick needs the carton put under the cup on
-            # purpose, not left wherever friction happened to stop it.
-            "pickstation.rotate": running and not at_station,
-            "scanner.enable": True,
-            "rate.value": actual,
-            "alarm.beacon": station.tripped or station.drive_faulted,
-            "alarm.horn": station.drive_faulted,
-            "emitter.emit": False,
-            **station.lamps(),
-        }
-
-        # Feed only into space: not while a carton is indexed at the station,
-        # and not while one is still under the scanner head. Together those
-        # bound the queue to what the infeed can hold without needing a count.
-        if running and not at_station and not bit(bus, "scanner.present"):
-            state["feed"] -= dt
-            if state["feed"] <= 0.0:
-                state["feed"] = FEED_INTERVAL
-                writes["emitter.emit"] = True
-
-        if bit(bus, "scanner.read"):
-            state["codes"].add(int(num(bus, "scanner.code")))
-
-        if not running:
-            writes["gantry.lower"] = False
-            await write_present(bus, writes)
-            return
-
-        in_position = bit(bus, "gantry.inposition")
-        lowered = bit(bus, "gantry.lowered")
-        raised = bit(bus, "gantry.raised")
-        holding = bit(bus, "gantry.holding")
-        step = state["step"]
-
-        def arrived(destination: float) -> bool:
-            """Has the axis reached `destination`?
-
-            Deliberately not `gantry.inposition` on its own. That bit compares
-            the axis to the target the *machine* currently holds, and the
-            target this controller just wrote has not reached the machine yet
-            -- so on the scan that issues a move, `inposition` still reports
-            "arrived", at the place we are trying to leave. The first version
-            of this driver trusted it and released every carton straight back
-            onto the pick station, having never travelled at all. Checking the
-            position feedback against the destination this step wants has no
-            such window.
-            """
-            return abs(num(bus, "gantry.position") - destination) <= ARRIVAL_WINDOW
-
-        if step == "topick":
-            writes["gantry.target"] = PICK_AT
-            writes["gantry.lower"] = False
-            if in_position and arrived(PICK_AT) and raised and at_station:
-                state["settle"] = 0.4
-                state["step"] = "lower"
-        elif step == "lower":
-            state["settle"] -= dt
-            if state["settle"] <= 0.0:
-                writes["gantry.lower"] = True
-                if lowered:
-                    state["settle"] = 0.25
-                    state["step"] = "grip"
-        elif step == "grip":
-            writes["gantry.lower"] = True
-            writes["gantry.grip"] = True
-            state["settle"] -= dt
-            if state["settle"] <= 0.0:
-                state["attempts"] += 1
-                if holding:
-                    state["step"] = "raise"
-                else:
-                    state["empty"] += 1
-                    writes["gantry.grip"] = False
-                    state["step"] = "topick"
-        elif step == "raise":
-            writes["gantry.grip"] = True
-            writes["gantry.lower"] = False
-            if raised:
-                state["step"] = "toplace"
-        elif step == "toplace":
-            writes["gantry.grip"] = True
-            writes["gantry.target"] = PLACE_AT
-            if in_position and arrived(PLACE_AT):
-                state["step"] = "release"
-        elif step == "release":
-            writes["gantry.grip"] = False
-            if not holding:
-                state["placed"] += 1
-                state["step"] = "home"
-        elif step == "home":
-            writes["gantry.target"] = PICK_AT
-            if in_position and arrived(PICK_AT):
-                state["step"] = "topick"
-
-        await write_present(bus, writes)
-
-    station = Station(bus, faults=("gantry.fault", "infeed.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = -1.0
-
-    try:
-        await turn_pot(bus, 70.0)
-        await asyncio.sleep(0.2)
-        # What must be off within 200 ms is the drive *command*, not the
-        # belt's last revolution. This is the one scene where those differ:
-        # the infeed is behind a VFD, and a VFD asked to stop ramps down over
-        # a couple of seconds. That is not a bug to hide -- it is why a real
-        # E-stop circuit removes power or uses safe torque off rather than
-        # politely asking the drive to decelerate. The interlock is measured
-        # against the command; the coast-down is asserted separately below.
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "infeed.run"),
-                                             "the infeed drive command")
-
-        # ...and the drive really does wind down afterwards, rather than the
-        # command being dropped while the belt keeps running forever. Measured
-        # on its own Stop press: exercise_interlocks deliberately leaves the
-        # line running, so timing a coast straight after it would be timing a
-        # drive that is already ramping back up.
-        await press(bus, "panel.stop")
-        coast_start = time.perf_counter()
-        while num(bus, "infeed.actual") > 0.5 and time.perf_counter() - coast_start < 10.0:
-            await asyncio.sleep(0.05)
-        coast = time.perf_counter() - coast_start
-        check(num(bus, "infeed.actual") <= 0.5,
-              f"and the drive itself coasts to a stop, in its own time "
-              f"({coast:.1f}s after the command dropped)")
-        check.note(f"ramp-down took {coast:.1f}s -- an E-stop that only asked the "
-                   f"drive to decelerate would leave the belt moving that long")
-
-        await press(bus, "panel.start")
-        await asyncio.sleep(1.5)   # let the ramp come back up before timing production
-        check.note(f"production begins: running={station.running} tripped={station.tripped} "
-                   f"healthy={bit(bus, 'panel.estop')} actual={num(bus, 'infeed.actual'):.1f} "
-                   f"at_station={bit(bus, 'atstation.detect')} "
-                   f"present={bit(bus, 'scanner.present')}")
-
-        before = num(bus, "outfeed.count")
-        await asyncio.sleep(max(duration, 30.0))
-        moved = num(bus, "outfeed.count") - before
-        check.note(f"production ends: running={station.running} tripped={station.tripped} "
-                   f"step={state['step']} actual={num(bus, 'infeed.actual'):.1f} "
-                   f"at_station={bit(bus, 'atstation.detect')} "
-                   f"present={bit(bus, 'scanner.present')} pos={num(bus, 'gantry.position'):.1f}")
-
-        check(state["placed"] >= 2,
-              f"the sequencer completed at least two full cycles "
-              f"({state['placed']} releases) -- one is a scene that happens to "
-              f"work once, not one that runs")
-        check(moved >= 1,
-              f"and the carton it placed reached the outfeed "
-              f"(count rose by {moved:.0f})")
-        # The gap only has to exist. How large it gets depends on where in the
-        # ramp the sample lands, and asserting a size would be asserting a
-        # sampling accident.
-        check(state["max_ramp_gap"] > 1.0,
-              f"the drive's actual speed lagged its reference during the ramp "
-              f"(largest gap seen {state['max_ramp_gap']:.1f} %)")
-        check(len(state["codes"]) >= 1 and state["codes"].issubset({101, 102, 201}),
-              f"the scanner read real item codes {sorted(state['codes'])}")
-
-        # Seize the gantry mid-run: the axis must stop where it is, even though
-        # the target still says somewhere else.
-        await bus.force({"gantry.fault": True})
-        await asyncio.sleep(0.6)
-        frozen = num(bus, "gantry.position")
-        await asyncio.sleep(1.5)
-        check(abs(num(bus, "gantry.position") - frozen) < 0.5,
-              f"a seized gantry freezes where it is (was {frozen:.1f} %, "
-              f"now {num(bus, 'gantry.position'):.1f} %)")
-        await bus.force(clear=["gantry.fault"])
-    finally:
-        stop_event.set()
-        await task
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"placed={state['placed']} outfeed={int(num(bus, 'outfeed.count'))} "
-          f"codes={sorted(state['codes'])} rampgap={state['max_ramp_gap']:.1f}% "
-          f"empty_picks={state['empty']}/{state['attempts']} estop={estop_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_heat_treat_station(bus: TagBusClient, duration: float,
-                                   verbose: bool) -> tuple[bool, str]:
-    """PI control of a first-order thermal plant (CP-30).
-
-    What this scene is for, and what is measured here, is the standing offset.
-    The plate loses heat in proportion to how far above ambient it is, so
-    holding a temperature needs a standing heater output -- and a proportional
-    controller can only produce one from a standing error. The run measures that
-    error with the integral term switched off, then switches it on and checks
-    the error actually closes. Nothing else in the project demonstrates why
-    integral action exists rather than merely asserting that it does.
-
-    The element fault is the other half: `oven.heater` still reads whatever was
-    commanded while the temperature falls, so a controller watching only its own
-    output learns nothing.
-    """
-    GAIN = 3.5
-    #: Enough authority that the integral term can supply the whole standing
-    #: output on its own. At 180 degC the plate loses (180-20)*0.30 = 48 degC/s
-    #: of heat, which is about 53 % of the element -- an integral that can only
-    #: contribute 11 % (the first tuning here) cannot close the offset it was
-    #: added to close, and reads as "integral action does not work".
-    INTEGRAL_GAIN = 0.6
-    INTEGRAL_LIMIT = 140.0
-
-    check = Checks(verbose)
-    #: `manual` overrides the controller's own output when it is not None. Used
-    #: only by the element-fault leg, which has to command full power while the
-    #: station is tripped -- something the interlocks correctly refuse to do on
-    #: their own, and the only way to show that the output tells you nothing.
-    state = {"integral": 0.0, "use_integral": False, "power": 0.0, "manual": None}
-
-    async def tick(dt: float) -> None:
-        station.scan()
-        temperature = num(bus, "oven.temperature")
-        setpoint = station.setpoint
-        power = 0.0
-
-        if state["manual"] is not None:
-            power = state["manual"]
-        elif station.running:
-            error = setpoint - temperature
-            proportional = error * GAIN
-            if state["use_integral"]:
-                # Only while the output is not saturated: integrating through a
-                # cold start's flat-out heating is textbook windup.
-                if -100.0 < proportional < 100.0:
-                    state["integral"] = max(-INTEGRAL_LIMIT,
-                                            min(INTEGRAL_LIMIT,
-                                                state["integral"] + error * dt))
-            else:
-                state["integral"] = 0.0
-            power = max(0.0, min(100.0, proportional + state["integral"] * INTEGRAL_GAIN))
-        else:
-            state["integral"] = 0.0
-
-        state["power"] = power
-        await write_present(bus, {
-            "oven.heater": power,
-            "temp_gauge.value": temperature,
-            "temp_readout.value": round(temperature),
-            "alarm.beacon": temperature > setpoint + 25.0 or station.drive_faulted,
-            "alarm.horn": station.drive_faulted,
-            **station.lamps(),
-        })
-
-    async def hold(seconds: float) -> float:
-        """Run for a while and return the mean error over the last third -- the
-        steady-state error, rather than a single sample that could land anywhere
-        on a still-moving ramp."""
-        start = time.perf_counter()
-        samples: list[float] = []
-        while time.perf_counter() - start < seconds:
-            await asyncio.sleep(0.1)
-            if time.perf_counter() - start > seconds * 2 / 3:
-                samples.append(station.setpoint - num(bus, "oven.temperature"))
-            if verbose and int((time.perf_counter() - start) * 2) % 10 == 0:
-                print(f"  t={time.perf_counter() - start:5.1f}s "
-                      f"T={num(bus, 'oven.temperature'):6.1f} "
-                      f"power={state['power']:5.1f} I={state['integral']:6.1f}")
-        return sum(samples) / len(samples) if samples else 0.0
-
-    station = Station(bus, faults=("oven.fault",))
-    stop_event, task = controller(tick)
-    estop_ms = -1.0
-    p_error = pi_error = 0.0
-
-    try:
-        await turn_pot(bus, 180.0)
-        await asyncio.sleep(0.2)
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: num(bus, "oven.heater") > 0.5,
-                                             "the heater output")
-
-        budget = max(duration, 50.0)
-        state["use_integral"] = False
-        p_error = await hold(budget * 0.45)
-        check(p_error > 0.5,
-              f"proportional control alone parks below setpoint "
-              f"({p_error:.1f} degC short) -- the offset this scene exists to show")
-
-        state["use_integral"] = True
-        pi_error = await hold(budget * 0.55)
-        check(pi_error < p_error,
-              f"adding integral action closes that offset "
-              f"({p_error:.1f} degC -> {pi_error:.1f} degC)")
-        check(abs(pi_error) < 8.0,
-              f"and holds the setpoint within 8 degC ({pi_error:.1f} degC off)")
-
-        # A failed element, in two parts.
-        #
-        # First: the controller does the right thing and trips. A drive fault
-        # latches the station exactly as the mushroom does, so the heater
-        # command goes to zero -- which is correct, and is also why this leg
-        # cannot end there. A controller that trips proves nothing about
-        # whether the *output* could have told it anything.
-        hot = num(bus, "oven.temperature")
-        await bus.force({"oven.fault": True})
-        await asyncio.sleep(1.0)
-        check(bit(bus, "panel.red"),
-              "a failed element trips the station, exactly like the mushroom does")
-
-        # Second, and this is the lesson: hold the element at full power by
-        # hand, with the fault standing, and watch the temperature fall anyway.
-        # The command reads 100 % throughout. Nothing on the output side of
-        # this controller could distinguish that from a working heater --
-        # only the measurement can.
-        state["manual"] = 100.0
-        await asyncio.sleep(6.0)
-        cooled = num(bus, "oven.temperature")
-        check(cooled < hot - 2.0,
-              f"and cools while commanded flat out ({hot:.1f} degC -> {cooled:.1f} degC)")
-        check(num(bus, "oven.heater") > 99.0,
-              f"with the heater output still reading "
-              f"{num(bus, 'oven.heater'):.0f} % the whole time")
-        state["manual"] = None
-        await bus.force(clear=["oven.fault"])
-    finally:
-        stop_event.set()
-        await task
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"p_offset={p_error:.1f}degC pi_offset={pi_error:.1f}degC "
-          f"final={num(bus, 'oven.temperature'):.1f}degC estop={estop_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_accumulation_buffer(bus: TagBusClient, duration: float,
-                                    verbose: bool) -> tuple[bool, str]:
-    """Accumulation, and a release measured in distance rather than seconds
-    (LP-20).
-
-    Two claims, and the second is the one worth the scene:
-
-    1. A raised blade stop holds product on a belt that never stops. Nothing
-       gets past it, and the encoder keeps counting the whole time -- so "the
-       line stopped" is ruled out as the explanation.
-    2. A release window of N encoder pulses lets the same amount of product
-       through at any line speed. The run does the same release at 40 % and at
-       80 % of the drive and compares the counts; the wall-clock times differ by
-       about half, which is exactly what a controller written with a timer would
-       have got wrong.
-
-    Cartons are counted by the remover at the end of the lane, not by the
-    photo-eye. Accumulated product travels touching, and an eye cannot separate
-    two cartons with no gap between them -- which is true of a real eye too, and
-    is why a real line counts at a point where the product has been singulated.
-
-    Mirrors AccumulationBufferProfile.
-    """
-    #: Pulses of belt travel the blade stays down for. 100 pulses is one metre.
-    WINDOW = 120.0
-    SLOW = 40.0
-    FAST = 80.0
-    EMIT_HALF_PERIOD = 0.6
-
-    check = Checks(verbose)
-    #: `manual_run` overrides the station's own verdict when it is not None.
-    #: Used only by the seized-stop leg, which has to keep the line moving with
-    #: a drive fault standing -- something the interlocks correctly refuse to do
-    #: on their own, and the only way to show that the raise command tells you
-    #: nothing. Same device the heat-treat exercise uses, for the same reason.
-    state = {
-        "emit": False, "next_toggle": 0.0, "feeding": False,
-        "raise_blade": True, "reference": SLOW, "manual_run": None,
-    }
-
-    async def tick(dt: float) -> None:
-        station.scan()
-        running = station.running if state["manual_run"] is None else state["manual_run"]
-
-        now = time.perf_counter()
-        if state["feeding"] and running:
-            if now >= state["next_toggle"]:
-                state["emit"] = not state["emit"]
-                state["next_toggle"] = now + EMIT_HALF_PERIOD
-        else:
-            state["emit"] = False
-            state["next_toggle"] = now + EMIT_HALF_PERIOD
-
-        # The eye is watched, not counted on. Accumulated product travels
-        # touching, so a batch coming past the blade breaks the beam once and
-        # clears it once however many cartons are in it. What it can honestly
-        # say is whether anything is moving past the stop at all -- which is how
-        # a blade seized *down* becomes visible while the controller is still
-        # commanding `raise`. Mirrors AccumulationBufferProfile.
-        flowing = bit(bus, "exit_eye.detect")
-        holding = state["raise_blade"] or not running
-
-        lamps = station.lamps()
-        # The one scene that lights two tower stages at once, deliberately:
-        # green is "running", amber is "running and holding".
-        if running and state["raise_blade"]:
-            lamps["tower.yellow"] = True
-        if flowing and holding:
-            lamps["panel.red"] = True
-
-        await write_present(bus, {
-            "buffer.run": running,
-            "buffer.speed": state["reference"] if running else 0.0,
-            "outfeed.rotate": running,
-            "emitter.emit": state["emit"],
-            # A stopped line holds what it has: dropping the blade while the
-            # belt is off would spill the whole buffer the moment it restarted.
-            "stop.raise": holding,
-            "count_display.value": int(num(bus, "released.count")),
-            **lamps,
-        })
-
-    async def accumulate(seconds: float) -> None:
-        state["raise_blade"] = True
-        state["feeding"] = True
-        await asyncio.sleep(seconds)
-        state["feeding"] = False
-        await asyncio.sleep(1.0)
-
-    async def release(reference: float, drain: float) -> tuple[int, float]:
-        """Drop the blade for WINDOW pulses of belt travel, then wait for
-        whatever escaped to reach the remover. Returns how many cartons came
-        out and how long the window itself took."""
-        state["reference"] = reference
-        await asyncio.sleep(1.5)            # let the drive finish its ramp
-
-        before = int(num(bus, "released.count"))
-        start_count = num(bus, "enc.count")
-        started = time.perf_counter()
-
-        state["raise_blade"] = False
-        while num(bus, "enc.count") - start_count < WINDOW:
-            if time.perf_counter() - started > 30.0:
-                break
-            await asyncio.sleep(0.02)
-        elapsed = time.perf_counter() - started
-        state["raise_blade"] = True
-
-        await asyncio.sleep(drain)
-        return int(num(bus, "released.count")) - before, elapsed
-
-    station = Station(bus, faults=("buffer.fault", "stop.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = -1.0
-    slow_out = fast_out = 0
-    slow_secs = fast_secs = 0.0
-
-    try:
-        await turn_pot(bus, WINDOW)
-        await asyncio.sleep(0.2)
-        # The *command*, not the belt's last revolution: this drive ramps down,
-        # and a VFD that coasts is not an E-stop failure -- it is why a real
-        # E-stop circuit removes power. Same measurement the pick-and-place
-        # cell makes, for the same reason.
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "buffer.run"),
-                                             "the buffer drive")
-
-        # --- 1. a raised blade holds the lot
-        state["reference"] = SLOW
-        held_before = int(num(bus, "released.count"))
-        pulses_before = num(bus, "enc.count")
-        await accumulate(12.0)
-        held_after = int(num(bus, "released.count"))
-        pulses_after = num(bus, "enc.count")
-
-        check(held_after == held_before,
-              f"nothing gets past a raised blade stop "
-              f"({held_after - held_before} carton(s) escaped)")
-        check(pulses_after - pulses_before > 100.0,
-              f"and the belt ran the whole time, so that is the blade and not a "
-              f"stopped line ({pulses_after - pulses_before:.0f} pulses of travel)")
-        check(bit(bus, "stop.up") and not bit(bus, "stop.down"),
-              "the blade reports its raised limit while it is holding")
-
-        # --- 2. the same window at two line speeds
-        slow_out, slow_secs = await release(SLOW, 14.0)
-        check(slow_out >= 2,
-              f"a release at {SLOW:.0f} % lets product through ({slow_out} cartons)")
-
-        await accumulate(12.0)
-        fast_out, fast_secs = await release(FAST, 9.0)
-
-        check(abs(slow_out - fast_out) <= 1,
-              f"the same pulse window releases the same amount at twice the speed "
-              f"({slow_out} at {SLOW:.0f} % vs {fast_out} at {FAST:.0f} %)")
-        check(fast_secs < slow_secs * 0.75,
-              f"while taking about half as long ({slow_secs:.1f}s vs {fast_secs:.1f}s) "
-              f"-- which is what a controller timed in seconds would have got wrong")
-
-        # --- 3. a seized blade, with the command still on
-        #
-        # Seized *down*, which is the failure that matters: a stop frozen in
-        # its raised position is merely a line that will not run, and everybody
-        # notices that within a minute.
-        await accumulate(10.0)
-        state["reference"] = FAST
-        state["raise_blade"] = False
-        await asyncio.sleep(1.4)
-        await bus.force({"stop.fault": True})
-        await asyncio.sleep(1.0)
-        check(bit(bus, "panel.red"),
-              "a seized stop trips the station, exactly like the mushroom does")
-
-        # Which is correct, and is also why this leg cannot end there: a
-        # controller that trips proves nothing about whether its own *output*
-        # could have told it anything. So hold the line running by hand, with
-        # the fault standing and the raise command on, and watch.
-        state["manual_run"] = True
-        state["raise_blade"] = True
-        await asyncio.sleep(2.0)
-        check(not bit(bus, "stop.up"),
-              "a seized blade never reaches its raised limit, however long the "
-              "raise command is held")
-        escaped_before = int(num(bus, "released.count"))
-        await asyncio.sleep(10.0)
-        check(int(num(bus, "released.count")) > escaped_before,
-              "and product keeps escaping past it while the controller believes "
-              "it is holding -- the limit switch is the only honest thing to read")
-        state["manual_run"] = None
-        await bus.force(clear=["stop.fault"])
-        await asyncio.sleep(2.5)
-        check(bit(bus, "stop.up"), "clearing the fault lets the blade finish rising")
-    finally:
-        stop_event.set()
-        await task
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"window={WINDOW:.0f}p slow={slow_out}@{slow_secs:.1f}s "
-          f"fast={fast_out}@{fast_secs:.1f}s "
-          f"outfeed={int(num(bus, 'released.count'))} estop={estop_ms:.0f}ms")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_guarded_cell(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Guarding as hardware, and the two mistakes it is there to catch.
-
-    Every other exercise in this file writes the drive tag. This one never
-    writes `belt.rotate` at all -- it writes `starter.coil`, and a contactor
-    runs the motor. That single difference is what makes "the relay closed" and
-    "the machine started" two separate events, and it is why the two headline
-    assertions here are *negative*:
-
-    * **A permissive that starts something is a failure.** Shutting the gate
-      and pressing Reset closes the relay's safety contacts, which hands
-      `starter.coil` back to the controller and does nothing else. If the belt
-      moves on that Reset, the program has built automatic restart out of a
-      relay written specifically to refuse it.
-
-    * **A mute that never expires is a failure.** Cartons have to cross the
-      scanner's protective field, so the controller bridges it while each one
-      passes, and the panel's pot is how long for. Widen it past the scanner's
-      own mute limit and consecutive cartons hold the bridge continuously --
-      the scanner stops honouring a request it is still receiving, and the next
-      carton in the field stops the cell. That refusal is measured here, not
-      asserted: the moment `scanner.mute` is high and `scanner.muted` is not.
-
-    Mirrors GuardedCellProfile, with one deliberate difference: the profile
-    gives itself a quarter-second commissioning press of the relay's reset at
-    startup so 🎬 Demo has something to show. This presses Reset itself -- and
-    first checks that a cell which has never been reset is a cell Start cannot
-    move.
-    """
-    EMIT_HALF_PERIOD = 2.5      # one carton every 5 s; see the mute window below
-    PUSH_DELAY = 1.0            # push eye to the transfer station: 0.5 m at 0.5 m/s
-    MUTE_WINDOW = 3.5           # long enough to carry a carton across the field
-    LONG_MUTE = 10.0            # past the scanner's own 6 s limit -- the defeat
-    SCANNER_MUTE_LIMIT = 6.0    # the scanner's own mute_limit, from the scene
-    SYNC_WINDOW = 0.5           # the relay's channel-discrepancy window, from the scene
-
-    check = Checks(verbose)
-    state = {
-        # The relay powers up open, so the cell powers up tripped. That is not
-        # a fault, it is what every safety relay does.
-        "safety_trip": True,
-        "prev_mute_eye": False, "prev_push_eye": False,
-        "mute_until": 0.0, "refused_at": None,
-        # How long the controller *asked* for the field to be bridged, and how
-        # long the scanner actually bridged it. Two numbers rather than one
-        # sampled bit, because the moment the scanner withdraws a mute and the
-        # moment the cell stops are the same tick when a carton is in the field
-        # at the time -- there is nothing in between to catch.
-        "mute_wanted_since": None, "muted_since": None,
-        "max_wanted": 0.0, "max_muted": 0.0,
-        # Hold the start command on by hand, so the relay can be caught
-        # refusing a command that is genuinely being made. Without this the
-        # controller stops asking the moment it trips, and "the coil is off"
-        # would prove nothing about who turned it off.
-        "force_coil": False, "coil_cmd": False,
-        "feeding": False, "emit": False, "emit_timer": 0.0, "fed": 0,
-        "transfer": "idle", "push_timer": 0.0,
-        "cyl_extend": False, "cyl_retract": False,
-        "samples": 0, "motor_mismatch": 0,
-        "mid_stroke": 0, "both_reeds": 0, "both_coils": 0,
-        "mute_seen": False, "field_broken_seen": False,
-    }
-
-    async def tick(dt: float) -> None:
-        s = state
-        now = time.perf_counter()
-
-        # Read the Reset button before the station consumes it: this scene has
-        # two things to reset -- the safety relay's own latch and the
-        # controller's -- and one button does both, the way one button does on
-        # a real cell.
-        reset_level = bit(bus, "panel.reset")
-        station.scan()
-
-        # Neither of these is computed here. The relay decides whether its
-        # contacts are closed and the scanner decides whether its field is
-        # clear; recomputing either from the raw channels would be a second,
-        # unrated opinion about a safety function.
-        relay_closed = bit(bus, "relay.k1") and bit(bus, "relay.k2")
-        field_clear = bit(bus, "scanner.stop")
-
-        if not relay_closed or not field_clear:
-            s["safety_trip"] = True
-        if reset_level and relay_closed and field_clear:
-            s["safety_trip"] = False
-        if s["safety_trip"]:
-            station.running = False
-
-        running = station.running and not s["safety_trip"]
-        coil = running or s["force_coil"]
-        s["coil_cmd"] = coil
-
-        # --- muting, on the pot's own window -------------------------------
-        eye = bit(bus, "mute_eye.detect")
-        if eye and not s["prev_mute_eye"] and running:
-            s["mute_until"] = now + station.setpoint
-        s["prev_mute_eye"] = eye
-
-        # What the controller is still inside its own bridge window for, and
-        # what it actually commands. The two part company the instant the cell
-        # trips, and that difference is what makes the refusal visible at all.
-        want_mute = now < s["mute_until"]
-        mute = running and want_mute
-
-        if want_mute:
-            if s["mute_wanted_since"] is None:
-                s["mute_wanted_since"] = now
-            s["max_wanted"] = max(s["max_wanted"], now - s["mute_wanted_since"])
-        else:
-            s["mute_wanted_since"] = None
-
-        if bit(bus, "scanner.muted"):
-            s["mute_seen"] = True
-            if s["muted_since"] is None:
-                s["muted_since"] = now
-            s["max_muted"] = max(s["max_muted"], now - s["muted_since"])
-        else:
-            s["muted_since"] = None
-
-        # The scanner refusing a bridge the controller is still asking for,
-        # caught either way round: as `scanner.muted` going out under a
-        # standing request -- with half a second of grace, since that bit is
-        # the scanner's answer to a request that has to cross the bus twice --
-        # or as the protective field going un-clear while the request stands,
-        # which is the same event seen from the other end when a carton happens
-        # to be in the field at the moment the limit expires. There is no
-        # sample in between those two: they are the same tick.
-        if s["refused_at"] is None and want_mute and (
-                not field_clear
-                or (s["mute_wanted_since"] is not None
-                    and now - s["mute_wanted_since"] > 0.5
-                    and not bit(bus, "scanner.muted"))):
-            s["refused_at"] = now
-
-        # --- what the contactor is doing, which is not what we commanded ----
-        motor = bit(bus, "starter.aux")
-        if bit(bus, "belt.rotate") != motor:
-            s["motor_mismatch"] += 1
-        s["samples"] += 1
-        if not field_clear:
-            s["field_broken_seen"] = True
-
-        extended = bit(bus, "cylinder.extended")
-        retracted = bit(bus, "cylinder.retracted")
-        if extended and retracted:
-            s["both_reeds"] += 1
-        if not extended and not retracted:
-            s["mid_stroke"] += 1
-
-        # --- the feed, gated on the contactor and not on the command --------
-        s["emit_timer"] += dt
-        if motor and s["feeding"]:
-            if s["emit_timer"] >= EMIT_HALF_PERIOD:
-                s["emit"] = not s["emit"]
-                s["emit_timer"] = 0.0
-                if s["emit"]:
-                    s["fed"] += 1
-        else:
-            s["emit"] = False
-            s["emit_timer"] = 0.0
-
-        # --- the transfer stroke, sequenced off the reeds -------------------
-        #
-        # Only ever one coil. Energising both is not a way to hold a
-        # double-solenoid valve still, it is a way to leave the rod wherever
-        # the previous scan put it. And no step reads `not extended` as
-        # "retracted": between the two reeds neither is made.
-        push = bit(bus, "push_eye.detect")
-        if not motor:
-            s["transfer"] = "idle"
-            s["push_timer"] = 0.0
-        else:
-            if push and not s["prev_push_eye"] and s["transfer"] == "idle" and retracted:
-                s["transfer"] = "waiting"
-                s["push_timer"] = PUSH_DELAY
-
-            if s["transfer"] == "waiting":
-                s["push_timer"] -= dt
-                if s["push_timer"] <= 0.0:
-                    s["transfer"] = "extending"
-            elif s["transfer"] == "extending":
-                if extended:
-                    s["transfer"] = "retracting"
-            elif s["transfer"] == "retracting":
-                if retracted:
-                    s["transfer"] = "idle"
-            elif not retracted:
-                # A stroke a stop interrupted left the rod between the reeds.
-                # Bring it home, and read the reed rather than assuming.
-                s["transfer"] = "retracting"
-        s["prev_push_eye"] = push
-
-        s["cyl_extend"] = s["transfer"] == "extending"
-        s["cyl_retract"] = s["transfer"] == "retracting"
-        if s["cyl_extend"] and s["cyl_retract"]:
-            s["both_coils"] += 1
-
-        # A guarding trip is a trip, and the panel has to say so. The shared
-        # Station only latches the mushroom and the drive faults, so the red
-        # lamp is overridden here rather than left dark on the one stop this
-        # scene exists to demonstrate.
-        lamps = station.lamps()
-        if s["safety_trip"]:
-            lamps["panel.red"] = True
-            lamps["tower.red"] = True
-            lamps["tower.yellow"] = False
-
-        await write_present(bus, {
-            "relay.reset": reset_level,
-            "starter.coil": coil,
-            "scanner.mute": mute,
-            "emitter.emit": s["emit"],
-            "cylinder.extend": s["cyl_extend"],
-            "cylinder.retract": s["cyl_retract"],
-            **lamps,
-        })
-
-    station = Station(bus, faults=("belt.fault", "cylinder.fault"))
-    stop_event, task = controller(tick)
-    estop_ms = fault_ms = guard_ms = -1.0
-    refusal_s = trip_s = -1.0
-    transferred = escaped = 0
-
-    try:
-        await asyncio.sleep(0.6)
-
-        # --- 1. a cell nobody has reset is a cell Start cannot move ---------
-        check(not bit(bus, "relay.k1") and not bit(bus, "relay.k2"),
-              "power-up: the relay's safety contacts are open, before anybody has reset it")
-        check(bit(bus, "relay.cha") and bit(bus, "relay.chb"),
-              "power-up: both gate leaves read shut, so the channels are healthy")
-        check(not bit(bus, "belt.rotate"), "power-up: the belt is off")
-
-        await press(bus, "panel.start")
-        await asyncio.sleep(0.5)
-        check(not bit(bus, "belt.rotate"),
-              "Start, on a relay that has never been reset, does nothing at all")
-        check(not bit(bus, "starter.aux"), "and the contactor never pulls in")
-
-        # --- 2. the permissive, and what a permissive is not ----------------
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.5)
-        check(bit(bus, "relay.k1") and bit(bus, "relay.k2"),
-              "Reset with both gate leaves shut closes the relay's safety contacts")
-        check(not bit(bus, "belt.rotate"),
-              "and the cell does NOT start -- closing a permissive hands the coil back, "
-              "it does not command it")
-        check(not bit(bus, "starter.aux"),
-              "the contactor is still out one full second after the relay closed")
-
-        # --- 3. the operator contract every line here shares ----------------
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: bit(bus, "belt.rotate"), "the belt")
-        check(bit(bus, "starter.aux"),
-              "running: the auxiliary contact says the motor is turning, not just commanded")
-        fault_ms = await exercise_fault(bus, station, check,
-                                        lambda: bit(bus, "belt.rotate"),
-                                        "belt.fault", "the belt")
-
-        # --- 4. the gate: hardware holds the coil, whatever the program says
-        struck = time.perf_counter()
-        await bus.force({"guard_a.closed": False, "guard_b.closed": False})
-        while time.perf_counter() - struck < 1.0:
-            if not bit(bus, "belt.rotate"):
-                break
-            await asyncio.sleep(0.005)
-        guard_ms = (time.perf_counter() - struck) * 1000.0
-
-        check(not bit(bus, "belt.rotate"), "opening both gate leaves stops the cell")
-        check(guard_ms <= ESTOP_LIMIT * 1000.0,
-              f"the gate stops the cell within {ESTOP_LIMIT * 1000:.0f}ms "
-              f"(took {guard_ms:.0f}ms)")
-        check(not bit(bus, "relay.k1"), "with the relay's contacts open")
-        check(not bit(bus, "relay.fault"),
-              "and no channel fault -- the two leaves opened together, which is what "
-              "cross-monitoring expects")
-
-        # Hold the start command on by hand. The controller stops asking the
-        # moment it trips, so without this "the coil is off" would say nothing
-        # about who turned it off.
-        state["force_coil"] = True
-        await asyncio.sleep(0.7)
-        check(state["coil_cmd"],
-              "with the start command deliberately held on against an open gate")
-        check(not bit(bus, "starter.coil"),
-              "the coil tag itself reads false -- the relay is holding the circuit, and "
-              "the command cannot reach the contactor")
-        check(not bit(bus, "starter.aux"), "so the contactor stays out")
-        check(not bit(bus, "belt.rotate"), "and the motor does not turn")
-        state["force_coil"] = False
-
-        await bus.force({"guard_a.closed": True, "guard_b.closed": True})
-        await asyncio.sleep(0.7)
-        check(not bit(bus, "relay.k1"),
-              "shutting the gate does not close the relay on its own -- that would be "
-              "the automatic restart guarding exists to prevent")
-        await press(bus, "panel.start")
-        await asyncio.sleep(0.5)
-        check(not bit(bus, "belt.rotate"), "and Start with the relay still open does nothing")
-
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.5)
-        check(bit(bus, "relay.k1"), "Reset closes the relay again")
-        check(not bit(bus, "belt.rotate"), "and, again, starts nothing")
-        await press(bus, "panel.start")
-        await asyncio.sleep(0.7)
-        check(bit(bus, "belt.rotate"), "Start after that Reset runs the cell")
-
-        # --- 5. one leaf on its own: cross-monitoring ------------------------
-        check(not bit(bus, "relay.fault"), "before: no channel fault")
-        await bus.force({"guard_a.closed": False})
-        await asyncio.sleep(0.15)
-        check(not bit(bus, "relay.fault"),
-              f"a channel that has only just moved is not a fault yet "
-              f"(inside the {SYNC_WINDOW:.1f}s sync window)")
-        check(not bit(bus, "belt.rotate"),
-              "but the cell is already stopped, which is the safe order")
-
-        await asyncio.sleep(1.0)
-        check(bit(bus, "relay.fault"),
-              f"one leaf still open past the {SYNC_WINDOW:.1f}s sync window latches a "
-              f"channel discrepancy -- what a welded contact looks like from the relay")
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.4)
-        check(bit(bus, "relay.fault"),
-              "a Reset while the two channels still disagree does not clear it -- you "
-              "cannot reset your way past a broken wire")
-
-        await bus.force({"guard_a.closed": True})
-        await asyncio.sleep(0.4)
-        check(bit(bus, "relay.fault"),
-              "and the fault outlives the channels agreeing again; it is latched")
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.5)
-        check(not bit(bus, "relay.fault"), "a Reset with both channels back clears it")
-        check(bit(bus, "relay.k1"), "and the same rising edge closes the contacts")
-        check(not bit(bus, "belt.rotate"), "still stopped until somebody presses Start")
-        await press(bus, "panel.start")
-        await asyncio.sleep(0.7)
-        check(bit(bus, "belt.rotate"), "Start brings the cell back")
-
-        # --- 6. production, with the mute doing its job ----------------------
-        await turn_pot(bus, MUTE_WINDOW)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - MUTE_WINDOW) < 0.01,
-              f"the mute pot reads {MUTE_WINDOW:.1f}s (got {station.setpoint:.2f})")
-
-        before_transferred = num(bus, "transferred.count")
-        before_escaped = num(bus, "line_end.count")
-        for key in ("samples", "motor_mismatch", "mid_stroke", "both_reeds",
-                    "both_coils", "fed"):
-            state[key] = 0
-        state["mute_seen"] = False
-
-        state["feeding"] = True
-        await asyncio.sleep(max(duration - 8.0, 22.0))
-        state["feeding"] = False
-        await asyncio.sleep(8.0)                 # drain: let the lane clear
-
-        transferred = int(num(bus, "transferred.count") - before_transferred)
-        escaped = int(num(bus, "line_end.count") - before_escaped)
-
-        check(transferred >= 2,
-              f"production: the cylinder really transfers cartons into the chute "
-              f"(got {transferred} from {state['fed']} fed, {escaped} past the station)")
-        check(transferred + escaped >= state["fed"] - 1,
-              f"conservation: every carton fed reached one of the two counters "
-              f"({transferred} + {escaped} against {state['fed']} fed)")
-        check(escaped <= 1,
-              f"and all but at most one went into the chute rather than off the end "
-              f"({escaped} past the station)")
-        check(bit(bus, "belt.rotate"),
-              "and the cell ran the whole window without the scanner tripping it")
-        check(state["mute_seen"],
-              "the protective field was bridged while cartons crossed it -- a scanner "
-              "nobody mutes would have stopped this line on the first carton")
-        check(state["mid_stroke"] > 0,
-              f"the rod was caught between the two reeds ({state['mid_stroke']} scans) -- "
-              f"'not extended' is not 'retracted'")
-        check(state["both_reeds"] == 0,
-              "and both reeds were never made at once, which would mean the gap is a lie")
-        check(state["both_coils"] == 0,
-              "the controller never energised both solenoids at once")
-        check(state["samples"] > 0 and state["motor_mismatch"] == 0,
-              f"belt.rotate followed starter.aux on all {state['samples']} scans -- the "
-              f"contactor runs the motor, and this program never wrote belt.rotate "
-              f"({state['motor_mismatch']} disagreements)")
-
-        # --- 7. widen the mute past the scanner's limit ---------------------
-        state["refused_at"] = None
-        state["mute_wanted_since"] = None
-        state["muted_since"] = None
-        state["max_wanted"] = state["max_muted"] = 0.0
-        await turn_pot(bus, LONG_MUTE)
-        await asyncio.sleep(0.3)
-        check(abs(station.setpoint - LONG_MUTE) < 0.01,
-              f"the pot is turned to {LONG_MUTE:.0f}s, past the scanner's own 6s limit "
-              f"(got {station.setpoint:.2f})")
-
-        began = time.perf_counter()
-        state["feeding"] = True
-        deadline = began + 35.0
-        while time.perf_counter() < deadline:
-            if not bit(bus, "belt.rotate"):
-                break
-            await asyncio.sleep(0.02)
-        trip_s = time.perf_counter() - began
-        state["feeding"] = False
-
-        if check(state["refused_at"] is not None,
-                 "the scanner stopped honouring a bridge the controller was still "
-                 "commanding -- consecutive cartons held it past the mute limit"):
-            refusal_s = state["refused_at"] - began
-
-        # The same event again as a duration, which no sampling race can
-        # flatter. A withdrawal, not a mute that never started: the scanner did
-        # bridge the field, and then took the guard back part-way through a
-        # request the controller never withdrew.
-        check(state["max_muted"] > 1.0,
-              f"the scanner did bridge the field first ({state['max_muted']:.1f}s), so "
-              f"this is a mute being withdrawn and not one that never started")
-        check(state["max_muted"] <= SCANNER_MUTE_LIMIT + 0.5,
-              f"the pot asked for a {LONG_MUTE:.0f}s bridge and the scanner gave "
-              f"{state['max_muted']:.1f}s of it before taking the guard back -- muting "
-              f"held longer than a pallet takes is muting somebody has taped on")
-        check(not bit(bus, "belt.rotate"),
-              f"and the next carton in the un-bridged field stopped the cell "
-              f"({trip_s:.1f}s after the pot was widened)")
-        await asyncio.sleep(0.3)
-        check(bit(bus, "panel.red"), "with the panel's red lamp lit")
-
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.4)
-        check(not bit(bus, "belt.rotate"),
-              "a Reset with a carton still standing in the field does not bring it back "
-              "-- the field has to be clear first, and a stopped belt cannot clear it")
-
-        # The way out, and the reason a taped-on mute is tempting: a fresh,
-        # deliberate bridge, long enough to run the trapped carton clear.
-        await turn_pot(bus, MUTE_WINDOW)
-        await bus.force({"scanner.mute": True})
-        await asyncio.sleep(0.5)
-        await press(bus, "panel.reset", hold=0.4)
-        await asyncio.sleep(0.3)
-        await press(bus, "panel.start")
-        await asyncio.sleep(1.0)
-        check(bit(bus, "belt.rotate"),
-              "one deliberate bridge, with the window back where it belongs, runs the "
-              "trapped carton out")
-        await asyncio.sleep(3.0)
-        await bus.force(clear=["scanner.mute"])
-        await asyncio.sleep(1.0)
-        check(bit(bus, "belt.rotate"),
-              "and the cell keeps running once the field is genuinely clear again")
-
-        # Drain before the quiet check. The chute is gravity-fed, so a carton
-        # the cylinder pushed a second before Stop is still sliding when the
-        # belt has already stopped -- and it lands in the remover afterwards,
-        # which looks exactly like a line that did not stop. Let the lane empty
-        # first, and then "the counter stopped moving" means what it says.
-        await asyncio.sleep(8.0)
-
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: bit(bus, "belt.rotate"), "transferred.count")
-    finally:
-        stop_event.set()
-        await task
-        await bus.force(clear=["panel.setpoint", "guard_a.closed", "guard_b.closed",
-                               "scanner.mute", *station.faults])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"transferred={transferred} escaped={escaped} "
-          f"mute={MUTE_WINDOW:.1f}s refused={refusal_s:.1f}s tripped={trip_s:.1f}s "
-          f"estop={estop_ms:.0f}ms fault={fault_ms:.0f}ms gate={guard_ms:.0f}ms")
-    if refusal_s >= 0:
-        print(f"       the pot went from {MUTE_WINDOW:.1f}s to {LONG_MUTE:.0f}s and the "
-              f"scanner stopped honouring the bridge {refusal_s:.1f}s later, with "
-              f"scanner.mute still high. The cell stopped {trip_s:.1f}s in. A mute "
-              f"without a limit would have kept the guard bridged for the rest of "
-              f"the shift and told you nothing.")
-    return not check.problems, "; ".join(check.problems)
-
-
-async def drive_batch_dosing(bus: TagBusClient, duration: float, verbose: bool) -> tuple[bool, str]:
-    """Two loops, one inside the other, and a batch that ends on litres.
-
-    The pump is the first actuator here whose command is not its effect.
-    `pump.speed` is a reference; what the pump *delivers* is a flow, and the
-    flow meter is the only thing that knows. That gap is what makes a cascade
-    worth building and what makes a failed pump hard to see, and this exercise
-    measures both rather than asserting them:
-
-    * **The inner loop is fast and the outer one is slow.** The flow loop
-      reaches its setpoint in well under a second; the tank level takes the
-      whole batch to move ten percent. Both numbers are printed, because "flow
-      is faster than level" is the entire reason to put one loop inside the
-      other and it is worth seeing as a ratio.
-
-    * **The batch ends on a quantity.** The same recipe is run twice, at full
-      dose rate and at half, and it delivers the same litres in about twice the
-      time. A batch timed in seconds would have delivered half of it -- the
-      same lesson the accumulation buffer teaches with encoder pulses, in the
-      units a process line actually uses.
-
-    * **The inner loop is the alarm.** Failing the pump mid-dose leaves
-      `pump.speed` reading exactly what the controller commanded while
-      `meter.rate` collapses. The flow loop calls it in two seconds; the tank
-      level has not moved a whole percent by then.
-
-    Mirrors BatchDosingProfile, with one difference: the profile begins a new
-    batch on a Start press after the last one finished, and this reaches in and
-    sets the phase directly, because a test rig that wants four batches in a
-    row should not have to wait for a transfer it is not measuring.
-    """
-    FAST_RATE = 110.0           # L/min, the dose rate; the pump is rated 120
-    SLOW_RATE = 55.0            # the same recipe, half as fast
-    CREEP_LITRES = 4.0          # the approach: taper over the last few litres
-    CREEP_FLOOR = 0.25
-    KP, KI = 0.25, 1.0          # the inner flow loop, mostly integral
-    NO_FLOW_SECONDS = 2.0
-    NO_FLOW_FRACTION = 0.3
-    BATCH = 20.0                # the recipe, in litres
-    BIG_BATCH = 60.0            # long enough to survive the interlock sequence
-    CAPACITY = 200.0            # the tank's own, from the scene file
-
-    check = Checks(verbose)
-    state = {
-        "phase": "zeroing", "speed": 0.0, "integral": 0.0, "dry_for": 0.0,
-        "level_at_start": 0.0, "level_end": 0.0, "no_flow": False,
-        "dose_rate": FAST_RATE, "flow_sp": 0.0,
-        "dose_began": None, "rise_at": None, "done_at": None,
-    }
-
-    async def tick(dt: float) -> None:
-        s = state
-        now = time.perf_counter()
-
-        reset_level = bit(bus, "panel.reset")
-        edges = station.scan()
-        if reset_level:
-            s["no_flow"] = False
-        if s["no_flow"]:
-            station.running = False
-
-        target = station.setpoint
-        total = num(bus, "meter.total")
-        rate = num(bus, "meter.rate")
-        level = num(bus, "tank.level")
-
-        # Start on a finished batch starts the next one. Taken before the phase
-        # machine runs, so "complete" does not stop the line on the same scan
-        # the operator asked for another batch.
-        if edges["start"] and s["phase"] == "complete" and not s["no_flow"]:
-            s["phase"] = "zeroing"
-
-        running = station.running and not s["no_flow"]
-        zeroing = dosing = draining = False
-
-        if s["phase"] == "zeroing":
-            # Hold the totaliser's reset and wait for it to actually read zero.
-            # It is a level, not an edge, so holding it is how you zero it --
-            # and waiting for the readback is how you know this batch counts
-            # from zero rather than from what the last one left.
-            zeroing = True
-            if running and total <= 0.0:
-                s["phase"] = "dosing"
-                s["level_at_start"] = level
-                s["integral"] = 0.0
-                s["dose_began"] = now
-                s["rise_at"] = None
-        elif s["phase"] == "dosing":
-            # A Stop mid-dose suspends; Start resumes the same batch, because
-            # the totaliser kept the litres already delivered.
-            dosing = running
-            if total >= target:
-                s["phase"] = "transferring"
-                s["done_at"] = now
-                s["level_end"] = level
-        elif s["phase"] == "transferring":
-            draining = running
-            if level <= s["level_at_start"] + 0.5:
-                s["phase"] = "complete"
-        else:
-            station.running = False
-
-        # --- the inner loop --------------------------------------------------
-        flow_sp = 0.0
-        if dosing:
-            remaining = max(target - total, 0.0)
-            taper = 1.0 if remaining >= CREEP_LITRES else max(remaining / CREEP_LITRES,
-                                                              CREEP_FLOOR)
-            flow_sp = s["dose_rate"] * taper
-            error = flow_sp - rate
-            # Integrate only off the stops. Winding up against a saturated pump
-            # would carry the batch straight past its number on the way down.
-            if 0.5 < s["speed"] < 99.5:
-                s["integral"] = min(max(s["integral"] + error * KI * dt, -100.0), 100.0)
-            s["speed"] = min(max(error * KP + s["integral"], 0.0), 100.0)
-            if s["rise_at"] is None and flow_sp > 0 and rate >= flow_sp * 0.9:
-                s["rise_at"] = now
-        else:
-            s["speed"] = 0.0
-            s["integral"] = 0.0
-        s["flow_sp"] = flow_sp
-
-        # --- no flow, seen from the inner loop ---------------------------------
-        if dosing and s["speed"] > 50.0 and rate < flow_sp * NO_FLOW_FRACTION:
-            s["dry_for"] += dt
-        else:
-            s["dry_for"] = 0.0
-        if s["dry_for"] >= NO_FLOW_SECONDS:
-            s["no_flow"] = True
-            s["dry_for"] = 0.0
-
-        lamps = station.lamps()
-        if s["no_flow"]:
-            lamps["panel.red"] = True
-            lamps["tower.red"] = True
-            lamps["tower.yellow"] = False
-
-        await write_present(bus, {
-            "meter.reset": zeroing,
-            "pump.run": dosing,
-            "pump.speed": s["speed"],
-            "tank.fill": 0.0,
-            "tank.drain": 100.0 if draining else 0.0,
-            "flow_gauge.value": rate,
-            "total_display.value": round(total),
-            "level_readout.value": round(level),
-            **lamps,
-        })
-
-    station = Station(bus)
-    stop_event, task = controller(tick)
-    estop_ms = -1.0
-    fast_l = slow_l = 0.0
-    fast_s = slow_s = rise_s = -1.0
-    level_rise = 0.0
-    alarm_s = level_moved = -1.0
-
-    async def begin_batch(litres: float, rate: float) -> None:
-        """Set up a fresh batch and press Start."""
-        await press(bus, "panel.stop")
-        await asyncio.sleep(0.3)
-        state["dose_rate"] = rate
-        state["done_at"] = None
-        state["phase"] = "zeroing"
-        await turn_pot(bus, litres)
-        await asyncio.sleep(0.3)
-        await press(bus, "panel.start")
-
-    async def wait_dose(budget: float) -> bool:
-        deadline = time.perf_counter() + budget
-        while time.perf_counter() < deadline:
-            if state["done_at"] is not None:
-                return True
-            await asyncio.sleep(0.02)
-        return False
-
-    def dose_seconds() -> float:
-        """How long the dose took, or -1 if it never finished. Subtracting two
-        perf_counter stamps when one of them is a default gives a number in the
-        tens of thousands, and a failing run should report that it did not
-        finish rather than that it took a day."""
-        if state["done_at"] is None or state["dose_began"] is None:
-            return -1.0
-        return state["done_at"] - state["dose_began"]
-
-    try:
-        budget = max(duration, 40.0)
-
-        # --- 1. the operator contract, mid-dose ------------------------------
-        #
-        # The pot is at its stop for this leg so the batch cannot finish while
-        # the mushroom is being struck -- a line that stopped itself halfway
-        # through the interlock sequence would pass every check for the wrong
-        # reason.
-        await turn_pot(bus, BIG_BATCH)
-        await asyncio.sleep(0.3)
-        estop_ms = await exercise_interlocks(bus, station, check,
-                                             lambda: num(bus, "pump.speed") > 1.0,
-                                             "the pump")
-        await asyncio.sleep(1.5)
-        check(num(bus, "meter.rate") > 20.0,
-              f"running: the meter reads a real flow and not just a command "
-              f"({num(bus, 'meter.rate'):.0f} L/min against {num(bus, 'pump.speed'):.0f} % "
-              f"speed)")
-        await check_quiet_after_stop(bus, station, check,
-                                     lambda: num(bus, "pump.speed") > 1.0, "meter.total")
-
-        # --- 2. a batch, and the two speeds that make a cascade --------------
-        await begin_batch(BATCH, FAST_RATE)
-        check(await wait_dose(budget), f"a {BATCH:.0f} L batch finishes inside its budget")
-        fast_l = num(bus, "meter.total")
-        fast_s = dose_seconds()
-        level_rise = state["level_end"] - state["level_at_start"]
-        rise_s = (state["rise_at"] - state["dose_began"]
-                  if state["rise_at"] and state["dose_began"] else -1.0)
-
-        check(abs(fast_l - BATCH) <= 2.0,
-              f"the batch ends on the number: {fast_l:.0f} L against a {BATCH:.0f} L pot")
-        expected = BATCH / CAPACITY * 100.0
-        check(abs(level_rise - expected) <= 2.0,
-              f"and the tank agrees -- {BATCH:.0f} L into a {CAPACITY:.0f} L tank is "
-              f"{expected:.0f} % of level, and the level rose {level_rise:.1f} %. That is "
-              f"an instrument that is not the meter, so the meter is not marking its own "
-              f"homework")
-        check(0.0 < rise_s < 3.0,
-              f"the inner flow loop reached its setpoint in {rise_s:.2f}s")
-        check(rise_s > 0.0 and fast_s > rise_s * 4.0,
-              f"while the outer variable took {fast_s:.1f}s to move its "
-              f"{expected:.0f} % -- {(fast_s / rise_s) if rise_s > 0 else -1:.0f} times longer, which "
-              f"is the whole condition for putting one loop inside the other")
-
-        # --- 3. the same recipe, half as fast --------------------------------
-        await begin_batch(BATCH, SLOW_RATE)
-        check(await wait_dose(budget * 1.5),
-              f"the same batch at {SLOW_RATE:.0f} L/min finishes too")
-        slow_l = num(bus, "meter.total")
-        slow_s = dose_seconds()
-
-        check(abs(slow_l - BATCH) <= 2.0,
-              f"at half the dose rate it still ends on the number ({slow_l:.0f} L)")
-        check(abs(slow_l - fast_l) <= 2.0,
-              f"the same litres as the fast run ({slow_l:.0f} against {fast_l:.0f})")
-        check(fast_s > 0.0 and slow_s > fast_s * 1.6,
-              f"in about twice the time ({slow_s:.1f}s against {fast_s:.1f}s) -- which is "
-              f"exactly what a batch timed in seconds would have got wrong")
-
-        # --- 4. the totaliser's reset is a level, not an edge ----------------
-        await begin_batch(BIG_BATCH, FAST_RATE)
-        await asyncio.sleep(4.0)
-        counting = num(bus, "meter.total")
-        check(counting > 3.0, f"a batch is counting up ({counting:.0f} L)")
-
-        held = time.perf_counter()
-        await bus.force({"meter.reset": True})
-        await asyncio.sleep(0.6)
-        check(num(bus, "meter.total") == 0,
-              "holding the totaliser's reset zeroes it")
-        check(num(bus, "meter.rate") > 20.0,
-              f"while the flow is still there ({num(bus, 'meter.rate'):.0f} L/min) -- the "
-              f"reset zeroes the count, not the pump")
-        await asyncio.sleep(2.5)
-        uncounted = num(bus, "meter.rate") * (time.perf_counter() - held) / 60.0
-        check(num(bus, "meter.total") == 0,
-              f"and a reset HELD high holds it at zero -- it is a level, like a counter's "
-              f"own reset, not an edge. About {uncounted:.0f} L went past uncounted, and a "
-              f"program that pulsed it and expected the total to stay cleared has misread "
-              f"the contact")
-        await bus.force(clear=["meter.reset"])
-        await asyncio.sleep(1.5)
-        check(num(bus, "meter.total") > 0.0,
-              f"releasing it lets the totaliser count again "
-              f"({num(bus, 'meter.total'):.0f} L)")
-
-        # --- 5. a dry pump, and which loop notices ---------------------------
-        level_before = num(bus, "tank.level")
-        raised = time.perf_counter()
-        await bus.force({"pump.fault": True})
-        await asyncio.sleep(0.8)
-
-        check(num(bus, "meter.rate") < 5.0,
-              f"a failed pump delivers nothing ({num(bus, 'meter.rate'):.1f} L/min)")
-        check(num(bus, "pump.flow") < 1.0, "and reports no flow of its own")
-        check(num(bus, "pump.speed") > 40.0,
-              f"while the speed reference still reads what the controller commanded "
-              f"({num(bus, 'pump.speed'):.0f} %) -- the command and the plant disagree, "
-              f"and the command is the half that looks fine")
-
-        total_before = num(bus, "meter.total")
-        while time.perf_counter() - raised < 8.0:
-            if bit(bus, "panel.red"):
-                break
-            await asyncio.sleep(0.02)
-        alarm_s = time.perf_counter() - raised
-        level_moved = abs(num(bus, "tank.level") - level_before)
-
-        check(bit(bus, "panel.red"),
-              f"the flow loop calls it: no-flow alarm {alarm_s:.1f}s after the pump failed")
-        check(level_moved < 1.0,
-              f"and it called it while the tank level had moved {level_moved:.2f} % -- the "
-              f"outer loop would have taken minutes to notice, which is the other reason "
-              f"to close a loop around the flow")
-        check(num(bus, "meter.total") <= total_before + 1.0,
-              f"the totaliser stopped where it was ({num(bus, 'meter.total'):.0f} L)")
-
-        # Reset does not fix a pump.
-        await press(bus, "panel.reset")
-        await asyncio.sleep(0.4)
-        check(not bit(bus, "panel.red"), "Reset clears the alarm")
-        await press(bus, "panel.start")
-        rearm = time.perf_counter()
-        while time.perf_counter() - rearm < 9.0:
-            if bit(bus, "panel.red"):
-                break
-            await asyncio.sleep(0.02)
-        check(bit(bus, "panel.red"),
-              f"and the alarm comes straight back {time.perf_counter() - rearm:.1f}s later "
-              f"-- a reset does not fix a pump")
-
-        await bus.force(clear=["pump.fault"])
-        await press(bus, "panel.reset")
-        await asyncio.sleep(0.4)
-        await turn_pot(bus, BATCH)
-        await press(bus, "panel.start")
-        await asyncio.sleep(2.0)
-        check(not bit(bus, "panel.red"), "with the pump working again the alarm stays out")
-        check(num(bus, "meter.rate") > 20.0,
-              f"and the dose resumes where the totaliser left it "
-              f"({num(bus, 'meter.rate'):.0f} L/min)")
-        state["done_at"] = None
-        check(await wait_dose(budget),
-              f"the interrupted batch still finishes on its number "
-              f"({num(bus, 'meter.total'):.0f} L against a {BATCH:.0f} L pot)")
-    finally:
-        stop_event.set()
-        await task
-        await bus.write_many({"pump.run": False, "pump.speed": 0.0,
-                              "tank.fill": 0.0, "tank.drain": 0.0})
-        await bus.force(clear=["panel.setpoint", "meter.reset", "pump.fault"])
-
-    print(f"RESULT sequence={'PASS' if not check.problems else 'FAIL'} "
-          f"fast={fast_l:.0f}L@{fast_s:.1f}s slow={slow_l:.0f}L@{slow_s:.1f}s "
-          f"rise={rise_s:.2f}s level=+{level_rise:.1f}% "
-          f"noflow={alarm_s:.1f}s@{level_moved:.2f}% estop={estop_ms:.0f}ms")
-    if fast_s > 0 and slow_s > 0:
-        print(f"       the same {BATCH:.0f} L recipe: {fast_l:.0f} L in {fast_s:.1f}s at "
-              f"{FAST_RATE:.0f} L/min, {slow_l:.0f} L in {slow_s:.1f}s at "
-              f"{SLOW_RATE:.0f} L/min. A batch timed in seconds would have delivered half "
-              f"the second time. The flow loop settled in {rise_s:.2f}s and the level took "
-              f"{fast_s:.1f}s to move {level_rise:.1f} % -- that ratio is the cascade.")
-    return not check.problems, "; ".join(check.problems)
 
 
 async def drive_palletising_cell(bus: TagBusClient, duration: float,
@@ -2985,7 +1739,7 @@ async def drive_palletising_cell(bus: TagBusClient, duration: float,
                                              lambda: bit(bus, "infeed.run"),
                                              "the infeed drive command")
 
-        await press(bus, "panel.start")
+        await operator_press(bus, "panel.start")
         await asyncio.sleep(1.5)
         check.note(f"production begins: running={station.running} "
                    f"step={state['step']} geom={state['geom']}")
@@ -3044,7 +1798,7 @@ async def drive_palletising_cell(bus: TagBusClient, duration: float,
         # Stop the line and take the pattern the rest of the way by hand. Filling
         # a three-layer pallet a carton at a time would be a two-minute run; what
         # is being checked is the station's refusal, not the arm's patience.
-        await press(bus, "panel.stop")
+        await operator_press(bus, "panel.stop")
         await asyncio.sleep(0.3)
         for _ in range(24):
             await bus.write_many({"pallet.index": True})
@@ -3120,69 +1874,184 @@ async def drive_palletising_cell(bus: TagBusClient, duration: float,
     return not check.problems, "; ".join(check.problems)
 
 
-DRIVERS = {
-    "sorting-by-height": drive_sorting_by_height,
-    "start-stop-station": drive_start_stop_station,
-    "tank-level-control": drive_tank_level_control,
-    "light-curtain-sorting": drive_light_curtain_sorting,
-    "roller-line-weighing": drive_roller_line_weighing,
-    "pick-and-place-cell": drive_pick_and_place_cell,
-    "heat-treat-station": drive_heat_treat_station,
-    "accumulation-buffer": drive_accumulation_buffer,
-    "guarded-cell": drive_guarded_cell,
-    "batch-dosing": drive_batch_dosing,
-    "palletising-cell": drive_palletising_cell,
-}
+SOLVERS = {"palletising-cell": drive_palletising_cell}
 
-#: The *production* window, not the whole run: every scene now runs the shared
-#: operator sequence first (~7s) and a setpoint demonstration after, so the wall
-#: clock is longer than the number here. Long enough for a real cycle, not just
-#: to prove the line is wired, and every one ends with a drain phase -- feeding
-#: stops and the lane clears -- so counters can be checked for conservation
-#: rather than just for having moved.
-DEFAULT_DURATION = {
-    "sorting-by-height": 35.0,    # long enough for both pot settings to sort
-    "start-stop-station": 30.0,   # budget for the batch, not a fixed run length
-    "tank-level-control": 50.0,   # two setpoints, half the budget each
-    "light-curtain-sorting": 28.0,
-    "roller-line-weighing": 30.0,
-    "pick-and-place-cell": 34.0,   # several full gantry cycles, not just one
-    "heat-treat-station": 50.0,    # the P-only offset, then PI closing it
-    # Two accumulate-and-release cycles plus their drains, and the drains are
-    # most of it: a released carton has two metres to travel before the remover
-    # can count it.
-    "accumulation-buffer": 95.0,
-    # The production window only. The guarding sequence in front of it is the
-    # long part -- power-up, the shared operator contract, a drive fault, the
-    # gate, and a channel discrepancy, each of which has to be watched for a
-    # second or two rather than sampled once.
-    "guarded-cell": 34.0,
-    # Not a production window here but a per-batch budget: this scene's legs
-    # each end on their own condition -- a batch reaching its number, an alarm
-    # being raised -- rather than on a clock.
-    "batch-dosing": 40.0,
-    # A layer is six cartons and an arm cycle is about seven seconds -- pick,
-    # lift, swing, align, place, retreat, all waiting on axis feedback rather
-    # than on a clock. Long enough for a layer to complete and the pattern to
-    # wrap onto the next one, which is the thing being checked.
-    "palletising-cell": 60.0,
-}
+#: Its production window: a layer is six cartons and an arm cycle is about
+#: seven seconds -- pick, lift, swing, align, place, retreat, all waiting on
+#: axis feedback rather than on a clock. Long enough for a layer to complete
+#: and the pattern to wrap onto the next one, which is the thing being checked.
+DEFAULT_DURATION = {"palletising-cell": 60.0}
 
 
-async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bool) -> int:
+# =====================================================================
+#  Coverage: every scene in the manifest is one of three things
+# =====================================================================
+#
+# A graded scene has a `TRIALS` entry: the grader's `good` reference on the
+# engine, and what "completes" means there. An ungraded scene has a controller
+# of its own in `SOLVERS`. A scene that can have neither yet is named here,
+# with the reason, and `tools/test_plan.py` section H reports it as SKIP with
+# that reason -- visibly, and only for as long as the entry stays. A manifest
+# scene in none of the three fails H: a new scene cannot be skipped by being
+# forgotten.
+#
+# Today this is empty. A graded scene belongs in TRIALS, not here; this is for
+# a scene whose engine side cannot run headless at all, and the entry should
+# say what would have to change for it to leave.
+EXEMPT: dict[str, str] = {}
+
+#: The exit code for an EXEMPT scene: neither a pass (0) nor a failure (1).
+EXIT_EXEMPT = 3
+
+
+def trace(bus: Recorder) -> None:
+    """Every tag's story in one line each, for `--trace`: how a measure is
+    designed, and how a failing one is read."""
+    print("  examiner: " + (", ".join(f"{at:.1f}s {what}" for at, what in bus.events) or "nothing"))
+    for tag in sorted(bus.table, key=lambda t: (t.kind, t.id)):
+        series = bus.series(tag.id)
+        if not series:
+            continue
+        values = [v for _, v in series]
+        if tag.type == "bit":
+            detail = (f"rises={len(bus.rises(tag.id, -math.inf))} "
+                      f"true={bus.seconds_where(tag.id, bool, 0.0):.1f}s")
+        else:
+            numbers = [float(v) for v in values]
+            detail = (f"first={numbers[0]:.4g} last={numbers[-1]:.4g} "
+                      f"min={min(numbers):.4g} max={max(numbers):.4g}")
+        print(f"  {tag.kind:6s} {tag.id:26s} changes={len(series) - 1:<5d} {detail}")
+
+
+async def run_reference(bus: Recorder, scene_id: str, kind: str, trial: Trial,
+                        duration: float, verbose: bool, show_trace: bool,
+                        save: str | None = None) -> tuple[bool, str]:
+    """Drive the connected engine with the grader's `kind` reference for
+    `duration` seconds, the examiner at the panel, and measure the result.
+
+    The controller is attached the way `grading.core.start_reference` attaches
+    one -- the same function, the same client, and the same `controller`
+    report saying it has reached its PLC (IP-30) -- except that the bus is this
+    file's `Recorder`, because the examiner and the measure need it too, and
+    the engine serves one sidecar at a time.
+    """
+    from factoryforge_sidecar.grading import registry     # noqa: PLC0415 — reads templates
+
+    controller = registry.reference_for(scene_id, kind)
+    if controller is None:
+        return False, f"{scene_id} has no {kind!r} reference controller"
+
+    # A write computed before the describe hooks finish is dropped by design
+    # (HP-33), which is harmless on the wall clock -- the next scan writes it
+    # again -- but waiting costs nothing and makes the first scan count.
+    await asyncio.wait_for(bus.rebuilt.wait(), timeout=15)
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(controller(bus, stop))
+    await bus.controller_link(f"reference:{kind}", True,
+                              f"built-in {kind!r} reference controller (try_scene.py)")
+    bus.open()
+    examiner = Examiner(bus)
+    exam = asyncio.create_task(examiner.run(trial.steps))
+    try:
+        # The controller is somebody else's code: if it dies, say so rather
+        # than measure a plant nobody was driving.
+        deadline = time.perf_counter() + duration
+        while time.perf_counter() < deadline:
+            if task.done():
+                problem = task.exception() if not task.cancelled() else "cancelled"
+                return False, f"the {kind!r} reference stopped at {bus.now():.1f}s: {problem!r}"
+            if exam.done() and exam.exception() is not None:
+                return False, f"the examiner failed at {bus.now():.1f}s: {exam.exception()!r}"
+            await asyncio.sleep(0.25)
+        bus.close()
+    finally:
+        exam.cancel()
+        stop.set()
+        task.cancel()
+        for pending in (exam, task):
+            try:
+                await asyncio.wait_for(pending, timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
+        await examiner.let_go()
+
+    if save:
+        bus.dump(save)
+    return report(bus, scene_id, kind, trial, verbose, show_trace)
+
+
+def report(bus: Recorder, scene_id: str, kind: str, trial: Trial,
+           verbose: bool, show_trace: bool) -> tuple[bool, str]:
+    """Measure a finished run and print its RESULT line."""
+    checks = trial.measure(bus)
+    if verbose or show_trace:
+        for ok, what in checks:
+            print(f"  {'ok' if ok else 'FAIL'}  {what}")
+    if show_trace:
+        trace(bus)
+    pace = bus.pace()
+    failed = [what for ok, what in checks if not ok]
+    # One line, so test_plan's H can quote it: what was measured, not a count
+    # of checks. Each measure puts its headline number first.
+    print(f"RESULT {'PASS' if not failed else 'FAIL'} {scene_id} reference={kind} "
+          f"{checks[0][1] if checks else 'no checks'}"
+          + (f" | engine pace {pace:.2f}x" if pace is not None else ""))
+    if pace is not None and pace < 0.9:
+        print(f"       note: the engine ran at {pace:.2f}x real time on this machine, "
+              f"so the controller's clock and the plant's disagreed; a failure "
+              f"here may be the machine, not the scene")
+    return not failed, "; ".join(failed)
+
+
+def _quiet_close(loop, context) -> None:
+    """A websocket closed at teardown leaves a finished receive task nobody
+    awaits, which asyncio reports as a traceback on the way out -- noise on
+    top of the RESULT line a reader is looking for. Everything else is
+    reported as usual."""
+    import websockets     # noqa: PLC0415 — the sidecar already depends on it
+    if isinstance(context.get("exception"), websockets.exceptions.ConnectionClosed):
+        return
+    loop.default_exception_handler(context)
+
+
+async def run_scene(godot: str, entry: dict, args) -> int:
+    asyncio.get_running_loop().set_exception_handler(_quiet_close)
     scene_id = entry["id"]
-    run_duration = duration if duration is not None else DEFAULT_DURATION[scene_id]
+    trial = TRIALS.get(scene_id)
+    solver = SOLVERS.get(scene_id)
+    reference = args.reference or "good"
+    if scene_id in EXEMPT:
+        print(f"RESULT EXEMPT {scene_id}: {EXEMPT[scene_id]}")
+        return EXIT_EXEMPT
+    if trial is None and solver is None:
+        print(f"RESULT no trial for {scene_id!r}: a graded scene needs an entry in "
+              f"TRIALS (what 'completes' means on the engine), an ungraded one a "
+              f"controller in SOLVERS, and a scene that can have neither yet a "
+              f"reason in EXEMPT")
+        return 1
+    if solver is not None and args.reference:
+        print(f"RESULT {scene_id!r} has no grader reference; --reference does not apply")
+        return 1
+    duration = args.duration if args.duration is not None else (
+        trial.duration if trial is not None else DEFAULT_DURATION[scene_id])
 
+    bus_url = f"ws://127.0.0.1:{PORT}/tagbus"
     eng: Engine | None = None
+
+    def fresh_bus() -> TagBusClient:
+        return Recorder(bus_url) if trial is not None else TagBusClient(bus_url)
 
     if port_listening():
         # Something is already on the port -- most likely the windowed engine
         # a "Try this scene" button in the editor itself would be talking to
         # (UX-31). Attach to it rather than refusing outright: a real PLC
         # test tool that insists on starting its own engine could never be
-        # pressed from inside the one already open on screen.
+        # pressed from inside the one already open on screen. Every measure
+        # below is taken from the moment of attaching, so a scene that has
+        # been running for a while is measured on what happens from now.
         try:
-            bus, runner = await connect(timeout=5)
+            bus, runner = await connect(fresh_bus(), timeout=5)
         except (asyncio.TimeoutError, RuntimeError) as exc:
             print(f"RESULT port {PORT} is already in use, and connecting to it failed too: {exc}")
             return 1
@@ -3194,15 +2063,14 @@ async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bo
             return 1
         print(f"Attached to the already-running engine (scene {bus.scene!r}, {len(bus.table)} tags)")
     else:
-        # Deliberately *not* --deterministic, even for sorting-by-height.
-        # Two reasons, and only the second one survives now that the
-        # deterministic scene has a panel of its own: this runs the line the
-        # way a user actually opens it, and an exact count needs a belt that
-        # runs for a fixed length of time -- which is precisely what pressing
-        # Stop and striking an E-stop mid-run takes away. tall=5/short=5 stays
-        # in tools/drive_engine.py, the tool written for it (OP-03).
-        print(f"Starting engine for '{entry['title']}'...")
-        eng = Engine(godot, entry)
+        # Deliberately *not* --deterministic, even for sorting-by-height: this
+        # runs the line the way a user opens it, on real physics, which is the
+        # whole point of checking the grader's controller against it.
+        # tall=5/short=5 stays in tools/drive_engine.py, the tool written for
+        # that (OP-03).
+        print(f"Starting engine for '{entry['title']}'"
+              + (f" from {args.scene_file}" if args.scene_file else "") + "...")
+        eng = Engine(godot, entry, args.scene_file)
 
         why = await wait_for_port(20.0, eng.proc)
         if why is not None:
@@ -3212,7 +2080,7 @@ async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bo
             return 1
 
         try:
-            bus, runner = await connect()
+            bus, runner = await connect(fresh_bus())
         except (asyncio.TimeoutError, RuntimeError) as exc:
             print(f"RESULT could not connect: {exc}")
             print(eng.tail())
@@ -3227,7 +2095,12 @@ async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bo
         print(f"connected to scene {bus.scene!r}, {len(bus.table)} tags")
 
     try:
-        ok, problem = await DRIVERS[scene_id](bus, run_duration, verbose)
+        if trial is not None:
+            print(f"driving it with the grader's {reference!r} reference for {duration:g}s")
+            ok, problem = await run_reference(bus, scene_id, reference, trial, duration,
+                                              args.verbose, args.trace, args.save)
+        else:
+            ok, problem = await solver(bus, duration, args.verbose)
         if ok:
             print(f"PASS — {entry['title']}")
         else:
@@ -3235,6 +2108,10 @@ async def run_scene(godot: str, entry: dict, duration: float | None, verbose: bo
         return 0 if ok else 1
     finally:
         runner.cancel()
+        try:
+            await asyncio.wait_for(runner, timeout=5)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
         if eng is not None:
             eng.stop()
 
@@ -3243,17 +2120,42 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scene", help="manifest id, e.g. sorting-by-height (see --list)")
+    parser.add_argument("--reference", default=None,
+                        help="which of the scene's grader references to drive it with "
+                             "(default: good). A wrong one should FAIL here")
+    parser.add_argument("--scene-file", default=None,
+                        help="open this scene file in the engine instead of the "
+                             "scene's template; the reference still reads the template")
     parser.add_argument("--duration", type=float, default=None,
-                        help="seconds to run before checking (default varies per scene)")
-    parser.add_argument("--verbose", action="store_true", help="print progress while running")
+                        help="seconds to run before measuring (default: the scene's own)")
+    parser.add_argument("--verbose", action="store_true", help="print every check")
+    parser.add_argument("--trace", action="store_true",
+                        help="also print every tag's timeline summary and the examiner's steps")
+    parser.add_argument("--save", metavar="FILE", default=None,
+                        help="keep the run's timeline in FILE (JSON)")
+    parser.add_argument("--replay", metavar="FILE", default=None,
+                        help="measure a timeline kept with --save again, with no engine")
     parser.add_argument("--list", action="store_true", help="list scene ids and exit")
     args = parser.parse_args(argv)
+
+    if args.replay:
+        bus = Recorder.load(args.replay)
+        trial = TRIALS.get(bus.scene)
+        if trial is None:
+            print(f"RESULT no trial for {bus.scene!r}")
+            return 1
+        ok, problem = report(bus, bus.scene, args.reference or "(replayed)", trial,
+                             args.verbose, args.trace)
+        return 0 if ok else 1
 
     manifest = load_manifest()
 
     if args.list:
         for entry in manifest:
-            print(f"{entry['id']:24s} {entry['title']}")
+            how = ("grader reference" if entry["id"] in TRIALS
+                   else "own controller" if entry["id"] in SOLVERS
+                   else "exempt" if entry["id"] in EXEMPT else "NO TRIAL")
+            print(f"{entry['id']:24s} {entry['title']}  [{how}]")
         return 0
 
     if not args.scene:
@@ -3265,8 +2167,8 @@ def main(argv: list[str]) -> int:
         print(f"RESULT unknown scene {args.scene!r} -- known ids: {ids}")
         return 1
 
-    if entry["id"] not in DRIVERS:
-        print(f"RESULT no driver for {entry['id']!r} yet")
+    if args.scene_file and not Path(args.scene_file).is_file():
+        print(f"RESULT no such scene file: {args.scene_file}")
         return 1
 
     godot = find_godot()
@@ -3274,7 +2176,7 @@ def main(argv: list[str]) -> int:
         print("RESULT could not find a Godot .NET binary -- set $GODOT or put it on PATH")
         return 1
 
-    return asyncio.run(run_scene(godot, entry, args.duration, args.verbose))
+    return asyncio.run(run_scene(godot, entry, args))
 
 
 if __name__ == "__main__":

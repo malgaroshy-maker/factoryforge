@@ -957,6 +957,11 @@ def section_h() -> None:
     # The spike behind UX-10 proved templates simulate headless with no
     # renderer, so this needs no display -- unlike D, which is gated behind
     # --gui.
+    #
+    # Every scene in the manifest, so a new one cannot be skipped by being
+    # forgotten: a graded scene is driven by the grader's own `good` reference
+    # controller (IP-20) and must complete by its engine-side measure, and a
+    # scene with no trial in try_scene.py fails here and says so.
     manifest = json.loads((ENGINE / "templates" / "manifest.json").read_text(encoding="utf-8"))
     for i, entry in enumerate(manifest, start=1):
         scene_id = entry["id"]
@@ -967,14 +972,11 @@ def section_h() -> None:
             record(f"H{i}", f"{scene_id}: try_scene.py drives it to a real PASS", False,
                    f"port {BUS_PORT} still held from a previous check")
             continue
-        # 210s, not 90: the longest exercises in the set are long because the
-        # plant is, not because the harness is slow. The heat-treat run holds a
-        # first-order plant steady twice -- once with the integral term off to
-        # measure the offset, once with it on to show it close -- and the
-        # accumulation buffer spends most of its run waiting for released
-        # cartons to travel two metres to the counter, twice.
+        # The longest runs are 80 s of plant (the cooling tunnel's three-step
+        # recipe, the buffer's releases), plus the engine's start; 180 s is a
+        # liveness bound, not a budget anybody is expected to need.
         code, out = run([sys.executable, str(ROOT / "tools" / "try_scene.py"),
-                         "--scene", scene_id], timeout=210)
+                         "--scene", scene_id], timeout=180)
         # try_scene.py's own PASS/FAIL line carries an em dash, which a
         # subprocess piped on Windows can mangle in transit -- exit code
         # alone is the authoritative pass/fail signal (that convention is
@@ -982,7 +984,12 @@ def section_h() -> None:
         # line this pulls for detail is plain ASCII.
         match = re.search(r"^RESULT .+$", out, re.M)
         detail = match.group(0)[len("RESULT "):] if match else (out.strip().splitlines()[-1] if out.strip() else "no output")
-        record(f"H{i}", f"{scene_id}: try_scene.py drives it to a real PASS", code == 0, detail)
+        # try_scene.py's EXEMPT list: a named scene with a written reason,
+        # reported as SKIP so the reason is on every run's page. Anything not
+        # in it, TRIALS or SOLVERS fails here instead.
+        exempt = code == 3 and detail.startswith("EXEMPT ")
+        record(f"H{i}", f"{scene_id}: try_scene.py drives it to a real PASS",
+               code == 0, detail, skipped=exempt)
 
 
 SECTIONS = {

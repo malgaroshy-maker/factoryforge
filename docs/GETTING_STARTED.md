@@ -808,17 +808,19 @@ from the command side at all.
 Click the same part again to clear it. The fault is held as a *force*, so the
 Tag Inspector shows it held and the `🔓 N forced` chip releases it too.
 
-A controller worth the name should then refuse to restart. The shipped
-exercises check exactly that: Reset while the fault stands does nothing, and
-clearing the fault alone does not restart the line either — the trip is still
-latched, and only Reset then Start bring it back.
+A controller worth the name should then refuse to restart: Reset while the
+fault stands does nothing, and clearing the fault alone does not restart the
+line either — the trip is still latched, and only Reset then Start bring it
+back.
 
 **Every shipped scene answers to this panel.** Start runs the line, Stop stops
 it, the mushroom latches a trip that only Reset clears, and the pot changes
 what the line is aiming at while it runs. The toolbar's **🧪 Try** button
-presses the same buttons and reports pass/fail (<!-- from-source -->from a source checkout, so does
-`python tools/try_scene.py --scene <id>`<!-- /from-source -->), so the exercise and the regression
-test are the same sequence.
+drives the scene with the grader's own reference controller, pressing the same
+buttons the grader's exam presses, and reports whether the scene completed
+(<!-- from-source -->from a source checkout, so does
+`python tools/try_scene.py --scene <id>`<!-- /from-source -->), so the program the grader is checked
+against is also checked against the scene you see.
 
 If you need repeatable results, for example to compare two runs, start it as
 `.\FactoryForge.exe -- --deterministic` for the fixed-timestep scene. (To mark

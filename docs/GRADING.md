@@ -42,10 +42,11 @@ engine, with whatever driver reaches their controller. Nothing in the grader
 drives the scene and nothing in it reaches into the controller.
 
 That is the difference between this and `tools/try_scene.py`, which is the
-closest thing that existed before. `try_scene.py` drives a scene the way a PLC
-would, to prove the *scene* works; it spawns its own engine and supplies its
-own control logic, so there is no seat in it for somebody else's program. The
-grader is the same idea with the two roles swapped.
+closest thing that existed before. `try_scene.py` drives the real 3D engine
+with the grader's own `good` reference controller, to prove the *scene*
+completes with it (IP-20); it spawns its own engine and supplies the control
+logic, so there is no seat in it for somebody else's program. The grader is
+the same idea with the two roles swapped.
 
 The tag bus serves **one** sidecar at a time, which is why the grader has to be
 the engine rather than a second client. There is no seat for an observer.
@@ -385,8 +386,9 @@ either way, so a disputed mark can be re-run exactly.
 ### Forcing is refused, not ignored
 
 A forced tag is a value that disagrees with the simulation on purpose. It is
-the right tool for fault injection — that is what `tools/try_scene.py` uses it
-for — and the wrong tool for a graded run. A grader that did not look for it
+the right tool for fault injection, and for a hand on the panel when nobody is
+at it — `tools/try_scene.py` presses the engine's buttons that way — and the
+wrong tool for a graded run. A grader that did not look for it
 could be beaten by four lines of Node-RED: force `counter.tall`, force
 `counter.short`, done.
 
@@ -710,8 +712,12 @@ reads zero, a failed element cools while the heater output reads 100 %, a dead
 pump holds its speed reference while the flow collapses. Those are the best
 lesson in several of these scenes and **none of them is marked**. The tags are
 declared so the tag list matches the scene a student is handed; no exam script
-raises one. `tools/try_scene.py` exercises all of them against the real engine
-and is the right place to look for how each check should be written.
+raises one. What each fault does to its part is asserted by the engine's
+self-tests (`FaultInjectionSelfTest.cs`, `ControlPartsSelfTest.cs`,
+`LinePartsSelfTest.cs`, `HandlingPartsSelfTest.cs`, `IndustrialPartsSelfTest.cs`).
+`tools/try_scene.py` used to drive them from controllers of its own as well;
+its version at `62dc800` is still the place to read how a check on a
+controller's response to each fault could be written.
 
 **The operator panel is graded on three scenes out of ten.** Every model has
 a panel and the grader presses its buttons, but only `start-stop-station`,
@@ -719,8 +725,8 @@ a panel and the grader presses its buttons, but only `start-stop-station`,
 contract itself — the latching trip, Start that will not clear it, the relay
 that starts nothing. On the other seven the panel is how the exam turns the pot and
 starts the line, and a program that ignored Stop entirely would still pass
-them. `tools/try_scene.py` checks the
-full contract on all ten.
+them. `tools/try_scene.py` puts the same sheet to the `good` reference on the
+3D engine for the two scenes whose exams mark it.
 
 **One window is a sample, not a proof.** The windows run 60–80 seconds, which
 is a dozen or two cartons or two settling steps. A program that misroutes one
@@ -777,9 +783,9 @@ still have to be written by hand, and so does this file's table.
   `scenes/` holds the plant models with their rubrics, and `reference/`
   holds their reference controllers
 * `tests/test_grade.py` — what is claimed above, asserted
-* `tools/try_scene.py` — the other side of the same seam: drives a scene
-  against the real 3D engine to prove the scene works, including the fault
-  injection and the full operator contract this does not grade
+* `tools/try_scene.py` — the other side of the same seam: drives the real 3D
+  engine with these reference controllers, to prove each scene completes with
+  the controller this grades against (IP-20)
 * `engine/templates/manifest.json` — each scene's own brief, which is what the
   rubrics are written against
 * `docs/tag-bus.md` — the protocol, `force` included
