@@ -112,6 +112,15 @@ Not covered: the grader pressed the buttons, not a person in the 3D window;
 OpenPLC did not drive the 3D window; and the WSL-to-Windows crossing is still
 IP-39's.
 
+**Since then (IP-12, 2026-09-28):** the exam also faults the conveyor's drive
+about 32 s in and marks three more checks, 15 in all: nothing fed while the
+drive is faulted, the belt still from the fault clearing until Reset and then
+Start, and running again after that Start. The program in the table above
+does not read `ConveyorFault`, so it would now fail the first two. The guide's
+step 7 gained `OR ConveyorFault` in its trip for that. **The amended program
+has not been run on OpenPLC**; the table is a record of the program and the
+exam as they were on 2026-09-25.
+
 ---
 
 ## How the two halves meet

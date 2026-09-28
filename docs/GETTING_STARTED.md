@@ -220,7 +220,7 @@ Enter, and paste:
 
 ```
     Running   : BOOL;    (* the line is running *)
-    Tripped   : BOOL;    (* the E-stop has tripped; only Reset clears it *)
+    Tripped   : BOOL;    (* the E-stop or a drive fault tripped; only Reset clears it *)
     EstopSeen : BOOL;    (* the E-stop has read healthy since OpenPLC started *)
     rStart    : R_TRIG;  (* the moment Start goes down *)
     rReset    : R_TRIG;  (* the moment Reset goes down *)
@@ -249,9 +249,11 @@ paste:
     EstopSeen := TRUE;
   END_IF;
 
-  (* The E-stop trips the line, and the trip latches: releasing the
-     mushroom does not clear it, and neither does Start. Only Reset does. *)
-  IF EstopSeen AND NOT PanelEstop THEN
+  (* The E-stop trips the line, and so does the belt's drive faulting.
+     The trip latches: releasing the mushroom or the fault clearing does
+     not clear it, and neither does Start. Only Reset does, and not while
+     the fault is still there. *)
+  IF (EstopSeen AND NOT PanelEstop) OR ConveyorFault THEN
     Tripped := TRUE;
   ELSIF rReset.Q THEN
     Tripped := FALSE;
@@ -339,11 +341,18 @@ every input reads FALSE, the E-stop included. Without `EstopSeen` the program
 would trip on its own every time OpenPLC starts, and the red lamp would be lit
 before anybody touched anything. The line still cannot run while the E-stop
 reads FALSE: that is the `NOT PanelEstop` beside `Tripped` and `PanelStop`, so
-a cut wire still stops it. *Why `R_TRIG`?* A click holds
+a cut wire still stops it. *Why `ConveyorFault`?* It is the drive's own
+fault contact, and a faulted drive does not turn whatever `ConveyorRotate`
+says. A line that went on feeding would pile cartons onto the stopped belt,
+and one that restarted by itself when the fault cleared would start under
+somebody's hands, so a drive fault trips the line exactly as the mushroom
+does. *Why `R_TRIG`?* A click holds
 Start down for 0.2 s, which is about ten of this program's 20 ms scans. The
 program acts on the rising edge, once, however long the button is held. The
 grader checks all of this. It presses Start itself and strikes the mushroom
-halfway through the run, then presses the buttons in the order above.
+a quarter of the way through the run, then presses the buttons in the order
+above; later it faults the belt's drive, clears the fault, and presses Reset
+and then Start.
 
 ### Step 8: Make it sort
 
@@ -408,7 +417,10 @@ watches and marks. It sets the order of tall and short cartons itself and
 shuffles it, so a program that pushes every second carton without reading a
 sensor fails. It is also the operator: it presses Start 1 s in, and about
 16 s in it strikes the mushroom, releases it, presses Start alone, then Reset,
-then Start, exactly as you did in step 7. It offers the same 19 tags, so the
+then Start, exactly as you did in step 7. About 32 s in it faults the belt's
+drive, clears the fault 3 s later, and presses Reset and then Start: nothing
+may be fed while the drive is faulted, and the belt must not move again until
+that Start. It offers the same 19 tags, so the
 same program and the same addresses work unchanged.
 
 In the Command Prompt from step 5, press **Ctrl+C** to stop the sidecar.
@@ -472,6 +484,11 @@ PASS   every check met
 RESULT grade=PASS scene=sorting-by-height checks=12/12 failed=none forced=0
 ```
 
+That output was recorded on 2026-09-25, before the exam faulted the drive
+(IP-12). A run now also prints `fault.no_feed_while_faulted`,
+`fault.latched_until_reset` and `fault.restarted_after_reset`, and the last
+line says `checks=15/15`.
+
 Your counts can differ by a carton or two. The verdict is what matters. Press
 Ctrl+C in the second window to stop that sidecar, and Ctrl+C in Ubuntu to stop
 OpenPLC.
@@ -494,7 +511,7 @@ grade --list` shows every scene the grader can mark.
   once, for the scene that was open when it started. `examples\README.md` lists
   the scenes.
 - **The operator contract.** This program already honours Start, Stop, the
-  latching E-stop and Reset. The sorting grader marks all of it except Stop,
+  latching E-stop, the drive fault and Reset. The sorting grader marks all of it except Stop,
   which it never presses. The *Start / stop station* scene adds a batch
   counted against the pot, which the line has to stop by itself.
 - **32-bit values.** An Int or Float tag is two Modbus registers, high word
@@ -564,6 +581,14 @@ in step 9, run from source inside WSL, with OpenPLC restarted first:
   mushroom and running again 0.10 to 0.11 s after Start. The output in step 9
   is from seed 2. It also passed 12/12 with OpenPLC started 3 s after the
   grader's sidecar (seed 4).
+
+On 2026-09-28 the exam gained the drive fault (IP-12), and step 7 gained
+`OR ConveyorFault` in its trip. **That amended program has not been run on
+OpenPLC.** The program as the runs above tested it would now fail
+`fault.no_feed_while_faulted` and `fault.latched_until_reset`, as the grader's
+`ignorefault` reference, which leaves the fault unread in the same way, does.
+The grader's own `good` reference answers the fault with the
+same rule, trip on the fault and clear only on Reset, and passes on seeds 1–40.
 
 Five things were **not** covered by those runs, and they are listed here so
 that nobody mistakes them for tested:
