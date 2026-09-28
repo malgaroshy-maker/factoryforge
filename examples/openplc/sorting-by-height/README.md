@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Run the belt, feed cartons, and push the tall ones down the chute while the short ones carry on. Two sensors at two heights are all you get: a carton that breaks the high beam is tall, one that breaks only the low beam is short.
 
-**Done when.** Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it.
+**Done when.** Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it. If the belt's drive faults (conveyor.fault), stop feeding, and when the fault clears stay stopped until Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -80,7 +80,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 
 | Tag | Direction | Type | Modbus | In the program | Meaning | Brief |
 |---|---|---|---|---|---|---|
-| `conveyor.fault` | PLC reads | bit | 1x0 | `ConveyorFault` %IX100.0 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
+| `conveyor.fault` | PLC reads | bit | 1x0 | `ConveyorFault` %IX100.0 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told | yes |
 | `conveyor.rotate` | PLC writes | bit | 0x0 | `ConveyorRotate` %QX100.0 | run the belt | yes |
 | `counter.short` | PLC reads | int | 3x0 + 3x1 | `CounterShortHi` %IW100 + `CounterShortLo` %IW101 -> `CounterShort` : DINT | cartons that reached the end of the belt, running total |  |
 | `counter.tall` | PLC reads | int | 3x2 + 3x3 | `CounterTallHi` %IW102 + `CounterTallLo` %IW103 -> `CounterTall` : DINT | cartons that came down the chute, running total |  |

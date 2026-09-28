@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Hold the plate at the temperature on the panel's pot. The plant is a first-order lag with a loss to ambient, so holding a temperature needs a standing output — and proportional control can only make one out of a standing error.
 
-**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does.
+**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy.
 
 | File | What it is |
 |---|---|
@@ -87,7 +87,7 @@ names.
 | `oven.temperature` | PLC reads | `OvenTemperature` | Real | DBD14 | plate temperature, degC | yes |
 | `panel.setpoint` | PLC reads | `PanelSetpoint` | Real | DBD18 | the operator's pot, 20..280 C (starts at 180) | yes |
 | `oven.attemp` | PLC reads | `OvenAttemp` | Bool | DBX22.0 | within +/-3 degC of the station's own 180 degC -- not the pot | yes |
-| `oven.fault` | PLC reads | `OvenFault` | Bool | DBX22.1 | element failed: TRUE = it takes your command and heats nothing |  |
+| `oven.fault` | PLC reads | `OvenFault` | Bool | DBX22.1 | element failed: TRUE = it takes your command and heats nothing | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX22.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.reset` | PLC reads | `PanelReset` | Bool | DBX22.3 | Reset button, momentary: a short pulse per press |  |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX22.4 | Start button, momentary: a short pulse per press -- latch it | yes |

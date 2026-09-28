@@ -51,10 +51,11 @@ every force. That file is the appeal record.
 
 Honest limits are in docs/GRADING.md, and they grew rather than shrank when
 this went from one scene to ten. The short version: headless Python models of
-the plants rather than the 3D engine, so nothing here can jam or tip; no marks
-for fault injection on any scene, though every one of them has a fault tag and
-half the briefs end on it; and the operator contract itself is marked on two
-scenes out of ten.
+the plants rather than the 3D engine, so nothing here can jam or tip; faults
+are injected and marked on five scenes -- the servo drive, the air receiver's
+valve, and since IP-12 the sorting conveyor's drive, the dosing pump and the
+oven's element -- while the other fault tags are declared and never raised;
+and the operator contract itself is marked on three scenes out of ten.
 
 Where things are (IP-18):
 

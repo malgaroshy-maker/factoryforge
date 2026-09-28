@@ -14,7 +14,8 @@
      Every tall carton ends up in the chute and every short one at the far
      end, with counter.tall and counter.short adding up to what you fed.
      The mushroom stops the line inside 200 ms and Start alone will not
-     restart it.
+     restart it. If the belt's drive faults (conveyor.fault), stop feeding,
+     and when the fault clears stay stopped until Reset, then Start.
 
      NOTE: This is the line the 3D engine opens and the grader marks:
      nineteen tags, with an operator panel and two fault contacts.

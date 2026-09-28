@@ -8,7 +8,8 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 Since IP-35 the exam presses Start and strikes the mushroom, so every one of
 these reads the panel through `_shared.Scanner`. `blind` and `greedy` answer
 the panel correctly and are wrong only about sorting; `nostart` and
-`startalone` sort correctly and are wrong only about the panel.
+`startalone` sort correctly and are wrong only about the panel; and
+`ignorefault` gets both right and never reads the drive's fault (IP-12).
 """
 
 from __future__ import annotations
@@ -25,6 +26,11 @@ SCENE = "sorting-by-height"
 
 #: How long a sorting reference holds the plate out once it fires.
 STROKE_HOLD = 0.5
+
+#: The fault every right answer here trips on, as it trips on the mushroom:
+#: the conveyor's drive (IP-12). Only `ignorefault` leaves it out -- and
+#: `nostart`, which reads nothing on the panel at all.
+FAULTS = ("conveyor.fault",)
 
 
 async def _sorter(bus, stop: asyncio.Event, scanner: Scanner | None) -> None:
@@ -69,6 +75,14 @@ async def _sorter(bus, stop: asyncio.Event, scanner: Scanner | None) -> None:
 async def _good(bus, stop: asyncio.Event) -> None:
     """What the exercise is asking for: Start runs the line, the mushroom
     stops it and latches, and only Reset then Start brings it back."""
+    await _sorter(bus, stop, Scanner(bus, faults=FAULTS))
+
+
+async def _ignorefault(bus, stop: asyncio.Event) -> None:
+    """`good` without the one line that reads `conveyor.fault` (IP-12). It
+    sorts correctly and answers the panel correctly; when the drive faults it
+    keeps feeding onto the stopped belt, and when the fault clears the belt
+    starts again by itself, with nobody having pressed Reset or Start."""
     await _sorter(bus, stop, Scanner(bus))
 
 
@@ -83,7 +97,7 @@ async def _startalone(bus, stop: asyncio.Event) -> None:
     """Sorts correctly and latches the trip, but lets Start clear it: the
     Start the examiner presses with the mushroom out and no Reset restarts
     the line."""
-    await _sorter(bus, stop, Scanner(bus, start_clears_trip=True))
+    await _sorter(bus, stop, Scanner(bus, start_clears_trip=True, faults=FAULTS))
 
 
 async def _blind(bus, stop: asyncio.Event) -> None:
@@ -92,7 +106,7 @@ async def _blind(bus, stop: asyncio.Event) -> None:
     #: One stroke a cycle, one second after the cycle's feed pause ends.
     CYCLE = EMIT_PULSE + EMIT_GAP + 1.0 + STROKE_HOLD
     feed = Feed()
-    scanner = Scanner(bus)
+    scanner = Scanner(bus, faults=FAULTS)
     state = {"cycle": 0.0}
 
     async def body(dt: float) -> None:
@@ -113,7 +127,7 @@ async def _blind(bus, stop: asyncio.Event) -> None:
 async def _greedy(bus, stop: asyncio.Event) -> None:
     """Holds the plate out, so everything goes down the chute."""
     feed = Feed()
-    scanner = Scanner(bus)
+    scanner = Scanner(bus, faults=FAULTS)
 
     async def body(dt: float) -> None:
         scanner.scan()
@@ -126,4 +140,5 @@ async def _greedy(bus, stop: asyncio.Event) -> None:
 
 
 REFERENCES = {"good": _good, "blind": _blind, "greedy": _greedy,
-              "nostart": _nostart, "startalone": _startalone}
+              "nostart": _nostart, "startalone": _startalone,
+              "ignorefault": _ignorefault}

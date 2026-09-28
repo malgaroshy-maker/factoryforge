@@ -113,9 +113,60 @@ SORT_RESTART_AFTER = 6.0          # this Start must
 SORT_RESTART_WITHIN = 1.0
 #: Belt the strike may still cost: `plant.ESTOP_LIMIT` of it.
 SORT_ESTOP_ALLOWED = scene_model.BELT_SPEED * ESTOP_LIMIT
-#: The shortest window the whole sheet fits in, strike wait included.
-SORT_EXAM_ENDS_BY = (SORT_STRIKE_FROM + SORT_STRIKE_WAIT + SORT_RESTART_AFTER
+
+
+# --- the drive fault (IP-12) ----------------------------------------------
+#
+# The engine's conveyor has its own fault contact, `conveyor.fault`, and a
+# faulted drive does not turn whatever `conveyor.rotate` says
+# (`ConveyorBelt.cs`: "The fault wins over the command"). The brief asks for
+# the least a line has to do about that: stop feeding while the drive is
+# faulted, and when the fault clears, stay stopped until Reset and then Start
+# -- a drive fault trips the line the way the mushroom does. So once the
+# E-stop test is over the examiner faults the drive, clears the fault three
+# seconds later, and presses Reset and then Start, and the same
+# `plant.TripLedger` measures the belt against those presses.
+#
+# The plant obeys the fault: the belt stands still for as long as it lasts.
+# The examiner waits for a clear plate first, for the reason the strike does
+# -- a stopped belt must not strand a tall carton in front of a pusher timed
+# on a clock. And a carton fed onto the stopped belt lands on, or right
+# behind, the one the emitter made before it -- closer than the line's own
+# feed ever puts two cartons, so a push meant for one can sweep its
+# neighbour too. Those crowded cartons are what the feed check marks, so they
+# are left out of the two sorting checks: where a crowd goes is decided by
+# the crowding, not by the program's sorting. With only the cartons fed
+# right on top of one another left out, `ignorefault` also failed
+# `sort.short_passed` on 7 of seeds 1-40; a push swept a short carton sitting
+# a few tenths of a metre behind a tall one -- in seed 4, the carton the
+# emitter made just after the fault cleared, a quarter of a metre behind the
+# one it had made onto the stopped belt.
+
+#: The examiner reaches for the drive once the E-stop sheet is over...
+SORT_FAULT_FROM = 32.0
+#: ...and faults it when the belt is running and no tall carton is committed
+#: to the plate, or after this long regardless.
+SORT_FAULT_WAIT = 4.0
+#: The rest of the sheet, timed from the fault.
+SORT_FAULT_CLEARS_AFTER = 3.0
+SORT_FAULT_RESET_AFTER = 4.5
+SORT_FAULT_RESTART_AFTER = 6.0
+#: How long a program has to see the fault before a carton it feeds counts:
+#: the same 200 ms the mushroom allows. A feed pulse already on its way when
+#: the drive faulted is not a program that ignored it.
+SORT_FAULT_REACTION = ESTOP_LIMIT
+#: How close to a carton fed onto the faulted belt another has to be to count
+#: as crowded with it: a metre, more than the 0.9 m a carton every 1.8 s
+#: leaves on a running belt, so every carton nearer than the feed would have
+#: put it is in.
+SORT_CROWD = 1.0
+
+#: The shortest window the whole sheet fits in, both tests and both waits
+#: included. The fault's sheet is the later one.
+SORT_EXAM_ENDS_BY = (SORT_FAULT_FROM + SORT_FAULT_WAIT + SORT_FAULT_RESTART_AFTER
                      + SORT_RESTART_WITHIN)
+assert SORT_FAULT_FROM > (SORT_STRIKE_FROM + SORT_STRIKE_WAIT + SORT_RESTART_AFTER
+                          + SORT_RESTART_WITHIN), "the two sheets overlap"
 
 
 class SortingExam(scene_model.SortingScene):
@@ -127,8 +178,9 @@ class SortingExam(scene_model.SortingScene):
     also has an operator panel and a drive fault on the conveyor and the
     pusher (`engine/fixtures/scene_tag_sets.json`). A student's mapping is
     written against that line, so the exam has to offer the same list. The
-    panel is pressed (see above); the two faults are declared and never
-    raised, so each holds the value an untouched engine shows.
+    panel is pressed (see above). The conveyor's fault is raised once, mid-run
+    (IP-12, above); the pusher's is declared and never raised, so it holds
+    the value an untouched engine shows.
 
     A subclass rather than a change to `sorting_scene.py`, which is also the
     tag-bus regression scene and has no operator in it.
@@ -148,9 +200,26 @@ class SortingExam(scene_model.SortingScene):
                            "waited_for_a_clear_plate": None, "start_alone_at": None,
                            "reset_at": None, "restart_at": None}
         self._strike_deadline: float | None = None
+        #: The drive fault: ground truth for whether the belt can turn, and
+        #: its own ledger, measured in the same phases as the mushroom's.
+        self.drive_faulted = False
+        self.fault_trip = TripLedger(self.panel, struck=lambda: self.drive_faulted)
+        self.fault: dict = {"reached_for_the_drive_at": None, "faulted_at": None,
+                            "waited_for_a_clear_plate": None, "cleared_at": None,
+                            "reset_at": None, "restart_at": None}
+        #: Every carton the emitter made while the drive was faulted, and
+        #: whether it came later than `SORT_FAULT_REACTION` after the fault.
+        self.fed_while_faulted: list[dict] = []
+        #: Ids of every carton fed onto the stopped belt, of every carton that
+        #: was within SORT_CROWD of one when it was fed, and of every carton
+        #: fed later within SORT_CROWD of that crowd.
+        self.crowded: set[int] = set()
+        self._fault_deadline: float | None = None
+        self._faulted_at_exact = 0.0
         self.script = Script([
             (SORT_START_AT, self.panel.press("start")),
             (SORT_STRIKE_FROM, self._reach_for_the_mushroom),
+            (SORT_FAULT_FROM, self._reach_for_the_drive),
         ])
 
     # --- the examiner ---
@@ -181,14 +250,78 @@ class SortingExam(scene_model.SortingScene):
         self.script.at(at + SORT_RESET_AFTER, self._note("reset_at", "reset"))
         self.script.at(at + SORT_RESTART_AFTER, self._note("restart_at", "start"))
 
-    def _note(self, key: str, button: str):
+    def _note(self, key: str, button: str, sheet: dict | None = None):
         press = self.panel.press(button)
+        sheet = self.exam if sheet is None else sheet
 
         def do() -> None:
             press()
-            self.exam[key] = round(self.t, 2)
+            sheet[key] = round(self.t, 2)
         do.__name__ = press.__name__
         return do
+
+    def _reach_for_the_drive(self) -> None:
+        self.fault["reached_for_the_drive_at"] = round(self.t, 2)
+        self._fault_deadline = self.t + SORT_FAULT_WAIT
+
+    def _maybe_fault(self) -> None:
+        if self._fault_deadline is None:
+            return
+        clear = self._plate_is_clear() and bool(self.tags.visible("conveyor.rotate"))
+        if not clear and self.t < self._fault_deadline:
+            return
+        self._fault_deadline = None
+        self.fault["faulted_at"] = round(self.t, 2)
+        self.fault["waited_for_a_clear_plate"] = clear
+        self._set_fault(True)
+        at = self._faulted_at_exact = self.t
+        self.script.at(at + SORT_FAULT_CLEARS_AFTER, self._clear_the_fault)
+        self.script.at(at + SORT_FAULT_RESET_AFTER,
+                       self._note("reset_at", "reset", self.fault))
+        self.script.at(at + SORT_FAULT_RESTART_AFTER,
+                       self._note("restart_at", "start", self.fault))
+
+    def _clear_the_fault(self) -> None:
+        self.fault["cleared_at"] = round(self.t, 2)
+        self._set_fault(False)
+
+    def _set_fault(self, faulted: bool) -> None:
+        """The drive's own contact, written by the plant as the engine's part
+        writes it -- `tags.set`, not a force."""
+        self.drive_faulted = faulted
+        self.tags.set("conveyor.fault", faulted)
+
+    # --- the plant obeys the fault ---
+
+    def _belt_turns(self) -> bool:
+        """Whether the belt moves this tick: commanded, and the fault wins
+        over the command. The one place both the belt and the ledgers ask,
+        so the metres they measure are the metres the cartons moved."""
+        return bool(self.tags.visible("conveyor.rotate")) and not self.drive_faulted
+
+    def _step_belt(self, dt: float) -> None:
+        if not self._belt_turns():
+            return
+        super()._step_belt(dt)
+
+    def _step_emitter(self) -> None:
+        before = len(self.boxes)
+        super()._step_emitter()
+        if len(self.boxes) == before:
+            return
+        box = self.boxes[-1]
+        near = {b.id for b in self.boxes[:-1]
+                if abs(b.position - box.position) < SORT_CROWD}
+        if not self.drive_faulted:
+            # Fed after the fault, but behind a crowd the belt has not yet
+            # carried clear: the crowd's too.
+            if near & self.crowded:
+                self.crowded.add(box.id)
+            return
+        late = self.t - self._faulted_at_exact > SORT_FAULT_REACTION
+        self.fed_while_faulted.append({"carton": box.id, "at": round(self.t, 2),
+                                       "counted": late})
+        self.crowded |= {box.id, *near}
 
     # --- the loop ---
 
@@ -196,10 +329,13 @@ class SortingExam(scene_model.SortingScene):
         self.t += dt
         self.script.run(self.t)
         self._maybe_strike()
+        self._maybe_fault()
         self.panel.tick(dt, self.t)
-        running = bool(self.tags.visible("conveyor.rotate"))
+        running = self._belt_turns()
         super().tick(dt)
-        self.trip.step(self.t, scene_model.BELT_SPEED * dt if running else 0.0)
+        moved = scene_model.BELT_SPEED * dt if running else 0.0
+        self.trip.step(self.t, moved)
+        self.fault_trip.step(self.t, moved)
 
 
 def build_sorting_scene(seed: int) -> SortingExam:
@@ -250,8 +386,11 @@ def grade_sorting(watched: Watched, engine: GradedEngine, report: Report,
     emitted = on_belt + len(sim.sorted_tall) + len(sim.sorted_short)
     sorted_count = len(sim.sorted_tall) + len(sim.sorted_short)
 
-    escaped = [b for b in sim.sorted_short if b.is_tall]
-    diverted_short = [b for b in sim.sorted_tall if not b.is_tall]
+    # A crowd fed onto the faulted belt is marked by `fault.no_feed_while_faulted`
+    # and not here: which lane it went to was the crowding's doing.
+    escaped = [b for b in sim.sorted_short if b.is_tall and b.id not in sim.crowded]
+    diverted_short = [b for b in sim.sorted_tall
+                      if not b.is_tall and b.id not in sim.crowded]
     tall_ok = [b for b in sim.sorted_tall if b.is_tall]
     short_ok = [b for b in sim.sorted_short if not b.is_tall]
 
@@ -268,7 +407,9 @@ def grade_sorting(watched: Watched, engine: GradedEngine, report: Report,
         "far_end": {"total": len(sim.sorted_short), "short": len(short_ok),
                     "tall": len(escaped)},
         "misrouted": [e for e in probe["sorted"]
-                      if (e["height"] == "tall") != (e["lane"] == "chute")][:20],
+                      if (e["height"] == "tall") != (e["lane"] == "chute")
+                      and e["carton"] not in sim.crowded][:20],
+        "crowded_on_the_faulted_belt": sorted(sim.crowded),
         "cartons": probe["sorted"],
         "pusher": {
             "fired": len(delays),
@@ -304,10 +445,12 @@ def grade_sorting(watched: Watched, engine: GradedEngine, report: Report,
                f"{emitted} fed = {sorted_count} sorted + {on_belt} still on the belt")
 
     contract = _grade_contract(sim, report, watched.sim_time)
+    fault = _grade_fault(sim, report, watched.sim_time)
 
     _sorting_feedback(report, watched, sim, probe, escaped, diverted_short,
                       emitted, sorted_count, mean_delay, low, high)
     _contract_feedback(report, sim, contract)
+    _fault_feedback(report, sim, fault)
 
 
 def _grade_contract(sim: SortingExam, report: Report, window: float) -> dict:
@@ -324,16 +467,16 @@ def _grade_contract(sim: SortingExam, report: Report, window: float) -> dict:
     short = (f"the {window:g}s window ended before the examiner finished the "
              f"E-stop test, which needs about {SORT_EXAM_ENDS_BY:g}s")
 
+    unpressed = _unpressed(sim)
     report.evidence["panel"] = {
         "presses": sim.panel.presses,
         "exam": dict(exam),
         "trip": None if trip is None else {
             k: (round(v, 3) if isinstance(v, float) else v) for k, v in trip.items()},
         "allowed_m": round(allowed, 3),
-        "started_without_a_press_at": ledger.started_without_a_press[:10],
+        "started_without_a_press_at": unpressed[:10],
     }
 
-    unpressed = ledger.started_without_a_press
     report.add("line.started_by_start",
                not unpressed,
                "the belt never started without somebody pressing Start"
@@ -378,6 +521,121 @@ def _grade_contract(sim: SortingExam, report: Report, window: float) -> dict:
                f"the belt did not run again after Reset at {exam['reset_at']:g}s "
                f"and Start at {exam['restart_at']:g}s")
     return {"trip": trip, "finished": True}
+
+
+def _unpressed(sim: SortingExam) -> list[float]:
+    """Every time the belt began to move with no Start since it last stopped,
+    except inside the drive fault's trip -- from the fault until the Start
+    that cleared it. A belt that restarts by itself when the fault clears is
+    `fault.latched_until_reset`'s to mark, and marking it twice would make one
+    mistake look like two."""
+    trip = sim.fault_trip.trips[0] if sim.fault_trip.trips else None
+    if trip is None:
+        return list(sim.trip.started_without_a_press)
+    end = trip["cleared_at"] if trip["cleared_at"] is not None else float("inf")
+    return [t for t in sim.trip.started_without_a_press
+            if not trip["struck_at"] <= t <= end]
+
+
+def _grade_fault(sim: SortingExam, report: Report, window: float) -> dict:
+    """The drive fault: nothing fed onto the stopped belt, and the belt still
+    until Reset and then Start once the fault has gone. Measured on the
+    plant's side -- cartons the emitter really made and metres the belt really
+    moved -- so writing `conveyor.rotate` low proves nothing by itself."""
+    ledger, exam = sim.fault_trip, sim.fault
+    trip = ledger.trips[0] if ledger.trips else None
+    finished = (exam["restart_at"] is not None
+                and window >= exam["restart_at"] + SORT_RESTART_WITHIN)
+    short = (f"the {window:g}s window ended before the examiner finished the "
+             f"drive-fault test, which needs about {SORT_EXAM_ENDS_BY:g}s")
+    fed = [f for f in sim.fed_while_faulted if f["counted"]]
+
+    report.evidence["drive_fault"] = {
+        "exam": dict(exam),
+        "trip": None if trip is None else {
+            k: (round(v, 3) if isinstance(v, float) else v) for k, v in trip.items()},
+        "fed_while_faulted": sim.fed_while_faulted[:10],
+        "reaction_allowed_s": SORT_FAULT_REACTION,
+    }
+
+    if trip is None:
+        why = short if exam["faulted_at"] is None else "the drive was never faulted"
+        for check in ("fault.no_feed_while_faulted", "fault.latched_until_reset",
+                      "fault.restarted_after_reset"):
+            report.add(check, False, why)
+        return {"trip": None, "finished": False, "fed": fed}
+
+    report.add("fault.no_feed_while_faulted",
+               not fed,
+               f"no carton was fed onto the belt while its drive was faulted, "
+               f"from {trip['struck_at']:g}s to {exam['cleared_at']:g}s"
+               if not fed and exam["cleared_at"] is not None else
+               "no carton was fed onto the belt while its drive was faulted"
+               if not fed else
+               f"{len(fed)} carton(s) were fed onto the stopped belt while its "
+               f"drive was faulted, the first at {fed[0]['at']:g}s (the drive "
+               f"faulted at {trip['struck_at']:g}s)")
+
+    if not finished:
+        report.add("fault.latched_until_reset", False, short)
+        report.add("fault.restarted_after_reset", False, short)
+        return {"trip": trip, "finished": False, "fed": fed}
+
+    latched = trip["latched_travel_m"]
+    report.add("fault.latched_until_reset",
+               latched <= 1e-9,
+               f"the belt stayed still from the fault clearing at "
+               f"{exam['cleared_at']:g}s until Reset and then Start"
+               if latched <= 1e-9 else
+               f"the belt moved {latched * 1000:.0f} mm after the drive fault "
+               f"cleared at {exam['cleared_at']:g}s and before Reset-then-Start "
+               f"-- {_fault_restarted_on(trip, exam)}")
+    back, cleared = trip["restarted_at"], trip["cleared_at"]
+    report.add("fault.restarted_after_reset",
+               cleared is not None and back is not None
+               and back - cleared <= SORT_RESTART_WITHIN + 1e-9,
+               f"the belt was running again {back - cleared:.2f}s after Start "
+               f"at {cleared:g}s (within {SORT_RESTART_WITHIN:g}s)"
+               if back is not None and cleared is not None else
+               f"the belt did not run again after Reset at {exam['reset_at']:g}s "
+               f"and Start at {exam['restart_at']:g}s")
+    return {"trip": trip, "finished": True, "fed": fed}
+
+
+def _fault_restarted_on(trip: dict, exam: dict) -> str:
+    moved = trip.get("latched_moved_at")
+    if moved is None:
+        return "it restarted while the trip was latched"
+    if exam["reset_at"] is not None and moved >= exam["reset_at"]:
+        return f"it restarted at {moved:g}s on Reset alone"
+    return f"it restarted by itself at {moved:g}s, when the fault cleared"
+
+
+def _fault_feedback(report, sim: SortingExam, fault: dict) -> None:
+    """The drive fault, in terms of what the drive did."""
+    say = report.feedback.append
+    trip = fault["trip"]
+    if trip is None:
+        return
+    if fault["fed"]:
+        say(f"{len(fault['fed'])} carton(s) were fed while the conveyor's drive "
+            f"was faulted. A faulted drive does not turn whatever "
+            f"`conveyor.rotate` says, so each one landed on, or right behind, "
+            f"the carton the emitter made before it. `conveyor.fault` is an "
+            f"input: while it "
+            f"reads true, stop the line, and stop feeding with it.")
+    if fault["finished"] and trip["latched_travel_m"] > 1e-9:
+        say(f"The drive fault did not latch: {_fault_restarted_on(trip, sim.fault)}. "
+            f"A line that starts again on its own when a fault clears starts "
+            f"under somebody's hands. Trip on `conveyor.fault` the way you trip "
+            f"on the mushroom, and bring the line back only on Reset and THEN "
+            f"Start.")
+    if (fault["finished"] and trip["latched_travel_m"] <= 1e-9
+            and trip["restarted_at"] is None):
+        say("After the drive fault cleared and the examiner pressed Reset and "
+            "then Start, the belt stayed stopped. The fault's latch has to clear "
+            "on Reset once `conveyor.fault` is false again, and the next Start "
+            "has to run the line.")
 
 
 def _restarted_on(trip: dict, exam: dict) -> str:
@@ -456,7 +714,7 @@ def _contract_feedback(report, sim: SortingExam, contract: dict) -> None:
     """The operator contract, in terms of what the operator did."""
     say = report.feedback.append
     trip = contract["trip"]
-    unpressed = sim.trip.started_without_a_press
+    unpressed = _unpressed(sim)
     if unpressed and unpressed[0] < SORT_START_AT + 0.5:
         say(f"The belt was running at {unpressed[0]:g}s, before anybody pressed "
             f"Start. The line waits for its operator: latch the RISING edge of "
@@ -506,6 +764,13 @@ def _summary_sorting(evidence: dict, out) -> None:
         out(f"mushroom at {trip['struck_at']:g}s: {trip['struck_travel_m'] * 1000:.0f} mm "
             f"of belt after it (at most {evidence['panel']['allowed_m'] * 1000:.0f} mm), "
             f"{trip['latched_travel_m'] * 1000:.0f} mm while latched")
+    fault = evidence.get("drive_fault", {})
+    if fault.get("trip") is not None:
+        fed = [f for f in fault["fed_while_faulted"] if f["counted"]]
+        out(f"drive fault at {fault['trip']['struck_at']:g}s: {len(fed)} carton(s) "
+            f"fed onto the stopped belt, "
+            f"{fault['trip']['latched_travel_m'] * 1000:.0f} mm of belt after it "
+            f"cleared and before Reset-then-Start")
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -516,16 +781,20 @@ RUBRIC = {
              "tall ones down the chute while the short ones carry on. The "
              "mushroom is normally closed and stops the line within 200 ms; "
              "its trip latches, so Start alone will not restart the line -- "
+             "Reset, then Start. If the belt's drive faults (conveyor.fault), "
+             "stop feeding, and when the fault clears stay stopped until "
              "Reset, then Start."),
     "build": build_sorting_scene,
     "observe": observe_sorting,
     "grade": grade_sorting,
     "summary": _summary_sorting,
     "duration": 60.0,
-    "references": ("good", "blind", "greedy", "nostart", "startalone"),
+    "references": ("good", "blind", "greedy", "nostart", "startalone",
+                   "ignorefault"),
     "tags": ("conveyor.rotate, emitter.emit, pusher.extend, panel.green, "
              "panel.red are yours to write; panel.start, panel.stop, "
-             "panel.reset, panel.estop, sensor_low.detect, sensor_high.detect, "
+             "panel.reset, panel.estop, conveyor.fault, sensor_low.detect, "
+             "sensor_high.detect, "
              "pusher.extended, pusher.retracted, counter.tall, counter.short "
              "are the line's."),
 }

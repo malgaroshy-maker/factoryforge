@@ -85,7 +85,7 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 
 | flag | |
 |---|---|
-| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–80). **Shortening it can fail a correct program**: the exam's second phase starts at a fixed moment, and a window that ends before a plant has settled in it marks a ramp as a hold |
+| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–96). **Shortening it can fail a correct program**: the exam's second phase starts at a fixed moment, and a window that ends before a plant has settled in it marks a ramp as a hold |
 | `--wait` | seconds to wait for a controller before giving up (default 120) |
 | `--seed` | the feed pattern and the numbers the exam picks. Reported either way, so a mark is reproducible |
 | `--json PATH` | the whole run, machine-readable; `-` for stdout |
@@ -232,16 +232,16 @@ reads and the fake it shuts.
 
 | scene | the fact that decides the mark | how a program would fake it, and what stops that |
 |---|---|---|
-| `sorting-by-height` | which lane each carton ended in, against the height the scene gave it; millimetres of belt that moved before Start, after the mushroom, and between its release and Reset-then-Start | pushing every second carton — the feed is shuffled pairs |
+| `sorting-by-height` | which lane each carton ended in, against the height the scene gave it; millimetres of belt that moved before Start, after the mushroom, and between its release and Reset-then-Start; cartons fed onto the belt while its drive was faulted, and belt that moved between the fault clearing and Reset-then-Start | pushing every second carton — the feed is shuffled pairs |
 | `start-stop-station` | cartons that broke the eye between the Start press and the line stopping itself; millimetres of belt that moved while tripped, which lasts until Reset and then Start | running for about the right length of time — the batch size is drawn from the seed and set twice |
 | `tank-level-control` | the level trace: settled error, ripple and overshoot | "it reached the setpoint", true of float switches and of a valve slammed open — ripple and overshoot grade those, and the pot moves to a second level |
 | `light-curtain-sorting` | each carton's measured height and the lane it ended in, against the rule in force when it was measured | a threshold written into the program — the pot is set twice, and the feed is eight shuffled heights rather than two |
 | `roller-line-weighing` | each carton's true mass, whether it was weighed alone, and whether the program flagged it | rejecting on the inductive sensor — the limit moves below a tall cardboard carton, where metal and heavy stop agreeing |
 | `pick-and-place-cell` | which cartons the gantry carried to the outfeed, and the rail position it let go of the others at | a sequence on timers — the run slows the axis down, and a timed release drops cartons at half rail |
 | `accumulation-buffer` | cartons that physically passed the blade, per release | a release timed in seconds — the run halves the drive's top speed |
-| `heat-treat-station` | the temperature trace: settled error, ripple and overshoot | proportional-only parks short by an offset the plant's own numbers predict; a thermostat reaches setpoint and swings 9 °C |
+| `heat-treat-station` | the temperature trace: settled error, ripple and overshoot; and `alarm.beacon` against an element the run failed | proportional-only parks short by an offset the plant's own numbers predict; a thermostat reaches setpoint and swings 9 °C |
 | `guarded-cell` | the tick the contactor pulled in, and whether anybody had pressed Start since it last stopped | nothing — this one catches an accident, not a shortcut. Also: every tag the program wrote, because `belt.rotate` is the motor's; and whether a program that locks the gate lets the operator in once the cell has stopped |
-| `batch-dosing` | litres the pump physically moved, per batch | a dose timed in seconds — the run re-rates the pump between the two batches |
+| `batch-dosing` | litres the pump physically moved, per batch; when `pump.run` dropped after the pump failed, and litres the repaired pump moved with nobody restarting it | a dose timed in seconds — the run re-rates the pump between the two batches |
 | `star-delta-start` | the motor's speed at the instant the delta contacts closed, and whether star and delta ever conducted at the same instant | a changeover on a timer — the run loads the machine between its two starts, so the star run-up takes about twice as long |
 | `cooling-tunnel` | the temperature trace, the seconds the product took to reach a dropped setpoint, and the overlap of heater power and delivered airflow | holding every setpoint on the heater alone, or with the fan left running under it — the recipe drops 60 C or more, which the room alone takes 15 s and more to take away |
 | `air-receiver` | the receiver's true pressure in bar, against the band the pot sets; and the seconds from commanding a seized valve open to the alarm | scaling that is nearly right — the run raises the consumption and moves the pot — and a discrepancy check with no timer, which the first, healthy start shows up |
@@ -288,6 +288,11 @@ something physical that no tag reports:
   before anybody presses Reset, on the servo positioning scene
 * the **lift's hoist** drops to 30 or 35 % of its speed (from the seed) at
   30 s, on the mezzanine lift, so a climb takes 3.4 or 4.0 s instead of 1.2
+* the **conveyor's drive faults** for 3 s, on the sorting line, and the belt
+  stands still whatever `conveyor.rotate` says (IP-12)
+* the **dosing pump fails** 4 s into a third batch and is repaired 5 s later
+  (IP-12)
+* the **oven's element fails** at 65 s and heats nothing from then on (IP-12)
 
 None of those is visible as a value on the bus. The controller can only find
 out by measuring — the encoder counting slower, the flow meter reading less,
@@ -333,6 +338,54 @@ than passing them unexamined. The start / stop station keeps its single
 `estop.stopped_the_belt` over both phases. Until IP-35 its trip ended on any
 Start after the strike, so a station that restarted on Start alone passed
 with 5 mm of belt, all of it the stop lag. It now fails with 1745 mm.
+
+**Faults, injected and marked (IP-12).** Three scenes break a part mid-run
+and mark what the program does about it. Each brief says what that is, and the
+exam marks that and nothing more. In each, the plant obeys the fault the way
+the engine's part does, and writes the part's `.fault` contact true with
+`tags.set`, not with a force. A program may read that contact or notice the
+failure from a measurement; either is marked the same.
+
+* **Sorting line, the conveyor's drive.** From 32 s the examiner waits, as it
+  does for the mushroom, for up to 4 s for a running belt with no tall carton
+  committed to the plate. Then it faults the drive, clears the fault 3 s
+  later, and presses Reset at 4.5 s and Start at 6 s after the fault. A
+  second `plant.TripLedger`, struck by the fault instead of the mushroom,
+  measures the belt against those presses. The checks are:
+  `fault.no_feed_while_faulted` (no carton fed more than 200 ms after the
+  fault while it stands), `fault.latched_until_reset` (no belt from the fault
+  clearing until Reset and then Start) and `fault.restarted_after_reset`
+  (running within 1 s of that Start). Cartons fed onto the stopped belt, the
+  ones they were fed within a metre of, and any fed later within a metre of
+  those are left out of `sort.tall_diverted` and `sort.short_passed`. Without
+  that exclusion, a push meant for one of them sweeps its neighbour. The fault
+  check already marks those cartons, and marking them twice would make one
+  mistake look like two. The belt restarting by itself when the fault clears
+  is likewise marked only by `fault.latched_until_reset`, not also by
+  `line.started_by_start`. The whole sheet needs about 43 s.
+* **Batch dosing, the pump.** After the second batch ends at 80 s the
+  examiner starts a third one at 82 s. The pump fails 4 s in, mid-dose at
+  any pot, and is repaired 5 s after that; nobody presses anything more. The
+  checks are `fault.pump_stopped`, `pump.run` false within the brief's 2 s of
+  the failure on a pump that was being run, and
+  `fault.no_restart_after_repair`, no litre moved by the repaired pump before
+  the window ends at 96 s. The third batch is marked on the fault alone. Its
+  litres are not "outside a batch", and the first two are marked exactly as
+  before.
+* **Heat treat station, the element.** The second setpoint's phase now ends
+  at 65 s, where the old window ended, so the settling checks read the trace
+  they always read. The element fails at 65 s and the window runs to 75 s.
+  The checks are `fault.alarmed`, `alarm.beacon` lit within 5 s of the
+  failure and still lit at the end, and `fault.no_false_alarm`, never lit
+  while the element was healthy, so a beacon wired on cannot pass.
+
+The `good` reference of each scene answers its fault and passes, on seeds 1–40
+for the sorting line and 1–12 for the other two. Each scene also has an
+`ignorefault` reference, which is `good` with the fault left unread. On every
+one of those seeds it fails the fault checks and nothing else. The references
+notice the dosing pump and the element from the measurement, as the briefs
+teach: commanded flow with less than 5 L/min on the meter for 0.3 s, and a
+plate that cooled over a second of heater output at 90 % or more.
 
 Everything else the exam changes, it changes the way the engine would. The
 gate is the case worth spelling out. Its leaves have solenoid locks
@@ -527,6 +580,7 @@ scene's own 60 s window. Neither is thirteen.
 | | `greedy` | plate held out — short cartons in the chute |
 | | `nostart` | runs whenever the mushroom is out: the belt starts at 0.01 s with nobody having pressed Start, and again at 18.21 s when the mushroom is released |
 | | `startalone` | the Start pressed at 19.87 s with no Reset restarts the line: 1480 mm of belt while the trip was latched |
+| | `ignorefault` | never reads `conveyor.fault`: feeds 1 carton onto the stopped belt at 33.71 s, and the belt runs 1500 mm by itself once the fault clears |
 | `start-stop-station` | `noestop` | 3245 mm of belt through a struck mushroom and its latch, where 100 mm is the limit |
 | | `startalone` | 1745 mm of belt after Start alone cleared the latch, where 100 mm is the limit |
 | | `runon` | makes 21 cartons against a pot of 5 |
@@ -540,12 +594,14 @@ scene's own 60 s window. Neither is thirteen.
 | `accumulation-buffer` | `timed` | 6.0 cartons a release becomes 3.0 when the drive slows down |
 | `heat-treat-station` | `ponly` | parks 10.0 °C short of 135 °C and 15.7 °C short of 200 °C |
 | | `thermostat` | mean error 2.1 °C and 2.0 °C, swinging 8.3 °C and 8.1 °C peak to peak |
+| | `ignorefault` | holds both setpoints, and never lights `alarm.beacon` when the element fails |
 | `guarded-cell` | `autostart` | the motor starts at 28.16 s, just after the Reset at 28.00 s, with no Start pressed |
 | | `writesbelt` | writes `belt.rotate`, the motor's own tag |
 | | `tapedmute` | holds the bridge 6.05 s against the scanner's 6 s limit, which withdraws it 2 times |
 | | `lockedshut` | locks the gate and never releases it, so the operator cannot get in after Stop |
 | `batch-dosing` | `timed` | 22.6 L and then 11.3 L against the same 22 L pot |
 | | `noreset` | the second batch is over before it starts |
+| | `ignorefault` | never drops `pump.run` after the pump fails at 86 s, and moves 4.8 L by itself once it is repaired |
 | `star-delta-start` | `samescan` | drops star and energises delta in one scan; the breaker trips at 3.78 s |
 | | `timed` | changes over at 66.6 % speed and draws 98.6 A on the loaded machine, against a pot of 85 % |
 | `servo-positioning` | `autoack` | acknowledges at 22.01 s, as the fault clears, and the carriage moves 369 mm before the Reset at 25.0 s |
@@ -701,18 +757,20 @@ relay is not passing. The behaviour a student sees is identical and the
 mechanism is not, and if the engine ever changes what forcing means for those
 parts, this is where the two will part company.
 
-**Fault injection is graded on two scenes, and not on the ten.** The servo
-positioning scene faults its drive mid-move and marks what the program does
-until the operator's Reset, and the air receiver seizes its isolation valve and
-marks the alarm. The ten this section was written about are unchanged: every
-one of them has a fault tag —
-`tank.fault`, `oven.fault`, `pump.fault`, `stop.fault`, `gantry.fault` — and
-half the briefs end on it: a seized valve keeps its opening while your command
-reads zero, a failed element cools while the heater output reads 100 %, a dead
-pump holds its speed reference while the flow collapses. Those are the best
-lesson in several of these scenes and **none of them is marked**. The tags are
-declared so the tag list matches the scene a student is handed; no exam script
-raises one. What each fault does to its part is asserted by the engine's
+**Fault injection is graded on five scenes, not on every scene that has a
+fault.** The servo positioning scene faults its drive mid-move and marks what
+the program does until the operator's Reset. The air receiver seizes its
+isolation valve and marks the alarm. Since IP-12, the sorting line faults its
+conveyor's drive, the dosing pump fails mid-dose, and the heat treat
+station's element fails (see "Faults, injected and marked" above). The rest
+are unchanged. `tank.fault`, `stop.fault` and `gantry.fault`, the cooling
+tunnel's `fan.fault` and the sorting line's `pusher.fault` are declared so the
+tag list matches the scene a student is handed, and no exam script raises
+them. A seized tank valve that keeps its opening while your command reads zero
+is still an **unmarked** lesson. Each marked fault is marked on exactly what
+its brief asks for, which is small: stop, alarm, or stay stopped until Reset.
+None of them marks how a program recovers beyond the Start that follows. What
+each fault does to its part is asserted by the engine's
 self-tests (`FaultInjectionSelfTest.cs`, `ControlPartsSelfTest.cs`,
 `LinePartsSelfTest.cs`, `HandlingPartsSelfTest.cs`, `IndustrialPartsSelfTest.cs`).
 `tools/try_scene.py` used to drive them from controllers of its own as well;
@@ -728,17 +786,21 @@ starts the line, and a program that ignored Stop entirely would still pass
 them. `tools/try_scene.py` puts the same sheet to the `good` reference on the
 3D engine for the two scenes whose exams mark it.
 
-**One window is a sample, not a proof.** The windows run 60–80 seconds, which
+**One window is a sample, not a proof.** The windows run 60–96 seconds, which
 is a dozen or two cartons or two settling steps. A program that misroutes one
 carton in five hundred will pass, and a program whose timing is marginal may
 pass one run and fail the next. Run it more than once with different seeds
 before a mark is final; the seed is in the report so you can say which runs you
 used.
 
-**Three scenes mark an output rather than a plant fact, and cannot do otherwise.**
+**Five scenes mark an output rather than a plant fact, and cannot do otherwise.**
 The air receiver's valve checks are an alarm lamp (`alarm.beacon`) timed
 against a valve the plant seized: in the engine the isolation valve feeds
-nothing, so there is no consequence to read instead.
+nothing, so there is no consequence to read instead. The heat treat station's
+`fault.alarmed` is the same kind of check, against an element the plant
+failed. The dosing exam's `fault.pump_stopped` reads when `pump.run` dropped,
+because a dead pump moves nothing whatever it is told. Its partner
+`fault.no_restart_after_repair` is litres, the plant's own.
 The checkweigher's reject decision is a lamp (`panel.red`) and the guarded
 cell's "never wrote `belt.rotate`" is a fact about the wire. There is no
 physical consequence in either scene to read instead — the line has no reject

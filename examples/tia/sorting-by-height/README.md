@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Run the belt, feed cartons, and push the tall ones down the chute while the short ones carry on. Two sensors at two heights are all you get: a carton that breaks the high beam is tall, one that breaks only the low beam is short.
 
-**Done when.** Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it.
+**Done when.** Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it. If the belt's drive faults (conveyor.fault), stop feeding, and when the fault clears stay stopped until Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -85,7 +85,7 @@ names.
 | `counter.short` | PLC reads | `CounterShort` | DInt | DBD2 | cartons that reached the end of the belt, running total |  |
 | `counter.tall` | PLC reads | `CounterTall` | DInt | DBD6 | cartons that came down the chute, running total |  |
 | `panel.setpoint` | PLC reads | `PanelSetpoint` | Real | DBD10 | the operator's pot, 0.3..1.8 s (starts at 0.9) |  |
-| `conveyor.fault` | PLC reads | `ConveyorFault` | Bool | DBX14.0 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
+| `conveyor.fault` | PLC reads | `ConveyorFault` | Bool | DBX14.0 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX14.1 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.reset` | PLC reads | `PanelReset` | Bool | DBX14.2 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX14.3 | Start button, momentary: a short pulse per press -- latch it | yes |

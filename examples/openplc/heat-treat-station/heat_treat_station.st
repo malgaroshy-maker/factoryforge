@@ -15,7 +15,8 @@
      -- measure that offset. Add integral action and it closes. Then fail
      the element (oven.fault) and watch oven.heater keep reading what you
      commanded while the temperature falls: the output tells you nothing,
-     only the measurement does.
+     only the measurement does. Light alarm.beacon within five seconds of
+     the failure and keep it lit -- and never while the element is healthy.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

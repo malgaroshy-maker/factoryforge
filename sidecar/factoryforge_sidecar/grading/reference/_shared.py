@@ -79,14 +79,23 @@ class Scanner:
     """
 
     def __init__(self, bus, latch_estop: bool = True,
-                 start_clears_trip: bool = False) -> None:
+                 start_clears_trip: bool = False,
+                 faults: tuple[str, ...] = ()) -> None:
         """`latch_estop=False` never reads the mushroom as a trip at all.
         `start_clears_trip=True` latches it but lets Start alone clear it once
         the mushroom is out -- the wrong answer to "only Reset clears it",
-        for the references whose lesson is exactly that."""
+        for the references whose lesson is exactly that.
+
+        `faults` are fault bits that trip the line the way the mushroom does:
+        while any reads true the trip is set, so Reset cannot clear it until
+        the fault has gone, and then Reset and Start bring the line back
+        (IP-12). A tag the scene does not have reads false, so a scene with
+        no such fault -- or the 3D engine, where nobody raises it -- runs
+        exactly as it did without it."""
         self.bus = bus
         self.latch_estop = latch_estop
         self.start_clears_trip = start_clears_trip
+        self.faults = tuple(faults)
         self.running = False
         self.tripped = False
         self._prev = {"start": False, "stop": False, "reset": False}
@@ -109,7 +118,8 @@ class Scanner:
         self._prev = now
 
         healthy = self.bit("panel.estop")
-        if self.latch_estop and not healthy:
+        faulted = any(self.bit(tag_id) for tag_id in self.faults)
+        if (self.latch_estop and not healthy) or faulted:
             self.tripped = True
         elif edges["reset"] or (self.start_clears_trip and edges["start"]):
             self.tripped = False
@@ -119,6 +129,7 @@ class Scanner:
         elif edges["start"] and (healthy or not self.latch_estop):
             self.running = True
         edges["healthy"] = healthy
+        edges["faulted"] = faulted
         return edges
 
     def lamps(self) -> dict:

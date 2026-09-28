@@ -48,7 +48,8 @@ VERSION : 0.1
 //   -- measure that offset. Add integral action and it closes. Then fail
 //   the element (oven.fault) and watch oven.heater keep reading what you
 //   commanded while the temperature falls: the output tells you nothing,
-//   only the measurement does.
+//   only the measurement does. Light alarm.beacon within five seconds of
+//   the failure and keep it lit -- and never while the element is healthy.
 //
 // Every signal is a member of the global DB "FF_IO" above: read and write
 // them as "FF_IO".<Name>, e.g. "FF_IO".OvenHeater. Its comments say which

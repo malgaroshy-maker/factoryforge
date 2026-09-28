@@ -37,12 +37,19 @@ import grade                                      # noqa: E402
 import scene as scene_model                       # noqa: E402
 
 from factoryforge_sidecar.grading.scenes import sorting_by_height as sorting  # noqa: E402
+from factoryforge_sidecar.grading.scenes.batch_dosing import BD_EXAM_ENDS_BY  # noqa: E402
+from factoryforge_sidecar.grading.scenes.heat_treat_station import (  # noqa: E402
+    OVEN_EXAM_ENDS_BY)
 
 #: Long enough for the examiner's whole sheet -- Start, the mushroom, Start
 #: alone, Reset, Start (IP-35) -- and for a correct controller to clear
 #: MIN_SORTED with headroom: one carton every 1.8s, six seconds of belt before
 #: the first one lands, and six seconds stopped for the E-stop.
 PASS_WINDOW = sorting.SORT_EXAM_ENDS_BY + 5.0
+#: The dosing and oven exams end on a fault (IP-12), so a window that is to
+#: pass them has to reach the end of the fault's sheet.
+DOSING_WINDOW = BD_EXAM_ENDS_BY
+OVEN_WINDOW = OVEN_EXAM_ENDS_BY
 
 
 def run(*args) -> int:
@@ -287,7 +294,9 @@ def test_the_sorting_pass_sat_the_whole_e_stop_test(good_run):
     a running line and really restarted it, not because nothing happened."""
     panel = good_run["report"]["evidence"]["panel"]
     trip, exam = panel["trip"], panel["exam"]
-    assert [what for _, what in panel["presses"]] == ["start", "start", "reset", "start"]
+    # The E-stop sheet, then the drive fault's Reset and Start (IP-12).
+    assert [what for _, what in panel["presses"]] == [
+        "start", "start", "reset", "start", "reset", "start"]
     assert trip["moving_at_strike"] and 0 < trip["struck_travel_m"] <= panel["allowed_m"]
     assert trip["latched_travel_m"] == 0.0
     assert trip["cleared_at"] >= exam["restart_at"] and trip["restarted_at"] is not None
@@ -313,6 +322,91 @@ def test_a_line_that_restarts_on_start_alone_fails_the_latch(tmp_path):
     trip = report["evidence"]["panel"]["trip"]
     assert trip["latched_moved_at"] >= report["evidence"]["panel"]["exam"]["start_alone_at"]
     assert any("on Start alone" in line for line in report["feedback"])
+
+
+# --- faults injected mid-run (IP-12) -------------------------------------
+#
+# Three scenes fault a part mid-run and mark what the program does about it:
+# the sorting conveyor's drive, the dosing pump and the oven's element. Each
+# has a reference that is `good` without the part that reads the fault, and
+# it has to fail on the fault checks and on nothing else -- the item's Verify
+# clause. The `good` runs assert the fault really happened to a working
+# plant, not only that nothing failed (gotcha 16).
+
+def test_the_sorting_pass_sat_the_whole_drive_fault_test(good_run):
+    fault = good_run["report"]["evidence"]["drive_fault"]
+    trip, exam = fault["trip"], fault["exam"]
+    assert exam["waited_for_a_clear_plate"] is True
+    assert trip["moving_at_strike"] and trip["struck_travel_m"] == 0.0
+    assert trip["latched_travel_m"] == 0.0
+    assert trip["cleared_at"] >= exam["restart_at"] and trip["restarted_at"] is not None
+    assert not [f for f in fault["fed_while_faulted"] if f["counted"]]
+
+
+def test_a_line_that_ignores_its_drive_fault_fails_on_the_fault_alone(tmp_path):
+    """Sorts correctly, answers the panel correctly, and never reads
+    `conveyor.fault`: it feeds onto the stopped belt, and the belt starts again
+    by itself when the fault clears. The cartons it piled are the feed check's
+    to mark, not the sorting checks'."""
+    code, report = graded(tmp_path, "sorting-by-height", "ignorefault", 60)
+    assert code == 1
+    assert failed_ids(report) == {"fault.no_feed_while_faulted",
+                                  "fault.latched_until_reset"}
+    trip = report["evidence"]["drive_fault"]["trip"]
+    assert trip["latched_moved_at"] < report["evidence"]["drive_fault"]["exam"]["reset_at"]
+    assert any("did not latch" in line for line in report["feedback"])
+    assert any("fed while the conveyor's drive was faulted" in line
+               for line in report["feedback"])
+
+
+def test_batch_dosing_passes_a_flow_loop_that_notices_a_dead_pump(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "good", DOSING_WINDOW, seed=5)
+    assert code == 0, failed_ids(report)
+    fault = report["evidence"]["pump_fault"]
+    assert fault["running_at_failure"] is True
+    assert 0.0 < fault["noticed_after_s"] <= fault["noticed_within_s"]
+    assert fault["delivered_after_repair_L"] == 0.0
+    # Gotcha 16: the fault struck a batch that was really dosing.
+    assert fault["batch"]["delivered_L"] >= 1.0
+
+
+def test_a_dose_that_ignores_the_pump_fault_fails_on_the_fault_alone(tmp_path):
+    code, report = graded(tmp_path, "batch-dosing", "ignorefault", DOSING_WINDOW, seed=5)
+    assert code == 1
+    assert failed_ids(report) == {"fault.pump_stopped", "fault.no_restart_after_repair"}
+    assert report["evidence"]["pump_fault"]["delivered_after_repair_L"] > 1.0
+    assert any("tells you nothing" in line for line in report["feedback"])
+
+
+def test_the_oven_alarms_on_a_dead_element_from_the_measurement(tmp_path):
+    code, report = graded(tmp_path, "heat-treat-station", "good", OVEN_WINDOW)
+    assert code == 0, failed_ids(report)
+    fault = report["evidence"]["element_fault"]
+    assert fault["false_alarm_at"] is None and fault["alarm_dropped_at"] is None
+    assert 0.0 < fault["alarmed_after_s"] <= fault["alarm_within_s"]
+
+
+def test_an_oven_that_ignores_its_element_fails_on_the_alarm_alone(tmp_path):
+    code, report = graded(tmp_path, "heat-treat-station", "ignorefault", OVEN_WINDOW)
+    assert code == 1 and failed_ids(report) == {"fault.alarmed"}
+    assert any("cannot tell you" in line for line in report["feedback"])
+
+
+def test_a_beacon_lit_before_the_element_fails_is_a_false_alarm():
+    """`fault.alarmed` alone would pass a beacon wired on. The plant keeps
+    the moment the beacon lit with the element healthy, and the rubric
+    fails `fault.no_false_alarm` on it."""
+    from factoryforge_sidecar.grading.scenes import heat_treat_station as oven
+    sim = oven.OvenScene(5)
+    sim.tags.set("alarm.beacon", True)
+    for _ in range(40):
+        sim.tick(0.05)
+    assert not sim.element_failed
+    assert sim.fault["false_alarm_at"] is not None
+    report = grade.Report("heat-treat-station")
+    oven._grade_element_fault(sim, report, sim.t)
+    failed = {c.id for c in report.checks if not c.ok}
+    assert "fault.no_false_alarm" in failed
 
 
 def test_a_window_too_short_for_the_e_stop_test_does_not_pass_it(tmp_path):
@@ -536,7 +630,7 @@ def test_a_setpoint_written_into_the_program_fails_when_the_pot_moves(tmp_path):
 
 
 def test_the_oven_passes_a_controller_that_closes_the_offset(tmp_path):
-    code, report = graded(tmp_path, "heat-treat-station", "good", 62)
+    code, report = graded(tmp_path, "heat-treat-station", "good", OVEN_WINDOW)
     assert code == 0 and report["verdict"] == "PASS"
     assert report["evidence"]["travel"] >= 80.0
 
@@ -545,7 +639,7 @@ def test_proportional_only_parks_short_of_the_oven_setpoint(tmp_path):
     """The lesson of the scene, asserted as a number: the offset is the loss
     the plate needs divided by the gain, and it gets bigger at the higher
     setpoint because the standing output does."""
-    code, report = graded(tmp_path, "heat-treat-station", "ponly", 62)
+    code, report = graded(tmp_path, "heat-treat-station", "ponly", OVEN_WINDOW)
     assert code == 1 and report["verdict"] == "FAIL"
     assert {"hold1.settled", "hold2.settled"} <= failed_ids(report)
     first, second = report["evidence"]["phases"]
@@ -555,7 +649,7 @@ def test_proportional_only_parks_short_of_the_oven_setpoint(tmp_path):
 def test_a_thermostat_reaches_the_oven_setpoint_and_still_fails(tmp_path):
     """The trap `hold*.steady` exists for. Mean error near zero, setpoint
     reached every couple of seconds, from alternate sides, forever."""
-    code, report = graded(tmp_path, "heat-treat-station", "thermostat", 62)
+    code, report = graded(tmp_path, "heat-treat-station", "thermostat", OVEN_WINDOW)
     assert code == 1 and report["verdict"] == "FAIL"
     assert {"hold1.steady", "hold2.steady"} <= failed_ids(report)
     for phase in report["evidence"]["phases"]:
@@ -654,7 +748,7 @@ def test_a_release_timed_in_seconds_fails_when_the_drive_changes(tmp_path):
 
 
 def test_batch_dosing_passes_a_batch_that_ends_on_litres(tmp_path):
-    code, report = graded(tmp_path, "batch-dosing", "good", 78, seed=5)
+    code, report = graded(tmp_path, "batch-dosing", "good", DOSING_WINDOW, seed=5)
     assert code == 0 and report["verdict"] == "PASS"
     batches = report["evidence"]["batches"]
     assert len(batches) == 2
@@ -1307,6 +1401,13 @@ TABLE_NUMBERS = {
     ("sorting-by-height", "startalone"): lambda e: [
         f"{e['panel']['exam']['start_alone_at']:.2f}",
         f"{e['panel']['trip']['latched_travel_m'] * 1000:.0f}"],
+    ("sorting-by-height", "ignorefault"): lambda e: [
+        str(len([f for f in e["drive_fault"]["fed_while_faulted"] if f["counted"]])),
+        f"{e['drive_fault']['fed_while_faulted'][0]['at']:.2f}",
+        f"{e['drive_fault']['trip']['latched_travel_m'] * 1000:.0f}"],
+    ("batch-dosing", "ignorefault"): lambda e: [
+        f"{e['pump_fault']['failed_at']:g}",
+        f"{e['pump_fault']['delivered_after_repair_L']:.1f}"],
     ("start-stop-station", "runon"): lambda e: [
         str(e["batch"]["made"]), str(e["batch"]["target"])],
     ("tank-level-control", "bangbang"): _phases("settled_error", ".1f"),

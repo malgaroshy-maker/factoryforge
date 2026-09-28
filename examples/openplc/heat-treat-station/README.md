@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Hold the plate at the temperature on the panel's pot. The plant is a first-order lag with a loss to ambient, so holding a temperature needs a standing output — and proportional control can only make one out of a standing error.
 
-**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does.
+**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy.
 
 | File | What it is |
 |---|---|
@@ -81,7 +81,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `alarm.beacon` | PLC writes | bit | 0x0 | `AlarmBeacon` %QX100.0 | rotating alarm beacon | yes |
 | `alarm.horn` | PLC writes | bit | 0x1 | `AlarmHorn` %QX100.1 | alarm horn | yes |
 | `oven.attemp` | PLC reads | bit | 1x0 | `OvenAttemp` %IX100.0 | within +/-3 degC of the station's own 180 degC -- not the pot | yes |
-| `oven.fault` | PLC reads | bit | 1x1 | `OvenFault` %IX100.1 | element failed: TRUE = it takes your command and heats nothing |  |
+| `oven.fault` | PLC reads | bit | 1x1 | `OvenFault` %IX100.1 | element failed: TRUE = it takes your command and heats nothing | yes |
 | `oven.heater` | PLC writes | float | 4x0 + 4x1 | `OvenHeaterHi` %QW100 + `OvenHeaterLo` %QW101 -> `OvenHeater` : REAL | heater power, 0..100 % | yes |
 | `oven.temperature` | PLC reads | float | 3x0 + 3x1 | `OvenTemperatureHi` %IW100 + `OvenTemperatureLo` %IW101 -> `OvenTemperature` : REAL | plate temperature, degC | yes |
 | `panel.estop` | PLC reads | bit | 1x2 | `PanelEstop` %IX100.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |

@@ -7,8 +7,8 @@
     "scene": "sorting-by-height",
     "brief": {
       "task": "Run the belt, feed cartons, and push the tall ones down the chute while the short ones carry on. Two sensors at two heights are all you get: a carton that breaks the high beam is tall, one that breaks only the low beam is short.",
-      "uses": "panel.start · panel.stop · panel.reset · panel.estop · conveyor.rotate · emitter.emit · sensor_low.detect · sensor_high.detect · pusher.extend · pusher.extended · pusher.retracted",
-      "done": "Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · conveyor.rotate · emitter.emit · sensor_low.detect · sensor_high.detect · pusher.extend · pusher.extended · pusher.retracted · conveyor.fault",
+      "done": "Every tall carton ends up in the chute and every short one at the far end, with counter.tall and counter.short adding up to what you fed. The mushroom stops the line inside 200 ms and Start alone will not restart it. If the belt's drive faults (conveyor.fault), stop feeding, and when the fault clears stay stopped until Reset, then Start."
     }
   },
   {
@@ -91,8 +91,8 @@
     "scene": "heat-treat-station",
     "brief": {
       "task": "Hold the plate at the temperature on the panel's pot. The plant is a first-order lag with a loss to ambient, so holding a temperature needs a standing output — and proportional control can only make one out of a standing error.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · oven.heater · oven.temperature · oven.attemp · temp_gauge.value · temp_readout.value · alarm.beacon · alarm.horn",
-      "done": "With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · oven.heater · oven.temperature · oven.attemp · temp_gauge.value · temp_readout.value · alarm.beacon · alarm.horn · oven.fault",
+      "done": "With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy."
     }
   },
   {
@@ -116,7 +116,7 @@
     "brief": {
       "task": "Dose the number of litres on the panel's pot into the tank, then transfer the batch out. Do it with two loops: an inner one that trims pump.speed until meter.rate is the dosing rate you want, and an outer one that watches meter.total and decides what that rate should be — full rate at first, tapering over the last few litres so the cut-off does not carry you past the number. Zero the totaliser before each batch, and remember its reset is a level, not an edge.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · pump.run · pump.speed · pump.flow · pump.fault · meter.rate · meter.total · meter.reset · tank.level · tank.drain · flow_gauge.value · total_display.value · level_readout.value · panel.green · panel.red",
-      "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent."
+      "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent. Drop pump.run within those two seconds, and do not dose again by yourself when the pump comes back: a dose that ended on a fault waits for Reset and Start."
     }
   },
   {

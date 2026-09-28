@@ -475,8 +475,13 @@ class TripLedger:
     passed it: 5 mm of belt, all of it the stop lag.
     """
 
-    def __init__(self, panel: "Panel") -> None:
+    def __init__(self, panel: "Panel", struck=None) -> None:
+        """`struck` says whether the trip's cause is present this tick: by
+        default the mushroom, pressed in. A scene that also marks a fault
+        passes the fault instead and keeps a second ledger, so the sorting
+        line's drive fault is measured in the same phases as its E-stop."""
         self.panel = panel
+        self._struck = struck or (lambda: not panel.healthy)
         self.phase = "clear"
         #: One record per trip: when it was struck, released, reset and
         #: cleared, how far the belt moved in each phase, how long it took
@@ -495,7 +500,7 @@ class TripLedger:
 
     def step(self, now: float, moved: float) -> None:
         start, reset = self._rising("start"), self._rising("reset")
-        healthy = self.panel.healthy
+        healthy = not self._struck()
         moving = moved > 0.0
         if start:
             self._start_since_stop = True
@@ -561,7 +566,9 @@ def declare_stack_light(tags: TagTable, prefix: str = "tower") -> None:
 
 def fault_input(prefix: str, title: str) -> Tag:
     """A part's `.fault` input. Declared so the tag list matches the scene a
-    student is handed, never raised: no exam injects a fault (docs/GRADING.md,
-    "Fault injection is not graded"), so the plant never reads it back either.
-    A rubric that starts injecting one must also make the model obey it."""
+    student is handed. Most exams never raise it, and then the plant never
+    reads it back either. The ones that do (the sorting line's drive, the
+    dosing pump, the oven's element -- docs/GRADING.md, "Fault injection")
+    raise it from the plant side with `tags.set`, never a force, and make the
+    model obey it: a rubric that starts injecting one must do both."""
     return Tag(f"{prefix}.fault", title, "bit", "input")

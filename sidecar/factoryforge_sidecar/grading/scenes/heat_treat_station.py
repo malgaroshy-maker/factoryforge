@@ -50,6 +50,37 @@ OVEN_TARGET = _OVEN.number("target_temp")
 OVEN_TOLERANCE = _OVEN.number("tolerance")
 
 
+# --- the element failure (IP-12) ------------------------------------------
+#
+# The brief ends on it: fail the element and `oven.heater` keeps reading what
+# was commanded while the temperature falls -- "the output tells you nothing,
+# only the measurement does". The least a program has to do with that is say
+# so: light `alarm.beacon` within a few seconds of the element failing, and
+# keep it lit, since nothing on the plate is going to clear it. And not light
+# it while the element is healthy, or a beacon wired on would pass.
+#
+# The examiner fails the element once the second setpoint has had its whole
+# phase to settle -- the phase now ends there, so the settling checks read
+# exactly the trace they read before the fault existed -- and the window runs
+# on long enough to see the alarm come and stay. The plant obeys the failure
+# as `HeatingStation.cs` does: no heat, whatever the command.
+#
+# The beacon is an output, not a plant fact, and there is no plant fact to
+# read instead: a dead element heats nothing whatever it is told. It is marked
+# the way the air receiver marks its seized valve (docs/GRADING.md).
+
+#: When the element fails: the end of the old 65-second window, so the second
+#: phase is as long as it always was.
+OVEN_FAULT_AT = 65.0
+#: How long after the failure the beacon has to be lit. The plate at 200 C
+#: loses 9 C a second with no element; a loop saturates and sees the
+#: temperature falling under full output inside three.
+OVEN_ALARM_WITHIN = 5.0
+#: How long the window watches after that, for the beacon staying lit.
+OVEN_ALARM_HELD_FOR = 5.0
+OVEN_EXAM_ENDS_BY = OVEN_FAULT_AT + OVEN_ALARM_WITHIN + OVEN_ALARM_HELD_FOR
+
+
 class OvenScene(Regulator):
     name = "heat-treat-station"
     measured = "the plate"
@@ -74,18 +105,45 @@ class OvenScene(Regulator):
 
         first = self.rng.choice([115.0, 125.0, 135.0])
         second = self.rng.choice([190.0, 200.0, 210.0])
+        #: The element failure's ground truth, and the beacon against it.
+        self.element_failed = False
+        self.fault: dict = {"failed_at": None, "false_alarm_at": None,
+                            "alarmed_at": None, "alarm_dropped_at": None,
+                            "temperature_at_failure": None}
         self.script = Script([
             (0.2, self._phase(first, until=30.0)),
             (1.0, self.panel.press("start")),
-            (30.0, self._phase(second, until=10_000.0)),
+            (30.0, self._phase(second, until=OVEN_FAULT_AT)),
+            (OVEN_FAULT_AT, self._fail_the_element),
         ])
+
+    def _fail_the_element(self) -> None:
+        """`HeatingStation.cs`: a faulted station makes no heat, and its
+        fault contact reads true -- written by the plant, not forced."""
+        self.element_failed = True
+        self.tags.set("oven.fault", True)
+        self.fault["failed_at"] = round(self.t, 2)
+        self.fault["temperature_at_failure"] = round(self.temperature, 2)
 
     def measure(self) -> float:
         return self.temperature
 
+    def _watch_the_beacon(self) -> None:
+        beacon = self.bit("alarm.beacon")
+        fault = self.fault
+        if not self.element_failed:
+            if beacon and fault["false_alarm_at"] is None:
+                fault["false_alarm_at"] = round(self.t, 2)
+        elif beacon and fault["alarmed_at"] is None:
+            fault["alarmed_at"] = round(self.t, 2)
+        elif not beacon and fault["alarmed_at"] is not None \
+                and fault["alarm_dropped_at"] is None:
+            fault["alarm_dropped_at"] = round(self.t, 2)
+
     def step(self, dt: float) -> None:
+        self._watch_the_beacon()
         power = min(max(self.num("oven.heater"), 0.0), 100.0)
-        heat = OVEN_POWER * power / 100.0
+        heat = 0.0 if self.element_failed else OVEN_POWER * power / 100.0
         loss = (self.temperature - OVEN_AMBIENT) * OVEN_LOSS
         self.temperature = max(self.temperature + (heat - loss) / OVEN_MASS * dt,
                                OVEN_AMBIENT)
@@ -101,6 +159,78 @@ def grade_oven(watched, engine, report, duration) -> None:
     # proportional-only loop still fails, which is the point of the scene.
     grade_regulator(watched, engine, report, duration,
                     settled=3.0, ripple=5.0, overshoot=12.0, moved=80.0)
+    _grade_element_fault(watched.inner, report, watched.sim_time)
+
+
+def _grade_element_fault(sim: OvenScene, report, window: float) -> None:
+    """The element failure (IP-12): the beacon lit within OVEN_ALARM_WITHIN
+    of it and still lit when the window ends, and never lit before it."""
+    fault = sim.fault
+    failed = fault["failed_at"]
+    report.evidence["element_fault"] = {
+        **fault, "alarm_within_s": OVEN_ALARM_WITHIN,
+        "alarmed_after_s": (None if failed is None or fault["alarmed_at"] is None
+                            else round(fault["alarmed_at"] - failed, 2)),
+    }
+    short = (f"the {window:g}s window ended before the examiner finished the "
+             f"element-failure test, which needs {OVEN_EXAM_ENDS_BY:g}s")
+    say = report.feedback.append
+
+    false_alarm = fault["false_alarm_at"]
+    report.add("fault.no_false_alarm",
+               false_alarm is None,
+               "alarm.beacon stayed dark while the element was healthy"
+               if false_alarm is None else
+               f"alarm.beacon lit at {false_alarm:g}s, with the element healthy")
+    if false_alarm is not None:
+        say(f"`alarm.beacon` lit at {false_alarm:g}s, while the element was "
+            f"still working. An alarm that is on when nothing is wrong teaches "
+            f"the operator to ignore it -- light it on the failure, not before.")
+
+    if failed is None or window < OVEN_EXAM_ENDS_BY - 1e-6:
+        report.add("fault.alarmed", False, short)
+        return
+    alarmed, dropped = fault["alarmed_at"], fault["alarm_dropped_at"]
+    lag = None if alarmed is None else alarmed - failed
+    ok = lag is not None and lag <= OVEN_ALARM_WITHIN + 1e-9 and dropped is None
+    if alarmed is None:
+        detail = (f"alarm.beacon never lit after the element failed at "
+                  f"{failed:g}s (within {OVEN_ALARM_WITHIN:g}s)")
+    elif lag > OVEN_ALARM_WITHIN + 1e-9:
+        detail = (f"alarm.beacon lit {lag:.2f}s after the element failed at "
+                  f"{failed:g}s (within {OVEN_ALARM_WITHIN:g}s)")
+    elif dropped is not None:
+        detail = (f"alarm.beacon lit {lag:.2f}s after the element failed at "
+                  f"{failed:g}s and went out again at {dropped:g}s, with the "
+                  f"element still dead")
+    else:
+        detail = (f"alarm.beacon lit {lag:.2f}s after the element failed at "
+                  f"{failed:g}s (within {OVEN_ALARM_WITHIN:g}s) and stayed lit")
+    report.add("fault.alarmed", ok, detail)
+    if alarmed is None or lag > OVEN_ALARM_WITHIN + 1e-9:
+        say(f"The element failed at {failed:g}s, with the plate at "
+            f"{fault['temperature_at_failure']:g} C, and "
+            + ("nothing said so. " if alarmed is None else
+               f"`alarm.beacon` took {lag:.1f}s to say so. ")
+            + "`oven.heater` goes on reading what you commanded -- it is your "
+              "own output -- so it cannot tell you. The measurement can: full "
+              "heater output and a temperature that is falling is an element "
+              "that is not heating. Light `alarm.beacon` on that.")
+    elif dropped is not None:
+        say(f"`alarm.beacon` went out at {dropped:g}s while the element was "
+            f"still dead -- once the plate has cooled, a falling temperature "
+            f"stops falling. Latch the alarm, and clear it on Reset.")
+
+
+def _summary_oven(evidence: dict, out) -> None:
+    _summary_regulator(evidence, out)
+    fault = evidence.get("element_fault", {})
+    if fault.get("failed_at") is not None:
+        after = fault["alarmed_after_s"]
+        out(f"element failed at {fault['failed_at']:g}s: beacon "
+            + ("never lit" if after is None else f"lit {after:.2f}s later")
+            + ("" if fault["alarm_dropped_at"] is None
+               else f", out again at {fault['alarm_dropped_at']:g}s"))
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -110,13 +240,15 @@ RUBRIC = {
     "task": ("Hold the plate at the temperature on the pot. The plant is a "
              "first-order lag losing heat to the room, so holding a "
              "temperature needs a standing output -- and proportional "
-             "action can only make one out of a standing error."),
+             "action can only make one out of a standing error. Then the "
+             "element fails: light alarm.beacon within five seconds and "
+             "keep it lit -- and never while the element is healthy."),
     "build": OvenScene,
     "observe": None,
     "grade": grade_oven,
-    "summary": _summary_regulator,
-    "duration": 65.0,
-    "references": ("good", "ponly", "thermostat"),
+    "summary": _summary_oven,
+    "duration": OVEN_EXAM_ENDS_BY,
+    "references": ("good", "ponly", "thermostat", "ignorefault"),
     "tags": ("oven.heater, temp_gauge.value, temp_readout.value, "
              "alarm.beacon, alarm.horn, panel.green, panel.red are yours to "
              "write; oven.temperature, oven.attemp, oven.fault, "
