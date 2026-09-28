@@ -189,6 +189,7 @@ be made over the bus and stay the grader's.
 | `press-station` | pot 1.2 s, selector AUTO, Start, selector OFF at 19 s | ≥ 3 strokes to `bdc.no` with returns to `ram.retracted`; each dwell pot − 0.3 .. pot + 1.0 s; no stroke after OFF |
 | `rotary-index` | Start | ≥ 3 pushes, each with `table.atindex` made; `done.count` equals the pushes |
 | `pivot-divert` | Start | ≥ 3 tall and 3 short seen by the two eyes; chute count equals tall, far count equals short (8 s lag) |
+| `mezzanine-lift` (IP-15) | Start | ≥ 4 cartons reach `out_eye` on the mezzanine, each with the carriage at `lift.level` 1 and `atlevel`; `spill.count` stays 0; `done.count` equals the arrivals (6 s lag) |
 | `palletising-cell` | — | not graded, so no reference: `try_scene.py` keeps its own controller for it (IK, layer pattern, full pallet refusal, staged moves) |
 
 **Coverage rule.** Every manifest scene is in exactly one of `TRIALS`
@@ -282,6 +283,17 @@ Honest list of what this plan does **not** prove:
 ---
 
 ## Results
+
+**2026-09-25 — section H after IP-20** (`python tools/test_plan.py --only H`,
+Godot 4.7.2-mono, Windows): **18 passed, 0 failed**, three consecutive runs,
+1124 s / 1123 s / 1121 s. Before IP-20 the same command
+gave 11 passed, 7 failed ("no driver" for the seven scenes IP-14 and IP-32
+added) in 714 s. Every graded scene's headline was the same or within a carton
+across the runs; the spread is in the IP-20 commit message. Engine pace was
+1.00× on every run. Gotcha 24: the light curtain with its belt slowed to
+0.35 m/s in a scene file, the reference still reading the shipped template,
+fails (chute 0 of 6); `--reference blind` on sorting and `--reference noreset`
+on dosing do not complete.
 
 **2026-08-30 — 55 passed, 0 failed, 2 skipped, 781s** (`python tools/test_plan.py`,
 Godot 4.7.2-mono). The two skips are D1/D2, which need a display; both were run

@@ -1178,6 +1178,39 @@ def measure_pivot_divert(bus: Recorder) -> list[Check]:
     ]
 
 
+# --- mezzanine lift -------------------------------------------------------
+
+def measure_mezzanine_lift(bus: Recorder) -> list[Check]:
+    """Cartons carried up one floor, one per trip, and none spilled.
+
+    A trip is `lift.occupied` rising: the carriage's own sensor says a carton
+    is aboard. Each one must be discharged with the carriage at level 1 --
+    `out_eye` on the mezzanine sees it only once it is off the carriage, and
+    `lift.level`/`lift.atlevel` say where the carriage was when that
+    happened -- and reach `done`. `spill` is the remover under the gap
+    between floors: a carton run off a carriage that is not there. Its count
+    must stay at zero. The reference discharges on `atlevel` at level 1,
+    which the grader's model works out from the template's spacing and hoist
+    speed; an engine whose carriage stops elsewhere spills, or never
+    discharges at all."""
+    trips = bus.rises("lift.occupied")
+    arrived = bus.rises("out_eye.detect")
+    off_level = [t for t in arrived
+                 if not (bus.num("lift.level", t) == 1 and bus.value("lift.atlevel", t))]
+    spilled = int(bus.gain("spill.count"))
+    return [
+        (len(arrived) >= 4 and not spilled,
+         f"delivered={int(bus.gain('done.count'))} trips={len(trips)} "
+         f"up={len(arrived)} spilled={spilled}"),
+        (not off_level, "every carton left the carriage at level 1"
+         if not off_level else f"cartons left the carriage off level 1 at {off_level[:3]}"),
+        (len(arrived) >= len(trips) - 1,
+         f"{len(arrived)} of {len(trips)} cartons aboard reached the mezzanine "
+         f"(the last may still be on its way)"),
+        lane(bus, "done", arrived, "done.count", 6.0),
+    ]
+
+
 TRIALS: dict[str, Trial] = {
     "sorting-by-height": Trial(60.0, measure_sorting_by_height,
                                [*START, *operator_sheet(SORT_STRIKE_FROM, sorting_plate_clear)]),
@@ -1192,8 +1225,6 @@ TRIALS: dict[str, Trial] = {
                                    [*START, (LC_POT_THEN_AT, turn("panel.setpoint", LC_POT_THEN))]),
     "roller-line-weighing": Trial(70.0, measure_roller_line_weighing,
                                   [*START, (30.0, turn("panel.setpoint", 1500.0))]),
-
-
     "pick-and-place-cell": Trial(75.0, measure_pick_and_place_cell),
     "accumulation-buffer": Trial(80.0, measure_accumulation_buffer),
     "guarded-cell": Trial(70.0, measure_guarded_cell,
@@ -1208,6 +1239,7 @@ TRIALS: dict[str, Trial] = {
     "press-station": Trial(24.0, measure_press_station, PS_STEPS),
     "rotary-index": Trial(60.0, measure_rotary_index),
     "pivot-divert": Trial(60.0, measure_pivot_divert),
+    "mezzanine-lift": Trial(75.0, measure_mezzanine_lift),
 }
 
 
