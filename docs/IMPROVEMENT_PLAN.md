@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-04 verified on CI, IP-17's parts done; IP-01 in review; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -644,8 +644,9 @@ that day.
 ### Done in this session
 
 IP-02, 03, 06, 07, 08 (Windows), 09, 10, 14, 15, 16, 17 (parts), 18, 19, 20,
-21, 25–36, 38 and 40 — commits in Appendix A. IP-04's code is done. The
-last full evidence: section H **19 passed, 0 failed** (1214 s, every scene
+21, 25–36, 38 and 40 — commits in Appendix A. IP-04 is verified: the
+first push of this work (CI run 36447686787) ran the graded tests as their
+own job, and both jobs passed. The last full evidence: section H **19 passed, 0 failed** (1214 s, every scene
 driven by the grader's own reference, mezzanine-lift included), sections A
 and B **9 passed** (pytest 782). The OpenPLC first-hour program was run on a
 real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
@@ -661,8 +662,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 ### Left, no one else needed
 
-- **IP-04, IP-05** — prove on CI: the graded job's first run, and F/G on
-  Linux.
+- **IP-05** — run sections F and G on Linux CI.
 - **IP-12** — fault and operator-contract marks on the remaining panel
   scenes.
 - **IP-37** — host and port fields for F5's Modbus server.
@@ -683,7 +683,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-01 | Close the hardening plan honestly | 0 | S |  | in review |
 | IP-02 | Take the counts out of the prose | 0 | S |  | **done** ee4ede9 |
 | IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
-| IP-04 | Graded tests get their own job | 1 | S | ● | code done d1ac12d; CI unverified |
+| IP-04 | Graded tests get their own job | 1 | S | ● | **done** d1ac12d; CI run 36447686787: test-plan 27 min and grader 23 min in parallel, both green |
 | IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | open |
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
