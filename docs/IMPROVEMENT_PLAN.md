@@ -687,7 +687,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282, except the WSL-to-Windows firewall crossing (IP-39) |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |
-| IP-12 | Mark the operator contract and the fault | 2 | L |  | open |
+| IP-12 | Mark the operator contract and the fault | 2 | L |  | open: faults marked on sorting, dosing, heat-treat (ae3c44e); operator contract on every panel scene still open |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | **done** ba6a72a, 728d65c |
