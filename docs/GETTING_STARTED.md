@@ -901,10 +901,11 @@ line's nineteen, so its Modbus addresses are not the starter's.
 
 The **F5 Driver dialog** starts the sidecar for you: pick a driver, fill in the
 address, and *Apply & Connect* starts it and copies the command to your
-clipboard in case you would rather run it yourself. For Modbus it has no host
-or port fields, so it serves `127.0.0.1:502`. That suits a PLC on this same
-machine only. For OpenPLC in WSL, and for port 5502, use the command from
-step 5.
+clipboard in case you would rather run it yourself. For Modbus it serves
+`127.0.0.1:502` unless you change its **Modbus Server Bind Host** and **Port**
+fields; loopback suits a PLC on this same machine only. For OpenPLC in WSL,
+enter the address from step 4 and `5502`, the same values as step 5's
+command.
 
 <!-- from-source -->
 From a source checkout, `python -m factoryforge_sidecar` (run in `sidecar/`)

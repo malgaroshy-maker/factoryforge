@@ -21,6 +21,8 @@ public partial class DriverConnectionUI : Control
     private LineEdit _portInput = null!;
     private LineEdit _instanceInput = null!;
     private LineEdit _dbInput = null!;
+    private LineEdit _modbusHostInput = null!;
+    private LineEdit _modbusPortInput = null!;
     private Label _statusLabel = null!;
 
     /// <summary>Set by Main so the empty-state offer (UX-33) can name and run
@@ -28,11 +30,25 @@ public partial class DriverConnectionUI : Control
     public SceneEditor? Editor { get; set; }
     public IdleHintUI? IdleHint { get; set; }
 
-    public string SelectedDriver { get; private set; } = "plcsim-advanced";
+    /// <summary>Internal set so <c>--self-test=sidecar</c> can build a
+    /// command for a chosen driver without a dropdown.</summary>
+    public string SelectedDriver { get; internal set; } = "plcsim-advanced";
     public string IpAddress { get; private set; } = "";
     public string PortOrUrl { get; private set; } = "4840";
     public string InstanceName { get; private set; } = "";
     public int DbNumber { get; private set; } = 1;
+
+    /// <summary>The address the Modbus server binds (IP-37). Loopback by
+    /// default, as the driver's own default is (HP-22): Modbus has no
+    /// authentication, so serving it to the network is something the user
+    /// types, never something the dialog assumes. OpenPLC in WSL, a VM or on
+    /// another machine cannot reach 127.0.0.1, which is why it is a field at
+    /// all.</summary>
+    public string ModbusHost { get; private set; } = DefaultModbusHost;
+    public int ModbusPort { get; private set; } = DefaultModbusPort;
+
+    public const string DefaultModbusHost = "127.0.0.1";
+    public const int DefaultModbusPort = 502;
 
     private const string SettingsPath = "user://driver_connection.cfg";
 
@@ -46,6 +62,11 @@ public partial class DriverConnectionUI : Control
         PortOrUrl = (string)cfg.GetValue("driver", "port_or_url", PortOrUrl);
         InstanceName = (string)cfg.GetValue("driver", "instance", InstanceName);
         DbNumber = (int)cfg.GetValue("driver", "db", DbNumber);
+        // Through the validator, so a hand-edited or stale file cannot put a
+        // value into the command that the form itself would have refused.
+        TryApplyModbusBind((string)cfg.GetValue("driver", "modbus_host", ModbusHost),
+                           cfg.GetValue("driver", "modbus_port", ModbusPort).ToString(),
+                           out _);
     }
 
     private void SaveLastSettings()
@@ -55,6 +76,8 @@ public partial class DriverConnectionUI : Control
         cfg.SetValue("driver", "port_or_url", PortOrUrl);
         cfg.SetValue("driver", "instance", InstanceName);
         cfg.SetValue("driver", "db", DbNumber);
+        cfg.SetValue("driver", "modbus_host", ModbusHost);
+        cfg.SetValue("driver", "modbus_port", ModbusPort);
         cfg.Save(SettingsPath);
     }
 
@@ -187,6 +210,37 @@ public partial class DriverConnectionUI : Control
         grid.AddChild(new Label { Text = "S7 DB Number:" });
         _dbInput = new LineEdit { Text = DbNumber.ToString(), CustomMinimumSize = new Vector2(400, 32) };
         grid.AddChild(_dbInput);
+
+        grid.AddChild(new Label { Text = "Modbus Server Bind Host:" });
+        _modbusHostInput = new LineEdit
+        {
+            Text = ModbusHost,
+            PlaceholderText = DefaultModbusHost,
+            CustomMinimumSize = new Vector2(400, 32),
+        };
+        grid.AddChild(_modbusHostInput);
+
+        grid.AddChild(new Label { Text = "Modbus Server Port:" });
+        _modbusPortInput = new LineEdit
+        {
+            Text = ModbusPort.ToString(),
+            PlaceholderText = DefaultModbusPort.ToString(),
+            CustomMinimumSize = new Vector2(400, 32),
+        };
+        grid.AddChild(_modbusPortInput);
+
+        // What binding wider costs, said where the choice is made rather than
+        // only in the sidecar's log after the fact.
+        var bindNote = new Label
+        {
+            Text = "127.0.0.1 serves this PC only. 0.0.0.0 or this PC's address lets other "
+                 + "machines (OpenPLC in WSL) connect — Modbus has no password, and Windows "
+                 + "may ask about the firewall.",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        bindNote.AddThemeFontSizeOverride("font_size", 11);
+        bindNote.AddThemeColorOverride("font_color", new Color(0.80f, 0.80f, 0.85f));
+        mainBox.AddChild(bindNote);
 
         mainBox.AddChild(new HSeparator());
 
@@ -369,32 +423,45 @@ public partial class DriverConnectionUI : Control
     /// the bus port, so against a running engine it either fails to bind or
     /// drives a scene you cannot see.
     /// </summary>
-    public string BuildSidecarArguments()
+    public string BuildSidecarArguments() => BuildSidecarArguments(
+        SelectedDriver, IpAddress, PortOrUrl, InstanceName, DbNumber, ModbusHost, ModbusPort,
+        WillUseMappingFile() ? ProjectSettings.GlobalizePath(DriverWiringUI.MappingPath) : null);
+
+    /// <summary>The same, from plain values: no form and no filesystem, so a
+    /// self-test can check exactly what a given set of choices becomes.</summary>
+    public static string BuildSidecarArguments(
+        string driver, string ipAddress, string portOrUrl, string instanceName, int dbNumber,
+        string modbusHost, int modbusPort, string? mappingFile)
     {
         var args = new System.Text.StringBuilder("-m factoryforge_sidecar connect");
-        args.Append($" --driver {SelectedDriver}");
+        args.Append($" --driver {driver}");
 
-        switch (SelectedDriver)
+        switch (driver)
         {
             case "opcua-client":
-                string url = PortOrUrl.StartsWith("opc.tcp://")
-                    ? PortOrUrl
-                    : $"opc.tcp://{IpAddress}:4840";
+                string url = portOrUrl.StartsWith("opc.tcp://")
+                    ? portOrUrl
+                    : $"opc.tcp://{ipAddress}:4840";
                 args.Append($" -o url {url}");
                 break;
 
             case "s7-snap7":
-                args.Append($" -o host {IpAddress} -o db {DbNumber}");
+                args.Append($" -o host {ipAddress} -o db {dbNumber}");
                 break;
 
             case "plcsim-advanced":
-                args.Append($" -o instance {InstanceName}");
+                args.Append($" -o instance {instanceName}");
                 break;
 
             case "modbus-tcp":
+                // A server: the controller connects to it, so what it needs is
+                // where to listen (IP-37). Written out even at the default, so
+                // the copied command shows the bind instead of hiding it.
+                args.Append($" -o host {modbusHost} -o port {modbusPort}");
+                break;
+
             case "opcua-server":
-                // Both are servers: the controller connects to them, so there is
-                // nothing to point at.
+                // Also a server, with no bind option in this dialog.
                 break;
         }
 
@@ -405,12 +472,7 @@ public partial class DriverConnectionUI : Control
         // ns=2;s=<tag_id> respectively) and ignore a mapping file entirely,
         // so passing one to them would be a no-op that looks like it did
         // something. See FF-05.
-        bool driverReadsMapping = SelectedDriver is "opcua-client" or "s7-snap7" or "plcsim-advanced";
-        if (driverReadsMapping && Godot.FileAccess.FileExists(DriverWiringUI.MappingPath))
-        {
-            string mapping = ProjectSettings.GlobalizePath(DriverWiringUI.MappingPath);
-            args.Append($" --mapping \"{mapping}\"");
-        }
+        if (mappingFile is not null) args.Append($" --mapping \"{mappingFile}\"");
 
         return args.ToString();
     }
@@ -422,9 +484,53 @@ public partial class DriverConnectionUI : Control
         SelectedDriver is "opcua-client" or "s7-snap7" or "plcsim-advanced"
         && Godot.FileAccess.FileExists(DriverWiringUI.MappingPath);
 
+    /// <summary>
+    /// Check a Modbus bind the user typed and take it only if both halves are
+    /// valid: a good host with a bad port changes neither, so a refused form
+    /// never leaves half of itself in the next command.
+    /// </summary>
+    /// <returns>True if applied; otherwise <paramref name="error"/> says why.</returns>
+    public bool TryApplyModbusBind(string hostText, string portText, out string error)
+    {
+        string host = hostText.Trim();
+        string portStr = portText.Trim();
+
+        if (!int.TryParse(portStr, out int port) || port < 1 || port > 65535)
+        {
+            error = $"Modbus port '{portStr}' is not a port: enter a number from 1 to 65535 "
+                  + $"(default {DefaultModbusPort}).";
+            return false;
+        }
+
+        // IPv4, IPv6 or a DNS name. Anything else -- a space, a URL, a stray
+        // colon-and-port -- would reach the sidecar as a bind it cannot make.
+        if (host.Length == 0 || Uri.CheckHostName(host) == UriHostNameType.Unknown)
+        {
+            error = $"Modbus host '{host}' is not an IP address or host name. "
+                  + $"Use {DefaultModbusHost} for this PC only, or 0.0.0.0 / this PC's address "
+                  + "for a PLC elsewhere.";
+            return false;
+        }
+
+        ModbusHost = host;
+        ModbusPort = port;
+        error = "";
+        return true;
+    }
+
     /// <summary>Read the form, start the sidecar, and report what happened.</summary>
     public void ApplyConnectionSettings()
     {
+        // Validated before anything is assigned or saved: refusing means
+        // nothing changes, not "the other fields took and the sidecar started
+        // on last time's bind".
+        if (SelectedDriver == "modbus-tcp"
+            && !TryApplyModbusBind(_modbusHostInput.Text, _modbusPortInput.Text, out string bindError))
+        {
+            Warn($"Not started. {bindError}");
+            return;
+        }
+
         IpAddress = _ipInput.Text.Trim();
         PortOrUrl = _portInput.Text.Trim();
         InstanceName = _instanceInput.Text.Trim();
@@ -493,7 +599,9 @@ public partial class DriverConnectionUI : Control
         // between "connected" and "connected to the addresses you actually
         // meant" — F4 silently not reaching three of the four drivers was
         // FF-05, and this is the line that would have caught it immediately.
-        string wiring = WillUseMappingFile() ? "using F4 wiring" : "no wiring file — driver defaults";
+        string wiring = SelectedDriver == "modbus-tcp"
+            ? $"serving {ModbusHost}:{ModbusPort}"
+            : WillUseMappingFile() ? "using F4 wiring" : "no wiring file — driver defaults";
         _statusLabel.Text = $"Sidecar running (pid {pid}) — driver '{SelectedDriver}', {wiring}";
         Visible = false;
     }

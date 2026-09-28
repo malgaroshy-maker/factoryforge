@@ -305,6 +305,9 @@ socket is concerned and you have to ask:
 options.)
 <!-- /from-source -->
 
+Against the 3D engine, the F5 dialog's Modbus host and port fields pass the
+same two options.
+
 The driver logs a warning when you do, and you will also need to let the port
 through the host firewall. The simplest way to avoid all of it is to put both
 halves on the same side of the boundary, which is what was done here: the
