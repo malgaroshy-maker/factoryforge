@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-04 verified on CI, IP-17's parts done; IP-01 in review; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-04 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -653,8 +653,6 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 ### Needs the user
 
-- **Review IP-01** (the closed hardening plan) — it has been "in review"
-  since the plan was written.
 - **IP-39** — allow the sidecar through the Windows firewall once, then
   follow the first-hour guide from WSL exactly.
 - **IP-11, IP-13** — permission to connect to PLCSIM Advanced
@@ -680,7 +678,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 | Item | Title | Phase | Size | Gate | Status |
 |---|---|---|---|---|---|
-| IP-01 | Close the hardening plan honestly | 0 | S |  | in review |
+| IP-01 | Close the hardening plan honestly | 0 | S |  | **done** 2026-09-28: all 53 done rows name a commit that exists and fixes that item (shared commits name it in the body; HP-09 names the `v1.0.0` tag) |
 | IP-02 | Take the counts out of the prose | 0 | S |  | **done** ee4ede9 |
 | IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
 | IP-04 | Graded tests get their own job | 1 | S | ● | **done** d1ac12d; CI run 36447686787: test-plan 27 min and grader 23 min in parallel, both green |
