@@ -313,6 +313,41 @@ def test_the_logic_is_left_to_the_student(scene):
     assert not code, f"{scene}: the FB body contains {code}"
 
 
+_FIRST_POLL = "**Every input reads FALSE until OpenPLC's first poll returns.**"
+
+
+@pytest.mark.parametrize("scene", SCENES)
+def test_an_openplc_starter_with_an_estop_warns_about_the_first_scans(scene):
+    """IP-41, AGENTS.md gotcha 25. OpenPLC scans before its first Modbus poll
+    returns and reads every input FALSE until then, so a normally closed
+    E-stop looks struck and a trip latched on `NOT PanelEstop` trips itself on
+    every start. The guide's program found that on a real OpenPLC; a student
+    starting from a starter must be told before they find it the same way.
+    Whether the scene has an E-stop comes from the engine's tag set, not the
+    generator."""
+    if "panel.estop" not in _fixture(scene):
+        pytest.skip(f"{scene} has no panel.estop")
+    readme = _read(EXAMPLES / "openplc" / scene / "README.md")
+    start = readme.find("- " + _FIRST_POLL)
+    assert start >= 0, f"{scene}: the OpenPLC README does not warn that the first scans read FALSE"
+    bullet = re.split(r"\n(?=- |#)", readme[start:])[0]
+    bullet = " ".join(bullet.split())
+    for needle in ("`panel.estop`", "EstopSeen", "NOT PanelEstop", "docs/OPENPLC.md"):
+        assert needle in bullet, f"{scene}: the first-scan warning does not mention {needle}"
+    # Every other normally closed input the README's own I/O table lists.
+    closed = re.findall(r"^\| `([\w.]+)` \| PLC reads \| bit \|[^\n]*normally closed", readme, re.M)
+    assert "panel.estop" in closed, f"{scene}: the I/O table does not call panel.estop normally closed"
+    for tag in closed:
+        assert f"`{tag}`" in bullet, f"{scene}: the first-scan warning leaves out {tag}, normally closed"
+
+    section = re.search(r"2\. Your program(.*?)=====\s*3\.", _program(scene), re.S)
+    assert section, f"{scene}: the .st has no section 2"
+    text = " ".join(section.group(1).split())
+    assert "IF PanelEstop THEN EstopSeen := TRUE; END_IF;" in text, (
+        f"{scene}: the .st's section 2 does not show the EstopSeen pattern")
+    assert "EstopSeen AND NOT PanelEstop" in text, f"{scene}: the .st does not arm the trip on EstopSeen"
+
+
 # --- TIA Portal --------------------------------------------------------------
 
 @pytest.mark.parametrize("scene", SCENES)

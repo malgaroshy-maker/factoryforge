@@ -638,6 +638,27 @@ def _direction(tag: TagInfo) -> str:
     return "PLC writes" if tag.plc_writes else "PLC reads"
 
 
+def normally_closed(scene: Scene) -> list[TagInfo]:
+    """The wired inputs that read TRUE when healthy -- the E-stop, guard
+    switches, overloads. OpenPLC reads every input FALSE until its first
+    Modbus poll returns (AGENTS.md gotcha 25, IP-41), and for these FALSE
+    means tripped, so each starter that has one has to say so."""
+    return [t for t in scene.wired
+            if not t.plc_writes and t.type == "bit" and "normally closed" in t.meaning]
+
+
+def _first_poll_other(scene: Scene, markdown: bool = False) -> str:
+    """The normally closed inputs other than the E-stop, as a sentence, or "".
+    Tag ids in the README, ST variable names in the program."""
+    others = [t for t in normally_closed(scene) if t.id != "panel.estop"]
+    if not others:
+        return ""
+    names = [f"`{t.id}`" if markdown else t.name for t in others]
+    listed = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
+    return (f"{listed} {'are' if len(names) > 1 else 'is'} normally closed too "
+            f"and need{'' if len(names) > 1 else 's'} the same care.")
+
+
 def _open_scene(scene: Scene) -> str:
     if scene.template:
         return (f"pick \"{scene.title}\" on the start screen (or launch with "
@@ -887,6 +908,31 @@ def render_st(scene: Scene) -> str:
                    f"Every signal above can be used by name here: the bits directly, "
                    f"the 32-bit values through {', '.join(t.name for t in wide) or 'nothing'}.",
                    72, "     ")
+    has_estop = any(t.id == "panel.estop" for t in scene.wired)
+    if has_estop:
+        lines += [""]
+        lines += _wrap("FIRST SCANS READ FALSE. OpenPLC scans before its first Modbus "
+                       "poll returns, and until then every input reads FALSE. PanelEstop "
+                       "is normally closed, so it looks struck, and a trip latched on NOT "
+                       "PanelEstop trips itself every time OpenPLC starts. Arm the trip "
+                       "only once the E-stop has read healthy, and keep refusing Start "
+                       "while it reads FALSE (docs/OPENPLC.md, Troubleshooting):",
+                       72, "     ")
+        lines += [
+            "       EstopSeen : BOOL;   in the second VAR block",
+            "       IF PanelEstop THEN EstopSeen := TRUE; END_IF;",
+            "       IF EstopSeen AND NOT PanelEstop THEN Tripped := TRUE; END_IF;",
+        ]
+        if _first_poll_other(scene):
+            lines += _wrap(_first_poll_other(scene), 72, "     ")
+    elif normally_closed(scene):
+        lines += [""]
+        lines += _wrap("FIRST SCANS READ FALSE. OpenPLC scans before its first Modbus "
+                       "poll returns, and until then every input reads FALSE, so "
+                       + ", ".join(t.name for t in normally_closed(scene))
+                       + " look tripped. Act on a FALSE only once the input has read "
+                       "TRUE since OpenPLC started (docs/OPENPLC.md, Troubleshooting).",
+                       72, "     ")
     lines[-1] += " *)"
     lines += [""]
 
@@ -1080,7 +1126,8 @@ def render_openplc_readme(scene: Scene) -> str:
         "",
         *_md_table(["Tag", "Direction", "Type", "Modbus", "In the program", "Meaning", "Brief"], rows),
         "",
-        "## Three things this scene's wiring does not forgive",
+        f"## {'Four' if normally_closed(scene) else 'Three'} things this scene's "
+        "wiring does not forgive",
         "",
         *_wrap_bullet(
             "**A 32-bit value is two registers**, high word first. "
@@ -1102,6 +1149,28 @@ def render_openplc_readme(scene: Scene) -> str:
         "- **An output you never write is FALSE.** The master rewrites the whole coil",
         "  block on every poll, including coils your program does not touch.",
     ]
+    if any(t.id == "panel.estop" for t in scene.wired):
+        lines += _wrap_bullet(
+            "**Every input reads FALSE until OpenPLC's first poll returns.** The "
+            "runtime starts scanning before its Modbus master has read the slave, and "
+            "`panel.estop` is normally closed, so for those first scans it looks "
+            "struck. A trip latched on `NOT PanelEstop` then trips itself every time "
+            "OpenPLC starts, and Start does nothing. Arm the trip only once the E-stop "
+            "has read healthy (`IF PanelEstop THEN EstopSeen := TRUE; END_IF;` and "
+            "trip on `EstopSeen AND NOT PanelEstop`), and keep refusing Start while "
+            "it reads FALSE, so a cut wire still stops the line. "
+            + (_first_poll_other(scene, markdown=True) + " "
+               if _first_poll_other(scene) else "")
+            + "The section 2 comment in the `.st` has the pattern; "
+              "[`docs/OPENPLC.md`](../../../docs/OPENPLC.md#troubleshooting) says "
+              "why.")
+    elif normally_closed(scene):
+        lines += _wrap_bullet(
+            "**Every input reads FALSE until OpenPLC's first poll returns.** "
+            + ", ".join(f"`{t.id}`" for t in normally_closed(scene))
+            + " are normally closed, so for the first scans they look tripped. Act on "
+              "a FALSE only once the input has read TRUE since OpenPLC started. See "
+              "[`docs/OPENPLC.md`](../../../docs/OPENPLC.md#troubleshooting).")
     if any(t.hands_off for t in scene.tags):
         lines += [
             "",

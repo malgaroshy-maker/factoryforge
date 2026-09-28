@@ -121,7 +121,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `tower.yellow` | PLC writes | bit | 0x13 | `TowerYellow` %QX101.4 | tower lamp, yellow |  |
 | `transferred.count` | PLC reads | int | 3x6 + 3x7 | `TransferredCountHi` %IW106 + `TransferredCountLo` %IW107 -> `TransferredCount` : DINT | cartons this remover has taken off the line, running total | yes |
 
-## Three things this scene's wiring does not forgive
+## Four things this scene's wiring does not forgive
 
 - **A 32-bit value is two registers**, high word first. This scene has 4:
   `line_end.count`, `panel.setpoint`, `starter.current`, `transferred.count`.
@@ -139,6 +139,18 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
   output you want the scene to see for well over one polling period.
 - **An output you never write is FALSE.** The master rewrites the whole coil
   block on every poll, including coils your program does not touch.
+- **Every input reads FALSE until OpenPLC's first poll returns.** The runtime
+  starts scanning before its Modbus master has read the slave, and
+  `panel.estop` is normally closed, so for those first scans it looks struck.
+  A trip latched on `NOT PanelEstop` then trips itself every time OpenPLC
+  starts, and Start does nothing. Arm the trip only once the E-stop has read
+  healthy (`IF PanelEstop THEN EstopSeen := TRUE; END_IF;` and trip on
+  `EstopSeen AND NOT PanelEstop`), and keep refusing Start while it reads
+  FALSE, so a cut wire still stops the line. `guard_a.closed`,
+  `guard_b.closed`, `scanner.stop` and `starter.overload` are normally closed
+  too and need the same care. The section 2 comment in the `.st` has the
+  pattern; [`docs/OPENPLC.md`](../../../docs/OPENPLC.md#troubleshooting) says
+  why.
 
 ## Not wired
 

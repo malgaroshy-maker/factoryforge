@@ -199,7 +199,17 @@ PROGRAM cooling_tunnel
      The task is at the top of this file and in the scene's Task panel.
      Every signal above can be used by name here: the bits directly, the
      32-bit values through FanAirflow, OvenTemperature, PanelSetpoint,
-     FanSpeed, OvenHeater, TempGaugeValue. *)
+     FanSpeed, OvenHeater, TempGaugeValue.
+
+     FIRST SCANS READ FALSE. OpenPLC scans before its first Modbus poll
+     returns, and until then every input reads FALSE. PanelEstop is
+     normally closed, so it looks struck, and a trip latched on NOT
+     PanelEstop trips itself every time OpenPLC starts. Arm the trip
+     only once the E-stop has read healthy, and keep refusing Start
+     while it reads FALSE (docs/OPENPLC.md, Troubleshooting):
+       EstopSeen : BOOL;   in the second VAR block
+       IF PanelEstop THEN EstopSeen := TRUE; END_IF;
+       IF EstopSeen AND NOT PanelEstop THEN Tripped := TRUE; END_IF; *)
 
   (* ===== 3. Outputs: split each 32-bit value into its two registers ===== *)
   Raw32 := FF_REAL_TO_DWORD(FanSpeed);
