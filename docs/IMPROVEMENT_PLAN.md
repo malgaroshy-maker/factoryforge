@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open.
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-38 and IP-40 done, IP-17's parts done; IP-04 awaits its first CI run; IP-01 in review; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -635,6 +635,47 @@ firewall prompt once, then follow the guide exactly.
 
 ---
 
+## Where we stopped — 2026-09-28
+
+Work paused here at the user's request. `master` is at the handover commit;
+everything below was verified on this machine (Windows, Godot 4.7.2-mono) on
+that day.
+
+### Done in this session
+
+IP-02, 03, 06, 07, 08 (Windows), 09, 10, 14, 15, 16, 17 (parts), 18, 19, 20,
+21, 25–36, 38 and 40 — commits in Appendix A. IP-04's code is done. The
+last full evidence: section H **19 passed, 0 failed** (1214 s, every scene
+driven by the grader's own reference, mezzanine-lift included), sections A
+and B **9 passed** (pytest 782). The OpenPLC first-hour program was run on a
+real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
+
+### Needs the user
+
+- **Review IP-01** (the closed hardening plan) — it has been "in review"
+  since the plan was written.
+- **IP-39** — allow the sidecar through the Windows firewall once, then
+  follow the first-hour guide from WSL exactly.
+- **IP-11, IP-13** — permission to connect to PLCSIM Advanced
+  (`192.168.1.20`) and a program nobody on the project wrote.
+
+### Left, no one else needed
+
+- **IP-04, IP-05** — prove on CI: the graded job's first run, and F/G on
+  Linux.
+- **IP-12** — fault and operator-contract marks on the remaining panel
+  scenes.
+- **IP-37** — host and port fields for F5's Modbus server.
+- **IP-41** — the starters warn about OpenPLC's all-FALSE first scans.
+- **IP-22 → IP-23 → IP-24** — every release self-test against the exported
+  binary (Windows and Linux), tag `v1.1.0`, hand over.
+- Follow-ups found on the way: the grader does not model the turntable's
+  `table.deck` output, and no belt-fed turntable scene exists (IP-33); the
+  pivot-divert scene still carries its `lip_drop` 0.04 workaround (IP-40);
+  IP-08's Linux archive has not been built.
+
+---
+
 ## Appendix A — work item index
 
 | Item | Title | Phase | Size | Gate | Status |
@@ -653,12 +694,12 @@ firewall prompt once, then follow the guide exactly.
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | open |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
-| IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | open |
+| IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | **done** ba6a72a, 728d65c |
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |
 | IP-17 | Five industrial parts | 3 | XL |  | parts **done** 07fe152..67fc1f0; placing them in scenes is with IP-14 |
 | IP-18 | `grade.py` becomes a package | 4 | L |  | **done** 8d4c395, 38660a3, 48f2691 |
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | **done** 02be83a, 568aaa0; its findings are IP-29 |
-| IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | open |
+| IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | **done** 061bb11, d79f09a; H 19/19 |
 | IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
 | IP-22 | Every release self-test meets the binary | 5 | S | ● | open |
 | IP-23 | v1.1.0 | 5 | S |  | open |
@@ -673,7 +714,7 @@ firewall prompt once, then follow the guide exactly.
 | IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | **done** 885df29, 85c0bc6 (plus the pivot-divert scene) |
 | IP-33 | A turntable that can take a carton off a belt | 3 | M |  | **done** e132303 (part and real-physics test; no belt-fed scene yet, and the grader model ignores table.deck) |
 | IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | **done** 89b184a |
-| IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | **done** 2066cbd..814ad98; the guide's new program is compiled, not yet run on OpenPLC |
+| IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | **done** 2066cbd..814ad98, 0668cfc; run on a real OpenPLC: step 8 PASS 12/12 (found gotcha 25) |
 | IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | **done** (gate checks every shipped text file) |
 | IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | open |
 | IP-38 | The release carries the docs its guide links to | 5 | S |  | **done** (gate checks 322 relative links) |

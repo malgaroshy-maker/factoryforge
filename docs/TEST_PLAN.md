@@ -284,6 +284,11 @@ Honest list of what this plan does **not** prove:
 
 ## Results
 
+**2026-09-28 — section H with IP-15's scene** (`python tools/test_plan.py
+--only H`, Godot 4.7.2-mono, Windows): **19 passed, 0 failed**, 1214 s.
+mezzanine-lift: delivered 10, 12 trips, 11 up, 0 spilled. Sections A and B
+the same day: 9 passed, pytest 782.
+
 **2026-09-25 — section H after IP-20** (`python tools/test_plan.py --only H`,
 Godot 4.7.2-mono, Windows): **18 passed, 0 failed**, three consecutive runs,
 1124 s / 1123 s / 1121 s. Before IP-20 the same command

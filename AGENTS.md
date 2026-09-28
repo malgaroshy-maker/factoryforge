@@ -482,8 +482,11 @@ unreleased; `git log v1.0.0..master` is the list.
 - A headless grader, `tools/grade.py`, marks a program against a scene
   (`docs/GRADING.md`; after v1.0.0). Since IP-18 that file is a shim over the
   `factoryforge_sidecar.grading` package, one file per scene under
-  `grading/scenes/` and `grading/reference/`. It is not in the release
-  archive (IP-08), and no real student's program has been graded yet (IP-11).
+  `grading/scenes/` and `grading/reference/`. v1.0.0's archive lacks it;
+  since IP-08 the build freezes it into `factoryforge-sidecar grade`. No real
+  student's program has been graded yet (IP-11), and
+  since IP-20 `tools/try_scene.py` drives every graded scene in the 3D engine
+  with the grader's own reference controllers (section H, 19/19).
 
 The MQTT driver (after v1.0.0) has only met the broker inside
 `tests/test_mqtt.py`, never an external one.
@@ -549,8 +552,10 @@ way they are. Item 8 is what is next.
 
 ## What is open
 
-`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-24, the v1.1 plan) is the live work
-list. `docs/HARDENING_PLAN.md` closed on 2026-09-22 with 53 of 56 done; its
+`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-41, the v1.1 plan) is the live work
+list. Work paused on 2026-09-28; its **Where we stopped** section lists what
+is done, what is left, and what needs the user (a firewall decision, PLCSIM
+access, a review). `docs/HARDENING_PLAN.md` closed on 2026-09-22 with 53 of 56 done; its
 three survivors are carried into the new plan. Every *feature*
 plan in `docs/` is closed. Read the v1.1 gate in that file's Sequencing
 section before starting anything: it is the list of items that must land before a
