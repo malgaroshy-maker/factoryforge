@@ -32,7 +32,24 @@ ENGINE = ROOT / "engine"
 SIDECAR = ROOT / "sidecar"
 
 #: Where Godot writes user:// on this platform, for tests that read exports.
-USER_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Godot" / "app_userdata" / "FactoryForge"
+def _user_dir() -> Path:
+    """Godot's user:// for this project. It is not the same place everywhere.
+
+    G1 plants a corrupt scene there and asks the engine to open it as
+    user://..., so a wrong guess does not fail loudly: the engine cannot find
+    the file, and the check would report a refusal that never happened. The
+    Windows form (%APPDATA%) is all this used to know; Linux keeps user:// under
+    XDG_DATA_HOME (IP-05).
+    """
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / "Godot" / "app_userdata" / "FactoryForge"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Godot" / "app_userdata" / "FactoryForge"
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return data / "godot" / "app_userdata" / "FactoryForge"
+
+
+USER_DIR = _user_dir()
 
 
 def find_godot() -> str | None:
@@ -893,6 +910,10 @@ def section_g() -> None:
             [sys.executable, "-m", "factoryforge_sidecar", "connect", "--driver", "mock",
              "--duration", "20", "--port", str(BUS_PORT)],
             cwd=SIDECAR, stdout=handle, stderr=subprocess.STDOUT)
+        if os.environ.get("FF_TESTPLAN_KILL_SIDECAR") == "1":
+            # Proof that G5 reports a dead sidecar (IP-05, gotcha 24): kill the
+            # process just started, before it can connect. Used by hand only.
+            sidecar_proc.kill()
         # Wait for evidence that it connected, not a guessed two seconds. The
         # printer loop only runs once the describe has arrived, so an "OUT "
         # line is proof. Under load -- another engine building, a parallel
