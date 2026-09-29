@@ -11,11 +11,23 @@
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple?logo=dotnet)
 [![Siemens S7-1500](https://img.shields.io/badge/Siemens-S7--1500%20Verified-009999?logo=siemens)](examples/tia/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/malgaroshy-maker/factoryforge)](https://github.com/malgaroshy-maker/factoryforge/releases/latest)
+[![test-plan](https://github.com/malgaroshy-maker/factoryforge/actions/workflows/test-plan.yml/badge.svg)](https://github.com/malgaroshy-maker/factoryforge/actions/workflows/test-plan.yml)
 
 *محاكي مصانع ثلاثي الأبعاد، حر ومفتوح المصدر، لتعلّم برمجة المتحكمات المنطقية القابلة للبرمجة (PLC) — بديل مفتوح وحديث وقابل للتخصيص لبرنامج Factory I/O.*
 
 طُوِّر بواسطة محمد الجروشي (Mahamed Algaroshy)  
 **المستودع:** [github.com/malgaroshy-maker/factoryforge](https://github.com/malgaroshy-maker/factoryforge)
+
+## ⬇️ التنزيل والتشغيل
+
+**[Windows (zip)](https://github.com/malgaroshy-maker/factoryforge/releases/latest/download/FactoryForge-windows.zip)** · **[Linux (zip)](https://github.com/malgaroshy-maker/factoryforge/releases/latest/download/FactoryForge-linux.zip)** · [كل الإصدارات](https://github.com/malgaroshy-maker/factoryforge/releases)
+
+1. **فُكّ ضغط** الملف، مثلًا إلى `C:\FactoryForge`. لا حاجة إلى تثبيت.
+2. **شغّل** `windows\FactoryForge.exe` (على Linux: `linux/FactoryForge.x86_64`). إن ظهرت رسالة *"Windows protected your PC"* فاضغط **More info** ثم **Run anyway**: النسخة غير موقّعة رقميًا، وهذا كل ما يعنيه التحذير.
+3. **اضغط *Watch it run*** لترى المصنع يتحرك دون أي PLC، ثم اختر مشهدًا واربط متحكّمك عبر [دليل البدء](docs/GETTING_STARTED.md).
+
+للأسئلة والأفكار والآراء: [Discussions](https://github.com/malgaroshy-maker/factoryforge/discussions). وإن وجدت خطأ: [افتح بلاغًا](https://github.com/malgaroshy-maker/factoryforge/issues/new/choose).
 
 ---
 
@@ -33,7 +45,7 @@
 │                            │          │                          │
 │  3D render + Jolt physics  │  tag bus │  asyncua      (OPC UA)   │
 │  scene editor / voxel grid │ ◄──────► │  pythonnet    (PLCSIM)   │
-│  29-part library           │    WS    │  python-snap7 (S7)       │
+│  44-part library           │    WS    │  python-snap7 (S7)       │
 │  tag registry (authority)  │   JSON   │  built-in     (Modbus)   │
 └────────────────────────────┘          └──────────────────────────┘
 ```

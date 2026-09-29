@@ -9,11 +9,23 @@
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple?logo=dotnet)
 [![Siemens S7-1500](https://img.shields.io/badge/Siemens-S7--1500%20Verified-009999?logo=siemens)](examples/tia/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/malgaroshy-maker/factoryforge)](https://github.com/malgaroshy-maker/factoryforge/releases/latest)
+[![test-plan](https://github.com/malgaroshy-maker/factoryforge/actions/workflows/test-plan.yml/badge.svg)](https://github.com/malgaroshy-maker/factoryforge/actions/workflows/test-plan.yml)
 
 *A free, open 3D factory simulator for learning PLC programming — a modern, customizable open replacement for Factory I/O.*
 
 Developed by Mahamed Algaroshy (محمد الجروشي)  
 **Repository:** [github.com/malgaroshy-maker/factoryforge](https://github.com/malgaroshy-maker/factoryforge)
+
+## ⬇️ Download and run
+
+**[Windows (zip)](https://github.com/malgaroshy-maker/factoryforge/releases/latest/download/FactoryForge-windows.zip)** · **[Linux (zip)](https://github.com/malgaroshy-maker/factoryforge/releases/latest/download/FactoryForge-linux.zip)** · [all releases](https://github.com/malgaroshy-maker/factoryforge/releases)
+
+1. **Extract** the zip, for example to `C:\FactoryForge`. Nothing to install.
+2. **Run** `windows\FactoryForge.exe` (Linux: `linux/FactoryForge.x86_64`). If Windows says *"Windows protected your PC"*, click **More info**, then **Run anyway**: the build is not code-signed, and that is all the warning means.
+3. **Click *Watch it run*** to see the factory move with no PLC at all, then pick a scene and connect your own controller with the [Getting Started guide](docs/GETTING_STARTED.md).
+
+Questions, ideas or feedback: [Discussions](https://github.com/malgaroshy-maker/factoryforge/discussions). Found a bug: [open an issue](https://github.com/malgaroshy-maker/factoryforge/issues/new/choose).
 
 ---
 
@@ -31,7 +43,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 │                            │          │                          │
 │  3D render + Jolt physics  │  tag bus │  asyncua      (OPC UA)   │
 │  scene editor / voxel grid │ ◄──────► │  pythonnet    (PLCSIM)   │
-│  29-part library           │    WS    │  python-snap7 (S7)       │
+│  44-part library           │    WS    │  python-snap7 (S7)       │
 │  tag registry (authority)  │   JSON   │  built-in     (Modbus)   │
 └────────────────────────────┘          └──────────────────────────┘
 ```
