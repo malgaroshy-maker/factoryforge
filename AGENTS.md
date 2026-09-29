@@ -603,14 +603,14 @@ way they are. Item 8 is what is next.
 
 ## What is open
 
-`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-41, the v1.1 plan) is the live work
-list. Work paused on 2026-09-28; its **Where we stopped** section lists what
-is done, what is left, and what needs the user (a firewall decision, PLCSIM
-access, a review). `docs/HARDENING_PLAN.md` closed on 2026-09-22 with 53 of 56 done; its
-three survivors are carried into the new plan. Every *feature*
-plan in `docs/` is closed. Read the v1.1 gate in that file's Sequencing
-section before starting anything: it is the list of items that must land before a
-release, drawn from every phase rather than from the phase order.
+`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-41, the v1.1 plan) shipped as v1.1.0
+on 2026-09-29. Its **Where we stopped** section lists the little it leaves
+open: IP-11 (b), a program written by a student, which needs a student, and
+a belt-fed turntable scene. Nothing waits on the user's machine any more (the
+firewall, PLCSIM and review questions were all answered that day). There is no
+v1.2 plan yet; write one before starting new work. `docs/HARDENING_PLAN.md`
+closed on 2026-09-22 with 53 of 56 done, its three survivors carried into the
+v1.1 plan and finished there. Every *feature* plan in `docs/` is closed.
 
 ## Working style the user expects
 
