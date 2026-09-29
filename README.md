@@ -1,5 +1,7 @@
 **English** | [العربية](README.ar.md)
 
+![FactoryForge: a free, open 3D factory simulator for learning PLC programming](docs/images/banner.png)
+
 # FactoryForge 🏭
 
 [![Godot 4.7](https://img.shields.io/badge/Godot-v4.7.2--mono-blue?logo=godotengine)](https://godotengine.org/)

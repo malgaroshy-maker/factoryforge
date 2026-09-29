@@ -330,7 +330,7 @@ V12-12, 13, 18 and 20 run whenever their decision or person arrives.
 | V12-03 | A hall, not a box | A | M | ● | open |
 | V12-04 | Set dressing from generated 3D models | A | L |  | open |
 | V12-05 | Better housings for static parts | A | L |  | open (stretch) |
-| V12-06 | A logo and a real icon | B | S | ● | open (needs the user's pick) |
+| V12-06 | A logo and a real icon | B | S | ● | done (2026-09-29, concept 1 of 4; uploading `docs/images/social_preview.png` in GitHub's settings is the user's) |
 | V12-07 | Template thumbnails from the real engine | B | M | ● | open |
 | V12-08 | A theme and a font | B | M | ● | open |
 | V12-09 | An Arabic interface | B | L | ● | open |

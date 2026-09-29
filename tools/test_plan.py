@@ -443,6 +443,28 @@ def section_a() -> None:
     record("A7", "every script under engine/ has its .uid committed, and no .uid is orphaned",
            *missing_uids())
 
+    record("A8", "every file under engine/assets/ is on record in ASSETS.md",
+           *unrecorded_assets())
+
+
+def unrecorded_assets() -> tuple[bool, str]:
+    """A8's findings. v1.2 brings generated art, and its ground rules say every
+    generated file carries its model, prompt, date and job id in
+    engine/assets/ASSETS.md. A file nobody can trace is one whose licence
+    nobody can answer for. Godot's own sidecars (.import, .uid) are exempt."""
+    assets = ROOT / "engine" / "assets"
+    record_file = assets / "ASSETS.md"
+    if not assets.is_dir():
+        return True, ""
+    if not record_file.is_file():
+        return False, "engine/assets/ exists but ASSETS.md does not"
+    text = record_file.read_text(encoding="utf-8")
+    unlisted = sorted(
+        p.relative_to(assets).as_posix() for p in assets.rglob("*")
+        if p.is_file() and p != record_file and p.suffix not in (".import", ".uid")
+        and f"`{p.relative_to(assets).as_posix()}`" not in text)
+    return not unlisted, ", ".join(unlisted[:6])
+
 
 def missing_uids() -> tuple[bool, str]:
     """A7's findings. Godot 4.4+ writes a `.uid` beside every script the first

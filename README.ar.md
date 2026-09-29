@@ -1,5 +1,7 @@
 [English](README.md) | **العربية**
 
+![FactoryForge: محاكي مصنع ثلاثي الأبعاد مجاني ومفتوح لتعلّم برمجة PLC](docs/images/banner.png)
+
 <div dir="rtl">
 
 # FactoryForge 🏭
