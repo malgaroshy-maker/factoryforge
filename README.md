@@ -48,7 +48,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 ### What has been checked on a real controller
 
 * The first-hour program graded **PASS 15/15** at three seeds on OpenPLC running in WSL2 and polling the sidecar across the Windows boundary, and **15/15** at three seeds on an S7-1500 in PLCSIM Advanced through the native driver. The reports are in [examples/graded/](examples/graded/README.md), along with the run that failed: the original `Sorting.scl`, which sorts perfectly and fails the exam because it predates the operator panel.
-* The unchanged `Sorting.scl` v0.4 sorted **48 tall / 48 short** in a 300-second run over the PLCSIM native driver and again over OPC UA, with no misroutes ([IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md), IP-13).
+* The unchanged `Sorting.scl` v0.4 sorted **48 tall / 48 short** in a 300-second run over the PLCSIM native driver and again over OPC UA, with no misroutes ([IMPROVEMENT_PLAN.md](docs/history/IMPROVEMENT_PLAN_v1.1.md), IP-13).
 * **No real student's program has been graded yet.** What has been graded is programs this project wrote. Both release archives passed the release gate, which includes the frozen grader marking a built-in controller PASS and a wrong one FAIL; no real controller has been graded from the Linux archive.
 
 ---
@@ -275,7 +275,7 @@ See [Getting Started](docs/GETTING_STARTED.md#-connecting-a-scene-you-built-your
 | 🔌 **[DRIVER_AUTHORING.md](docs/DRIVER_AUTHORING.md)** | Guide for adding custom Python protocol drivers |
 | ✅ **[TEST_PLAN.md](docs/TEST_PLAN.md)** | What is tested, what is not, and the last run's results |
 | 📦 **[PACKAGING.md](docs/PACKAGING.md)** | Building and gating a distributable release |
-| 🧭 **[IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md)** | The v1.1 work list, what is done and what is open |
+| 🧭 **[IMPROVEMENT_PLAN_v1.2.md](docs/IMPROVEMENT_PLAN_v1.2.md)** | The v1.2 work list: polish and reach (the shipped v1.1 plan is in `docs/history/`) |
 | 🔨 **[HARDENING_PLAN.md](docs/HARDENING_PLAN.md)** | The closed hardening plan and the release gate inside it |
 | 🗺️ **[ROADMAP.md](docs/ROADMAP.md)** | Milestone completion tracking |
 | 📑 **[PRD.md](docs/PRD.md)** | Problem statement, target audience, and success criteria |

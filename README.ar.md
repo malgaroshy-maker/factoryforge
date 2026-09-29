@@ -50,7 +50,7 @@
 ### ما جرى التحقق منه على متحكم حقيقي
 
 * صُحِّح برنامج الساعة الأولى بنتيجة **نجاح 15/15** على ثلاث بذور (seeds) على OpenPLC العامل في WSL2 وهو يستطلع (polls) الـ sidecar عبر حدّ Windows، وبنتيجة **15/15** على ثلاث بذور على S7-1500 في PLCSIM Advanced عبر المشغّل الأصلي (native driver). التقارير في [examples/graded/](examples/graded/README.md)، ومعها التشغيل الذي رسب: ملف `Sorting.scl` الأصلي، الذي يفرز فرزًا مثاليًا لكنه يرسب في الاختبار لأنه سابق للوحة المشغّل.
-* فرز `Sorting.scl` v0.4 دون أي تعديل **48 طويلًا / 48 قصيرًا** في تشغيل مدته 300 ثانية عبر مشغّل PLCSIM الأصلي، ومرة أخرى عبر OPC UA، دون أي توجيه خاطئ ([IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md)، بند IP-13).
+* فرز `Sorting.scl` v0.4 دون أي تعديل **48 طويلًا / 48 قصيرًا** في تشغيل مدته 300 ثانية عبر مشغّل PLCSIM الأصلي، ومرة أخرى عبر OPC UA، دون أي توجيه خاطئ ([IMPROVEMENT_PLAN.md](docs/history/IMPROVEMENT_PLAN_v1.1.md)، بند IP-13).
 * **لم يُصحَّح بعدُ برنامج طالب حقيقي.** ما صُحِّح هو برامج كتبها هذا المشروع. واجتاز أرشيفا الإصدار كلاهما بوابة الإصدار، ومنها تصحيح المُصحِّح المُجمَّد لمتحكم مدمج بالنجاح ولآخر خاطئ بالرسوب؛ لكن لم يُصحَّح متحكم حقيقي من أرشيف Linux.
 
 ---
@@ -232,7 +232,7 @@ python -m factoryforge_sidecar connect --driver opcua-server
 | 🔌 **[DRIVER_AUTHORING.md](docs/DRIVER_AUTHORING.md)** | دليل إضافة مشغّلات بروتوكول Python مخصصة |
 | ✅ **[TEST_PLAN.md](docs/TEST_PLAN.md)** | ما الذي يُختبر وما الذي لا يُختبر ونتائج آخر تشغيل |
 | 📦 **[PACKAGING.md](docs/PACKAGING.md)** | بناء إصدار قابل للتوزيع واجتيازه بوابة الإصدار |
-| 🧭 **[IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md)** | قائمة عمل v1.1: ما أُنجز وما بقي مفتوحًا |
+| 🧭 **[IMPROVEMENT_PLAN_v1.2.md](docs/IMPROVEMENT_PLAN_v1.2.md)** | قائمة عمل v1.2: الصقل والانتشار (خطة v1.1 المنجزة في `docs/history/`) |
 | 🔨 **[HARDENING_PLAN.md](docs/HARDENING_PLAN.md)** | خطة التحصين المغلقة وبوابة الإصدار داخلها |
 | 🗺️ **[ROADMAP.md](docs/ROADMAP.md)** | تتبع اكتمال المراحل |
 | 📑 **[PRD.md](docs/PRD.md)** | بيان المشكلة والجمهور المستهدف ومعايير النجاح |

@@ -8,7 +8,7 @@ useful — nothing of value should be gated behind a distant v1.
 M0 through M6 are complete, and so is M1.5. **v1.0.0 is published** — tagged
 and released on 2026-09-21 by `release.yml`, with Windows and Linux archives
 (HP-09). `HARDENING_PLAN.md` closed on 2026-09-22. What is open is no longer a
-milestone: it is [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md), the v1.1 plan.
+milestone: it is [`IMPROVEMENT_PLAN_v1.2.md`](IMPROVEMENT_PLAN_v1.2.md); the v1.1 plan, shipped as v1.1.0, is [`history/IMPROVEMENT_PLAN_v1.1.md`](history/IMPROVEMENT_PLAN_v1.1.md).
 
 Several things below landed *after* the v1.0.0 tag — the MQTT driver, the
 OpenPLC cross-check and the headless grader among them — so they are on
@@ -396,7 +396,7 @@ rename that quietly reassigns a PLC's tags. It closed on 2026-09-22, and its
 three open items carried forward.
 
 **Next, and ahead of everything below it:**
-[IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md), the v1.1 plan. Its Sequencing
+[history/IMPROVEMENT_PLAN_v1.1.md](history/IMPROVEMENT_PLAN_v1.1.md), the v1.1 plan. Its Sequencing
 section holds the v1.1 gate and the order to work in.
 
 **Near:** part-to-part linking in the editor — the measuring encoder finds the

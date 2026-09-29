@@ -1,6 +1,6 @@
 # FactoryForge — The Things That Break Before Anyone Sees Them
 
-**Status:** HP-01 … HP-56. **Closed 2026-09-22:** 53 done, HP-08 partly done, HP-44 and HP-46 open, all three carried into [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md) (IP-07, IP-05, IP-13). Appendix A gives each item's commit. Until that date this line said "25 done" and the index said two, and neither matched git.
+**Status:** HP-01 … HP-56. **Closed 2026-09-22:** 53 done, HP-08 partly done, HP-44 and HP-46 open, all three carried into [`IMPROVEMENT_PLAN_v1.1.md`](history/IMPROVEMENT_PLAN_v1.1.md) (IP-07, IP-05, IP-13). Appendix A gives each item's commit. Until that date this line said "25 done" and the index said two, and neither matched git.
 **Revised:** 2026-09-20, after a second Codex pass over the first draft (Appendix C).
 **Started:** 2026-09-20, against `f597e27`.
 

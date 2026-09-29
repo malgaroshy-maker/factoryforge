@@ -1,6 +1,6 @@
 # AGENTS.md — handoff for the next agent
 
-Read this first, then [`docs/IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md) for what
+Read this first, then [`docs/IMPROVEMENT_PLAN_v1.2.md`](docs/IMPROVEMENT_PLAN_v1.2.md) for what
 is open and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is done.
 
 The completed plan documents live in
@@ -507,7 +507,7 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
 built from the `v1.1.0` tag, every release self-test passed against both
 exported binaries, and the GitHub release carries them with the author credit
 (Mahamed Algaroshy, محمد الجروشي) in its notes. It is the v1.1 plan
-(`docs/IMPROVEMENT_PLAN.md`) shipped: the grader in the release, the
+(`docs/history/IMPROVEMENT_PLAN_v1.1.md`) shipped: the grader in the release, the
 no-licence OpenPLC first hour proven across WSL, starters for every graded
 scene, the operator contract and injected faults marked on every panel scene,
 and the second level. v1.0.0 (2026-09-21) is the release before it.
@@ -598,17 +598,19 @@ way they are. Item 8 is what is next.
 7. **Hardening** — `docs/HARDENING_PLAN.md`, **closed** on 2026-09-22. What it
    left open moved into the v1.1 plan. The OpenPLC/Modbus cross-check, once
    skipped at the user's request, was done there as HP-45 (`docs/OPENPLC.md`).
-8. **v1.1** — `docs/IMPROVEMENT_PLAN.md`. Its Sequencing section gives the
+8. **v1.1** — `docs/history/IMPROVEMENT_PLAN_v1.1.md`, shipped as v1.1.0. Its Sequencing section gives the
    v1.1 gate and the order to work in.
 
 ## What is open
 
-`docs/IMPROVEMENT_PLAN.md` (IP-01 … IP-41, the v1.1 plan) shipped as v1.1.0
+`docs/history/IMPROVEMENT_PLAN_v1.1.md` (IP-01 … IP-41, the v1.1 plan) shipped as v1.1.0
 on 2026-09-29. Its **Where we stopped** section lists the little it leaves
 open: IP-11 (b), a program written by a student, which needs a student, and
 a belt-fed turntable scene. Nothing waits on the user's machine any more (the
-firewall, PLCSIM and review questions were all answered that day). There is no
-v1.2 plan yet; write one before starting new work. `docs/HARDENING_PLAN.md`
+firewall, PLCSIM and review questions were all answered that day). The live work
+list is now [`docs/IMPROVEMENT_PLAN_v1.2.md`](docs/IMPROVEMENT_PLAN_v1.2.md)
+(polish and reach); read its ground rules for generated assets and its
+v1.2 gate before starting. `docs/HARDENING_PLAN.md`
 closed on 2026-09-22 with 53 of 56 done, its three survivors carried into the
 v1.1 plan and finished there. Every *feature* plan in `docs/` is closed.
 

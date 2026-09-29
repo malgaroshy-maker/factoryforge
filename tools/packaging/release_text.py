@@ -73,7 +73,7 @@ SOURCE_ONLY_DOCS = (
     "AGENTS.md",
     "CONTRIBUTING.md",
     "docs/ROADMAP.md",
-    "docs/IMPROVEMENT_PLAN.md",
+    "docs/IMPROVEMENT_PLAN_v1.2.md",
     "docs/HARDENING_PLAN.md",
     "docs/PACKAGING.md",
     "docs/TEST_PLAN.md",
