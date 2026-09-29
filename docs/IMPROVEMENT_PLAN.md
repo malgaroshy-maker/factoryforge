@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 and IP-05 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -661,7 +661,6 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 ### Left, no one else needed
 
-- **IP-05** — run sections F and G on Linux CI.
 - **IP-22 → IP-23 → IP-24** — every release self-test against the exported
   binary (Windows and Linux), tag `v1.1.0`, hand over.
 - Follow-ups found on the way: no belt-fed turntable scene exists (IP-33;
@@ -679,7 +678,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-02 | Take the counts out of the prose | 0 | S |  | **done** ee4ede9 |
 | IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
 | IP-04 | Graded tests get their own job | 1 | S | ● | **done** d1ac12d; CI run 36447686787: test-plan 27 min and grader 23 min in parallel, both green |
-| IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | code done (see git log); CI unverified until a green run shows F and G in the log |
+| IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | **done** 1a40122, 4c7d93a; CI run 36505866222 (ubuntu) passed F1-F5 and G1-G7, the test-plan job in 28 min. The killed-sidecar proof (`FF_TESTPLAN_KILL_SIDECAR=1` makes G5 fail) was run on Windows, not in CI |
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
