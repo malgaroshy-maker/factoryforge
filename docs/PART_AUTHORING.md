@@ -637,3 +637,7 @@ its `Outputs` row, its `Observed` switch — what the actuator is doing, not wha
 the tag says — and, if it is a new part, its `OutputParts` row. The test writes
 0, 50 and 100 % of span in each mode, then every region of the table above, and
 round-trips the setting through a save and a load.
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

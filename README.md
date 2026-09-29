@@ -1,15 +1,16 @@
+**English** | [العربية](README.ar.md)
+
 # FactoryForge 🏭
 
 [![Godot 4.7](https://img.shields.io/badge/Godot-v4.7.2--mono-blue?logo=godotengine)](https://godotengine.org/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-green?logo=python)](https://www.python.org/)
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple?logo=dotnet)
-[![Tests](https://img.shields.io/badge/Tests-73%20Passed-brightgreen)](tests/)
 [![Siemens S7-1500](https://img.shields.io/badge/Siemens-S7--1500%20Verified-009999?logo=siemens)](examples/tia/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 *A free, open 3D factory simulator for learning PLC programming — a modern, customizable open replacement for Factory I/O.*
 
-**Author & Creator:** Mahamed Algaroshy (محمد الجروشي)  
+Developed by Mahamed Algaroshy (محمد الجروشي)  
 **Repository:** [github.com/malgaroshy-maker/factoryforge](https://github.com/malgaroshy-maker/factoryforge)
 
 ---
@@ -32,6 +33,23 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 │  tag registry (authority)  │   JSON   │  built-in     (Modbus)   │
 └────────────────────────────┘          └──────────────────────────┘
 ```
+
+---
+
+## 🎓 Learn PLC programming with it, no licence needed
+
+* **A first hour with free tools.** The [first-hour path](docs/GETTING_STARTED.md#your-first-hour-no-licence-needed) takes you from the download to [OpenPLC](https://github.com/thiagoralves/OpenPLC_v3) running a Structured Text program you complete, driving the sorting line over Modbus TCP. On Windows OpenPLC runs inside WSL; on Linux everything is one machine. Nothing in it needs a Siemens licence. If you have TIA Portal and PLCSIM Advanced, the same guide's second path covers them.
+* **A grader that marks your program.** `factoryforge-sidecar grade` runs an exercise headless against one of **18 graded scenes** and returns a verdict, an exit code and the evidence. It presses the panel's own Start, Stop and Reset, cuts the E-stop, and injects faults, so a program that ignores them fails for the reason a real one would. See [GRADING.md](docs/GRADING.md).
+* **A starter for every graded scene**, in OpenPLC Structured Text and in TIA Portal SCL, with the tag addresses already laid out: see [examples/README.md](examples/README.md).
+* **Connect from the F5 dialog.** Pick a driver, fill in the address, and it starts the sidecar and copies the command; for Modbus it takes the bind host and port, which is what OpenPLC in WSL needs.
+* **Two levels.** A mezzanine deck and a vertical lift (`PgUp` / `PgDn` pick the level) make height a routing dimension.
+* **Raw analog.** The pressure transmitter publishes 4-20 mA raw counts and a broken wire reads 32767: your program does the scaling, and has to tell a fault from a reading.
+
+### What has been checked on a real controller
+
+* The first-hour program graded **PASS 15/15** at three seeds on OpenPLC running in WSL2 and polling the sidecar across the Windows boundary, and **15/15** at three seeds on an S7-1500 in PLCSIM Advanced through the native driver. The reports are in [examples/graded/](examples/graded/README.md), along with the run that failed: the original `Sorting.scl`, which sorts perfectly and fails the exam because it predates the operator panel.
+* The unchanged `Sorting.scl` v0.4 sorted **48 tall / 48 short** in a 300-second run over the PLCSIM native driver and again over OPC UA, with no misroutes ([IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md), IP-13).
+* **No real student's program has been graded yet.** What has been graded is programs this project wrote. The Linux archive has been built and gated but has not had a graded run of its own.
 
 ---
 
@@ -249,12 +267,16 @@ See [Getting Started](docs/GETTING_STARTED.md#-connecting-a-scene-you-built-your
 
 | Document | Description |
 |---|---|
-| 🚀 **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** | Step-by-step setup for PLCSIM Advanced, TIA Portal & Node-RED |
+| 🚀 **[GETTING_STARTED.md](docs/GETTING_STARTED.md)** | Your first hour with OpenPLC, then PLCSIM Advanced, TIA Portal & Node-RED |
+| 🎯 **[GRADING.md](docs/GRADING.md)** | Marking a PLC program against a scene, headless |
+| 🔓 **[OPENPLC.md](docs/OPENPLC.md)** | Driving FactoryForge from OpenPLC over Modbus TCP: the reference behind the first hour |
+| 📝 **[examples/README.md](examples/README.md)** | Starter programs for every graded scene |
 | 🛠️ **[PART_AUTHORING.md](docs/PART_AUTHORING.md)** | Guide & template for building custom 3D factory components |
 | 🔌 **[DRIVER_AUTHORING.md](docs/DRIVER_AUTHORING.md)** | Guide for adding custom Python protocol drivers |
 | ✅ **[TEST_PLAN.md](docs/TEST_PLAN.md)** | What is tested, what is not, and the last run's results |
-| 📦 **[PACKAGING.md](docs/PACKAGING.md)** | Building a distributable release — verified end to end, never published |
-| 🔨 **[HARDENING_PLAN.md](docs/HARDENING_PLAN.md)** | The open work list, HP-01…HP-52, and the release gate inside it |
+| 📦 **[PACKAGING.md](docs/PACKAGING.md)** | Building and gating a distributable release |
+| 🧭 **[IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md)** | The v1.1 work list, what is done and what is open |
+| 🔨 **[HARDENING_PLAN.md](docs/HARDENING_PLAN.md)** | The closed hardening plan and the release gate inside it |
 | 🗺️ **[ROADMAP.md](docs/ROADMAP.md)** | Milestone completion tracking |
 | 📑 **[PRD.md](docs/PRD.md)** | Problem statement, target audience, and success criteria |
 | ⚡ **[tag-bus.md](docs/tag-bus.md)** | WebSocket tag bus protocol specification |
@@ -285,3 +307,9 @@ HP-22. Behaviour here: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 ## ⚖️ License
 
 Distributed under the **MIT License**. See `LICENSE` for more information.
+
+---
+
+## 🙏 Credits
+
+FactoryForge is developed by **Mahamed Algaroshy** (محمد الجروشي).

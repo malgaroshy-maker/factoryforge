@@ -1097,3 +1097,7 @@ Desktop, and the usual program directories. Only if all of that misses does it
 print what to download. To point it at a specific build, set `GODOT` to that
 executable's full path.
 <!-- /from-source -->
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

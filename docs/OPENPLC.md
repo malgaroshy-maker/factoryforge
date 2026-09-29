@@ -560,3 +560,7 @@ Worth stating plainly, because the point of the exercise was to stop assuming.
   cartons. `verify_int32.py` pins the tag and checks what comes out the other
   end, which proves the transport and the reassembly and says nothing about a
   counter that gets there on its own.
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

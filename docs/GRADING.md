@@ -946,3 +946,7 @@ still have to be written by hand, and so does this file's table.
 * `engine/templates/manifest.json` — each scene's own brief, which is what the
   rubrics are written against
 * `docs/tag-bus.md` — the protocol, `force` included
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

@@ -133,3 +133,7 @@ hardware timing and network latency remain untested. See Risks.
 | S7-1500 OPC UA server needs a paid licence | **Low** | The unlicensed trial allows 100 variables; v1's scene uses 10 |
 | **No physical PLC available for validation** | Medium | PLCSIM Advanced runs real S7-1500 firmware, so protocol behaviour is faithful. Timing under real network latency is not. Mark hardware validation as help-wanted; keep the tag bus tolerant of jitter (it already is — it is explicitly not hard real-time) |
 | PLCSIM Advanced licence expires mid-project | Medium | OpenPLC + the existing Modbus driver is the everyday development loop and needs no licence at all |
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

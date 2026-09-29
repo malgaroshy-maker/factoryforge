@@ -401,3 +401,7 @@ blocks installation outright rather than just alarming.
 - **The frozen sidecar is per-platform.** A Windows release cannot ship the
   Linux one; each platform's archive has to be built on that platform, which is
   what the CI matrix is for.
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

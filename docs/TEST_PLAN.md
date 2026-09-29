@@ -424,3 +424,7 @@ Every self-test added here was also checked by deliberately reintroducing the
 bug it guards. `--self-test=scene` was confirmed to catch both historical
 save/load defects: a sensor losing `visual_only` and a remover losing the tag it
 counts into.
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*

@@ -81,3 +81,7 @@ Run the sidecar with your custom driver:
 ```bash
 python -m factoryforge_sidecar connect --driver custom-protocol
 ```
+
+---
+
+*FactoryForge — developed by Mahamed Algaroshy (محمد الجروشي).*
