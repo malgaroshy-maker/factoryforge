@@ -58,11 +58,12 @@ The release's own sidecar, unpacked with no Python on `PATH`, connected to the
 release's engine and printed the nineteen-tag map exactly as the starter
 declares it. It graded the built-in `good` reference controller to PASS.
 
-Two parts of that path were not run. The grader and sidecar in the OpenPLC
-run were the same code from source inside WSL, rather than the frozen Windows
-binaries across the WSL boundary. Crossing that boundary needs Windows
-Firewall to allow the sidecar, and that was not done on the test machine. And
-OpenPLC did not drive the 3D window itself.
+Two parts of that path were not run that day. The grader and sidecar in the
+OpenPLC run were the same code from source inside WSL, rather than the frozen
+Windows binaries across the WSL boundary; the crossing needs Windows Firewall
+to allow the sidecar, and that was not done on the test machine. **The
+crossing was run on 2026-09-29, below.** OpenPLC did not drive the 3D window
+itself, then or since.
 
 ### The IP-35 program, run (2026-09-25)
 
@@ -108,18 +109,64 @@ translation of the program:
   and the grader. A line left running then started without a Start press, and
   the exam failed it. Step 9 now restarts OpenPLC before grading.
 
-Not covered: the grader pressed the buttons, not a person in the 3D window;
-OpenPLC did not drive the 3D window; and the WSL-to-Windows crossing is still
-IP-39's.
+Not covered by that run: the grader pressed the buttons, not a person in the
+3D window; OpenPLC did not drive the 3D window; and the WSL-to-Windows
+crossing, which was IP-39's and was run on 2026-09-29 (below).
 
 **Since then (IP-12, 2026-09-28):** the exam also faults the conveyor's drive
 about 32 s in and marks three more checks, 15 in all: nothing fed while the
 drive is faulted, the belt still from the fault clearing until Reset and then
 Start, and running again after that Start. The program in the table above
 does not read `ConveyorFault`, so it would now fail the first two. The guide's
-step 7 gained `OR ConveyorFault` in its trip for that. **The amended program
-has not been run on OpenPLC**; the table is a record of the program and the
-exam as they were on 2026-09-25.
+step 7 gained `OR ConveyorFault` in its trip for that. The table above is a
+record of the program and the exam as they were on 2026-09-25; the amended
+program was run on 2026-09-29, below.
+
+### The amended program, across the WSL boundary (2026-09-29, IP-39, IP-11)
+
+The whole of *Your first hour*, steps 1 to 9, followed as written, with the
+FactoryForge side on Windows and OpenPLC in WSL. Nothing in this run was from
+source.
+
+| | |
+|---|---|
+| **Program** | the starter plus the four code blocks of the guide's steps 7 and 8 (with `OR ConveyorFault` in the trip), inserted by a script that checked them byte for byte. Saved as [`examples/graded/first_hour_sorting_by_height.st`](../examples/graded/first_hour_sorting_by_height.st). It is not `examples/openplc/Sorting.st`, which is written for the ten-tag map |
+| **Compiled** | with `compile_program.sh` (*"Compilation finished successfully!"*), in a user-owned copy of `/opt/OpenPLC_v3` at `~/OpenPLC_v3`. The starter and `mbconfig.cfg` were copied from `/mnt/c/FactoryForge/...`, and the guide's `sed` pointed `mbconfig.cfg` at `172.28.80.1` |
+| **Run** | `./openplc` in Ubuntu under WSL2, restarted before each graded run. The step 4 address was `172.28.80.1`; OpenPLC polled from `172.28.93.77` |
+| **Marked by** | the release's `factoryforge-sidecar grade --scene sorting-by-height` and a second `factoryforge-sidecar connect --driver modbus-tcp -o host 172.28.80.1 -o port 5502 --port <printed>`, both the frozen Windows executables from a zip built from `master` at `5dc93e4` for Windows and unpacked into `C:\FactoryForge\windows`. FactoryForge itself opened *Sorting by height* with 19 tags; the step 5 sidecar printed the guide's map and the loopback warning |
+
+| Program | Seed | Result |
+|---|---|---|
+| step 7 + 8, as now | 1, 2, 3 | **PASS** 15/15 each time: 7 tall down the chute and 6 short past the far end, none misrouted; the belt 55 mm past the mushroom (limit 100 mm), still while latched and after the drive fault cleared, running again 0.06 to 0.11 s after Reset-then-Start; nothing fed while the drive was faulted |
+
+The reports are `examples/graded/sorting-by-height_first-hour-st_openplc-wsl_seed{1,2,3}.json`
+(commit `29718f6`). This is the first run of the program that also trips on
+`ConveyorFault` on a real OpenPLC, and the first time OpenPLC in WSL reached
+a sidecar on Windows.
+
+**The firewall blocked it first.** When the sidecar ran for the first time,
+Windows created two inbound rules named `factoryforge-sidecar` for the
+executable, one for Private and one for Public, with the action *Block*. That
+is what Windows does when its prompt is closed or cancelled instead of
+answered, and it does not ask again. OpenPLC's polls were dropped without any
+reply: the sidecar kept printing `no master has polled yet`, and OpenPLC
+printed nothing that named the cause, so it looked like a wrong address. After
+both rules were changed to Allow (Windows Defender Firewall, *Allow an app*,
+*Change settings*, Private and Public ticked for `factoryforge-sidecar`), the
+sidecar printed `driver READY (modbus-tcp): a Modbus master reached
+172.28.80.1:5502` and `master connected from ('172.28.93.77', ...)`. Private
+alone was not tried, so the guide's advice to tick both is the tested one, not
+a proven minimum.
+
+**A note on stopping the sidecar from a script.** The frozen executable runs
+as a bootloader parent plus a child process. Killing only the parent, as a
+script does, leaves the child running and still holding the Modbus port. Ctrl+C
+in the console, which is what the guide tells students to do, does not.
+
+Not covered: the 3D window was not driven by OpenPLC with a person clicking
+Start, since the grader pressed the buttons and marked its own simulation of
+the line; only Windows 11 with WSL2 Ubuntu; Private-only firewall rules; a
+machine where Windows moves the WSL address between reboots.
 
 ---
 
@@ -464,6 +511,7 @@ better than OPC UA — it is a different flavour of the same sampling problem.
 
 | Symptom | Cause |
 |---|---|
+| The sidecar keeps printing `no master has polled yet` and the runtime log has no useful error, on Windows with OpenPLC in WSL | Windows Firewall is dropping the polls. If the prompt for `factoryforge-sidecar` was closed without Allow, Windows added *Block* rules for Private and Public and never asks again. Windows Defender Firewall, *Allow an app*, *Change settings*, tick Private and Public. Seen on 2026-09-29 |
 | `Connection failed on MB device FactoryForge: Connection refused` in the runtime log | The sidecar is not up, or is on another port, or is bound to loopback while OpenPLC is in a VM/container/WSL. See the `-o host` note in step 1. |
 | Everything stays 0; the sidecar never says `driver READY` | `mbconfig.cfg` is not in `webserver/core/`. The runtime reads it from its working directory and says `Skipping configuration of Slave Devices` when it is missing. Run from a terminal, `./openplc` prints that line, and every `Connection failed on MB device` retry, on its own stdout; the web UI shows the same lines in its log. |
 | `invalid located variable declaration` from matiec | matiec will not mix located and unlocated variables in one `VAR` block. Put `AT %...` declarations in their own block. The errors that follow it — "invalid variable before ':='" on perfectly good statements — are fallout from the declarations that got dropped. |
@@ -494,11 +542,15 @@ Worth stating plainly, because the point of the exercise was to stop assuming.
   not: the 3D line has nineteen tags to `demo`'s ten, and the addresses move
   (see the note at the top). The nineteen-tag starter was graded against the
   grader's model of that line on 2026-09-24. No run has had OpenPLC driving
-  the Godot window.
-- **One platform.** Linux under WSL2. A native Linux install should behave
-  identically; the OpenPLC Windows (Cygwin/MSYS2) build was not tried.
-- **Loopback.** No switch, no real network, no latency beyond the loopback
-  stack. The timing margin is real but it was measured under friendly
+  the Godot window; the graded runs of 2026-09-29 were against the grader's own
+  simulation of the 3D line.
+- **One platform.** Windows 11 with Linux under WSL2. A native Linux install
+  should behave identically; the OpenPLC Windows (Cygwin/MSYS2) build was not
+  tried.
+- **A virtual link, not a network.** The 2026-09-29 run crossed from WSL to
+  Windows over WSL's virtual switch, with the firewall in the path. No physical
+  switch, and no latency beyond that link. The earlier runs were on
+  loopback. The timing margin is real but it was measured under friendly
   conditions.
 - **Only one direction of the register map was exercised.** The sorting scene
   has no Int or Float *outputs*, so OpenPLC never wrote a holding register:

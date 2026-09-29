@@ -32,7 +32,7 @@ parts, and €278/year. See [`docs/PRD.md`](docs/PRD.md) for the full rationale.
 |---|---|
 | **S7-PLCSIM Advanced** | V6.0 Upd1, instance `test`, **TCP/IP Single Adapter, communication with `<Local>`** (the PLCSIM virtual adapter, "Ethernet 2", 192.168.0.100/24). The CPU is `192.168.0.20`, OPC UA at `opc.tcp://192.168.0.20:4840`, S7 on 102. Until 2026-09-29 this said 192.168.1.20: that is the Wi-Fi's subnet and nothing reached it. Softbus ("PLCSIM") mode works for TIA and the native driver only, and a Multiple Adapter instance on `<Default>` fails with "Interface mapping is invalid or missing" |
 | CPU | 1511-1 PN, FW V2.9, TIA Portal V19 |
-| PLC program | TIA project `D:\projects\Tia portal mcp\projects\FactoryForge_Sorting` (built through TiaCommander + Openness on 2026-09-29): the 19-member `FF_IO` + FB `SortingByHeight` (the first-hour program, `examples/graded/first_hour_sorting_by_height.scl`). The `Sorting.scl` v0.4 build is archived as `D:\projects\Tia portal mcp\archives\FactoryForge_Sorting_scl_v04_*.zap19` |
+| PLC program | TIA project `D:\projects\Tia portal mcp\projects\FactoryForge_Sorting`: the ten-member `FF_IO` + FB `Sorting` (`examples/tia/Sorting.scl` v0.4, unchanged), left there by the IP-13 OPC UA run on 2026-09-29. The first-hour build (the 19-member `FF_IO` + FB `SortingByHeight`, `examples/graded/first_hour_sorting_by_height.scl`) is archived as `D:\projects\Tia portal mcp\archives\FactoryForge_Sorting_firsthour_scl_*.zap19`, and an earlier `Sorting.scl` build as `..._scl_v04_*.zap19` in the same folder |
 | Node ids | `ns=3;s="FF_IO"."ConveyorRotate"` etc. — quotes are part of the identifier |
 
 The user has **no physical PLC**. PLCSIM Advanced is the reference target and
@@ -457,6 +457,25 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
     An S7-1500 does the same (2026-09-29, `examples/graded/README.md`):
     restart the controller before every graded run.
 
+26. **A dismissed Windows Firewall prompt leaves Block rules and is never shown
+    again.** The first time `factoryforge-sidecar.exe` listens on a
+    non-loopback address, Windows asks whether to allow it. Closing or
+    cancelling the prompt adds two inbound rules with the action *Block*, one
+    for Private and one for Public. OpenPLC's polls from WSL are then dropped
+    silently: the sidecar keeps printing `no master has polled yet`, OpenPLC
+    says nothing useful, and it looks exactly like a wrong `-o host` address
+    (2026-09-29, `docs/OPENPLC.md`). Fix it under Windows Defender Firewall,
+    *Allow an app*, *Change settings*, Private and Public ticked; the sidecar
+    then prints `driver READY` at once. Check the rules before changing the
+    address.
+
+    The frozen sidecar is a PyInstaller one-file program: a bootloader parent
+    and a child process that does the work. Killing only the parent from a
+    script (`taskkill` on the one PID, `Stop-Process`) orphans the child, which
+    keeps the Modbus port bound. Kill the whole tree (for example
+    `taskkill /T /F`). Ctrl+C in the console, which is what the guide tells
+    students to press, is not affected.
+
 ---
 
 ## Current state
@@ -486,8 +505,10 @@ unreleased; `git log v1.0.0..master` is the list.
   `factoryforge_sidecar.grading` package, one file per scene under
   `grading/scenes/` and `grading/reference/`. v1.0.0's archive lacks it;
   since IP-08 the build freezes it into `factoryforge-sidecar grade`. No real
-  student's program has been graded yet (IP-11), and
-  since IP-20 `tools/try_scene.py` drives every graded scene in the 3D engine
+  student's program has been graded yet (IP-11), though real controllers
+  have been: the S7-1500 in PLCSIM through the native driver, and OpenPLC in
+  WSL across the Windows boundary, both on 2026-09-29 (`examples/graded/`,
+  `docs/OPENPLC.md`). Since IP-20 `tools/try_scene.py` drives every graded scene in the 3D engine
   with the grader's own reference controllers (section H, 19/19).
 
 The MQTT driver (after v1.0.0) has only met the broker inside

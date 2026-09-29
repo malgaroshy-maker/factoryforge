@@ -149,6 +149,17 @@ The first time, **Windows Defender Firewall** asks whether
 as well as Private and click **Allow access**. The link to WSL counts as a
 public network, and if you only allow Private, OpenPLC never gets through.
 
+**If you closed that question without clicking Allow, Windows has already
+blocked the program, and it will not ask again.** Closing or cancelling it
+adds two inbound rules for `factoryforge-sidecar`, one for each network type,
+with the action *Block*. Nothing looks wrong: the sidecar keeps printing
+`no master has polled yet` and OpenPLC's polls are dropped without a message,
+which looks exactly like a wrong address. Open **Windows Defender Firewall**,
+choose **Allow an app or feature through Windows Defender Firewall**,
+**Change settings**, find `factoryforge-sidecar` and tick **Private** and
+**Public**. The sidecar prints `driver READY (modbus-tcp)` as soon as
+OpenPLC's next poll gets through.
+
 The sidecar prints a warning, which is expected. Modbus has no password, and
 binding anything other than `127.0.0.1` makes the slave reachable from outside
 this computer. The address you gave it is the one only WSL uses. After the
@@ -487,7 +498,8 @@ RESULT grade=PASS scene=sorting-by-height checks=12/12 failed=none forced=0
 That output was recorded on 2026-09-25, before the exam faulted the drive
 (IP-12). A run now also prints `fault.no_feed_while_faulted`,
 `fault.latched_until_reset` and `fault.restarted_after_reset`, and the last
-line says `checks=15/15`.
+line says `checks=15/15`, which is what a run of this guide on 2026-09-29
+printed at seeds 1, 2 and 3 (end of this section).
 
 Your counts can differ by a carton or two. The verdict is what matters. Press
 Ctrl+C in the second window to stop that sidecar, and Ctrl+C in Ubuntu to stop
@@ -523,8 +535,9 @@ grade --list` shows every scene the grader can mark.
 | What you see | Why, and what to do |
 |---|---|
 | The sidecar says `no engine listening on ws://127.0.0.1:7411` | FactoryForge is not running. Step 3. |
+| The sidecar keeps saying `no master has polled yet`, although OpenPLC is running and `mbconfig.cfg` has the step 4 address | The firewall is dropping OpenPLC's polls. If the question in step 5 was closed without **Allow access**, Windows added *Block* rules for `factoryforge-sidecar` and will not ask again. Windows Defender Firewall, **Allow an app or feature**, **Change settings**, tick **Private** and **Public** for `factoryforge-sidecar`. |
 | The sidecar says a number other than 19 tags | Another scene is open. Open *Sorting by height* and restart the sidecar. |
-| `rotate=0` forever even after you press Start, the sidecar never says `driver READY`, and OpenPLC repeats `Connection failed on MB device FactoryForge` | OpenPLC is not reaching the slave. On Windows: `core/mbconfig.cfg` still says `127.0.0.1`, or your WSL address changed (step 4 again, then the `sed` in step 6 with the new one, and restart both), or the firewall question was answered without **Public networks**. Everywhere: `mbconfig.cfg` must be in `webserver/core/`, the folder you start `./openplc` from. |
+| `rotate=0` forever even after you press Start, the sidecar never says `driver READY`, and OpenPLC repeats `Connection failed on MB device FactoryForge` | OpenPLC is not reaching the slave. On Windows: `core/mbconfig.cfg` still says `127.0.0.1`, or your WSL address changed (step 4 again, then the `sed` in step 6 with the new one, and restart both), or the firewall question was answered without **Public networks**, or was closed without **Allow access**, which leaves *Block* rules that Windows never asks about again (step 5). Everywhere: `mbconfig.cfg` must be in `webserver/core/`, the folder you start `./openplc` from. |
 | `./openplc` exits at once | Another OpenPLC runtime is already running. If you pressed *Start PLC* in OpenPLC's web interface, press *Stop PLC* there first. |
 | The compiler reports `invalid located variable declaration` | A variable of yours ended up in the first `VAR` block, among the `AT %…` lines. Move it to the second one. |
 | No cartons appear, or only one does | `EmitterEmit` makes one carton per **rising** edge, and the level has to last longer than the 50 ms poll. |
@@ -583,12 +596,38 @@ in step 9, run from source inside WSL, with OpenPLC restarted first:
   grader's sidecar (seed 4).
 
 On 2026-09-28 the exam gained the drive fault (IP-12), and step 7 gained
-`OR ConveyorFault` in its trip. **That amended program has not been run on
-OpenPLC.** The program as the runs above tested it would now fail
-`fault.no_feed_while_faulted` and `fault.latched_until_reset`, as the grader's
-`ignorefault` reference, which leaves the fault unread in the same way, does.
-The grader's own `good` reference answers the fault with the
+`OR ConveyorFault` in its trip. The program as the runs above tested it would
+now fail `fault.no_feed_while_faulted` and `fault.latched_until_reset`, as the
+grader's `ignorefault` reference, which leaves the fault unread in the same
+way, does. The grader's own `good` reference answers the fault with the
 same rule, trip on the fault and clear only on Reset, and passes on seeds 1–40.
+
+**The amended program was run on OpenPLC on 2026-09-29, this time following
+steps 1 to 9 exactly.** The FactoryForge side was a release zip built from
+`master` at `5dc93e4` for Windows,
+unpacked into `C:\FactoryForge\windows`, and *Sorting by height* opened with
+19 tags. The step 4 address was `172.28.80.1`. OpenPLC was built in Ubuntu
+under WSL2, the starter and `mbconfig.cfg` were copied from `/mnt/c/...`, and
+the `sed` in step 6 pointed it at Windows. The program was the starter plus the
+four code blocks of steps 7 and 8, inserted by a script that checked them byte
+for byte (it is `examples/graded/first_hour_sorting_by_height.st`), and
+`compile_program.sh` built it. The grader and both sidecars were the release's
+`factoryforge-sidecar.exe`, on Windows, with OpenPLC restarted first:
+
+- **PASS, 15/15, on seeds 1, 2 and 3.** Every run: 7 tall down the chute, 6
+  short past the far end, none misrouted; the belt moved 55 mm after the
+  mushroom (the limit is 100 mm), stayed still while the E-stop was latched and
+  after the drive fault cleared, and ran again 0.06 to 0.11 s after
+  Reset-then-Start; nothing was fed while the drive was faulted. The three
+  reports are in `examples/graded/`.
+- **The firewall.** The first time the sidecar ran, Windows created two
+  inbound rules for it with the action *Block*, one for Private and one for
+  Public: what it does when the question is closed rather than answered. Every
+  OpenPLC poll was dropped, the sidecar kept saying `no master has polled yet`,
+  and OpenPLC printed nothing that named the cause. Changing both rules to
+  Allow, by the route in step 5, made the sidecar print `driver READY
+  (modbus-tcp)` at once. Allowing Private and Public together is what this
+  guide says and what was tested; Private alone was not tried.
 
 Five things were **not** covered by those runs, and they are listed here so
 that nobody mistakes them for tested:
@@ -596,12 +635,10 @@ that nobody mistakes them for tested:
 - **Your clicks in step 7.** The E-stop, Reset and Start sequence was pressed
   by the grader, not in the 3D window, and the program was not run against the
   3D window at all (see below).
-- **The crossing from WSL to Windows.** In that run OpenPLC and the grader
-  shared a loopback, as on Linux, and the grader and sidecar there were the
-  same code run from source inside WSL. The firewall question in step 5 was not
-  answered on the test machine, so the `-o host` address and the `sed` in
-  step 6 are checked only as far as this: WSL reaches a Windows program that
-  the firewall allows, at the step 4 address.
+- **Any machine but one.** Windows 11 with WSL2 Ubuntu is the only setup the
+  crossing from WSL to Windows was run on. The step 4 address, the `sed` in
+  step 6 and the firewall rules are checked there and nowhere else, and not on
+  a machine where Windows reassigns the WSL address between reboots.
 - **OpenPLC driving the 3D window.** The 3D line was checked separately: the
   release's sidecar connected to it and printed the same 19-tag map as the
   starter. It was not driven by OpenPLC. The 0.9 s push delay is the same one

@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 and IP-05 verified on CI, IP-22 gated on both binaries, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-39, IP-40 and IP-41 done, IP-04 and IP-05 verified on CI, IP-22 gated on both binaries, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -582,6 +582,17 @@ sidecar through the Windows firewall is the user's decision. The OpenPLC runs
 used the Linux layout on loopback instead. **Needs the user:** allow the
 firewall prompt once, then follow the guide exactly.
 
+*Done 2026-09-29 (`29718f6`).* The guide's steps 1–9 were followed as written
+from a release zip built from `master` at `5dc93e4`, with OpenPLC in WSL2
+polling the Windows sidecar at `172.28.80.1:5502`, and the current first-hour
+program graded **PASS 15/15** at seeds 1, 2 and 3 (`docs/OPENPLC.md`,
+`examples/graded/`). The user's firewall decision was made by allowing the
+program; the run also found that a prompt closed without Allow leaves *Block*
+rules and is never shown again, which looks like a wrong address. The guide
+now says so (step 5 and its troubleshooting table). Not checked: Private-only
+rules, any machine but Windows 11 with WSL2 Ubuntu, and OpenPLC driving the 3D
+window.
+
 ---
 
 ## Sequencing
@@ -653,11 +664,13 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 ### Needs the user
 
-- **IP-39** — allow the sidecar through the Windows firewall once, then
-  follow the first-hour guide from WSL exactly.
 - **IP-11** — the Siemens half was done on 2026-09-29 with the user's
-  permission (TIA project `FactoryForge_Sorting`, PLCSIM instance `test`).
-  Left: IP-11's OpenPLC half, and a program a student wrote. IP-13 is done.
+  permission (TIA project `FactoryForge_Sorting`, PLCSIM instance `test`), and
+  the OpenPLC half the same day (the first-hour program, across the WSL
+  boundary). Left: a program a student wrote, which needs a student, and
+  `Sorting.st` itself graded, which needs a decision (see IP-11's row).
+  IP-13 is done. IP-39 is done and no longer waits on the user: the firewall
+  question was answered by allowing the program.
 
 ### Left, no one else needed
 
@@ -682,9 +695,9 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
-| IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282, except the WSL-to-Windows firewall crossing (IP-39) |
+| IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282; the WSL-to-Windows crossing was run as IP-39 |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
-| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half open; no student-written program yet |
+| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half also run 2026-09-29 (`29718f6`): the first-hour program in ST, PASS 15/15 at seeds 1-3, OpenPLC in WSL to the Windows sidecar. **Kept open.** The item's *Done when* names `Sorting.st`, and what was graded is the first-hour program: `Sorting.st` is written for the ten-tag map and the graded scene has nineteen tags, so it was not graded and would drive the wrong outputs. Missing: `Sorting.st` graded (or the *Done when* reworded to the first-hour program, which is what a student runs), the `GRADING.md` sentence narrowed, and a program a student wrote |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | **done** ae3c44e (faults on sorting, dosing, heat-treat), 3a6a494 (E-stop / Start / Reset on all 18 panel scenes) |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | **done** 2026-09-29: unchanged `Sorting.scl` v0.4 on an S7-1500 in PLCSIM Advanced, 300 s each, `demo`: native driver (Softbus) **48 tall / 48 short**, OPC UA client (TCP/IP, `opc.tcp://192.168.0.20:4840`) **48 tall / 48 short**, no misroutes either way. A shorter native run, 120 s, gave 18 / 20: one tall carton counted short at 81 s |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
@@ -712,7 +725,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | **done** (gate checks every shipped text file) |
 | IP-37 | The F5 dialog can serve Modbus to a PLC that is not on loopback | 5 | M |  | **done** 1afd2c4 (host and port fields, 127.0.0.1:502 by default; `--self-test=sidecar` fails if the chosen bind does not reach the command or a bad port is taken) |
 | IP-38 | The release carries the docs its guide links to | 5 | S |  | **done** (gate checks 322 relative links) |
-| IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
+| IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | **done** `29718f6`: steps 1-9 from a release zip, OpenPLC in WSL2 to the Windows sidecar, PASS 15/15 at seeds 1-3 once the firewall's Block rules were changed to Allow |
 | IP-41 | Starters warn that OpenPLC's first scans read every input FALSE | 2 | S |  | **done** dda69f5 (every OpenPLC starter's README and `.st` carry the warning and the `EstopSeen` pattern; `test_examples.py` fails without them) |
 | IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | **done** 768fce8 (the pivot-divert `lip_drop` 0.04 workaround has since been removed from the template; the grader now requires the chute's default lip; section H pivot-divert PASS chute=4 far=5, graded tests 12 passed) |
 
