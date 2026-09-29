@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -664,8 +664,6 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 ### Left, no one else needed
 
 - **IP-05** — run sections F and G on Linux CI.
-- **IP-12** — fault and operator-contract marks on the remaining panel
-  scenes.
 - **IP-22 → IP-23 → IP-24** — every release self-test against the exported
   binary (Windows and Linux), tag `v1.1.0`, hand over.
 - Follow-ups found on the way: the grader does not model the turntable's
@@ -690,7 +688,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282, except the WSL-to-Windows firewall crossing (IP-39) |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half open; no student-written program yet |
-| IP-12 | Mark the operator contract and the fault | 2 | L |  | open: faults marked on sorting, dosing, heat-treat (ae3c44e); operator contract on every panel scene still open |
+| IP-12 | Mark the operator contract and the fault | 2 | L |  | **done** ae3c44e (faults on sorting, dosing, heat-treat), 3a6a494 (E-stop / Start / Reset on all 18 panel scenes) |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | partly done 2026-09-29: native half -- unchanged `Sorting.scl` v0.4 on PLCSIM (Softbus), `demo --driver plcsim-advanced`: 48 tall / 48 short in 300 s, and 18 / 20 in 120 s (one tall carton counted short at 81 s); OPC UA half open (needs the instance in TCP/IP mode) |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | **done** ba6a72a, 728d65c |
