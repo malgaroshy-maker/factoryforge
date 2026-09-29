@@ -1,6 +1,6 @@
 # FactoryForge — What v1.1 Needs
 
-**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 and IP-05 verified on CI, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
+**Status:** IP-01 … IP-41. IP-02, IP-03, IP-06, IP-16, IP-18, IP-19, IP-21, IP-25, IP-07, IP-08 (Windows), IP-10, IP-26, IP-27, IP-09, IP-12, IP-14, IP-15, IP-20, IP-28, IP-29, IP-30, IP-31, IP-32, IP-33, IP-34, IP-35, IP-36, IP-37, IP-38, IP-40 and IP-41 done, IP-04 and IP-05 verified on CI, IP-22 gated on both binaries, IP-17's parts done; IP-01 done; the rest open. Work paused on 2026-09-28: see [Where we stopped](#where-we-stopped--2026-09-28).
 **Written:** 2026-09-22, against `5c2f26a`, after `HARDENING_PLAN.md` closed 53 of
 its 56 items.
 **Horizon:** the next release, v1.1. Nothing here is a v2 idea.
@@ -382,7 +382,7 @@ warnings.
 
 **IP-22 — Every release self-test meets the exported binary**
 *Files:* `tools/packaging/check_release.py`.
-*Done when:* all 30 `SELF_TESTS` plus IP-08's graded run pass against both
+*Done when:* all 32 `SELF_TESTS` (30 when this was written) plus IP-08's graded run pass against both
 exported platforms. `controlparts`, `editorkeys` and `handlingparts` were
 added after v1.0.0's gate ran and have never met a binary.
 *Size:* S.
@@ -666,7 +666,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 - Follow-ups found on the way: no belt-fed turntable scene exists (IP-33;
   the grader's rule for `table.deck` is modelled and tested, as
   `plant.deck_lane_velocity`, but no scene calls it); IP-08's Linux archive
-  has not been built. The pivot-divert `lip_drop` workaround is gone (IP-40).
+  was built and gated by the 2026-09-29 dry run (IP-22). The pivot-divert `lip_drop` workaround is gone (IP-40).
 
 ---
 
@@ -695,7 +695,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | **done** 02be83a, 568aaa0; its findings are IP-29 |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | **done** 061bb11, d79f09a; H 19/19 |
 | IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
-| IP-22 | Every release self-test meets the binary | 5 | S | ● | Windows gate passed 2026-09-29 at d883a1a (32 self-tests + graded run); Linux awaits a CI gate run |
+| IP-22 | Every release self-test meets the binary | 5 | S | ● | **done** 2026-09-29: all 32 `SELF_TESTS` plus the frozen grader's PASS/FAIL run passed against the exported Windows binary (15633ac, local) and the Linux one (release.yml dry run 36570487530, which built both zips and published nothing) |
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
 | IP-25 | The graded plant starts when the controller connects | 2 | S | ● | **done** 184422a |
