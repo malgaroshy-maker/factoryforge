@@ -75,9 +75,9 @@ STORYBOARD = [
     #   at      --at=SECONDS:ACTION, on the game clock
     #   watch   tags whose changes are logged (and can be cut on)
     {"kind": "scene", "template": None, "label": "sorting-by-height",        # None: --demo alone
-     "camera": "150,-28,2.0:2.4,0.35,0.1",
+     "camera": "-25,-35,2.1:2.55,0.3,0.25",
      "watch": ["pusher.extend"], "record": 13.0,
-     "cut": {"event": "pusher.extend=true", "before": 3.0, "after": 3.0},
+     "cut": {"event": "pusher.extend=true", "before": 2.5, "after": 3.5},
      "caption": "Tall cartons are pushed down the chute; short ones ride on"},
     {"kind": "scene", "template": "pick_and_place_cell",
      "camera": "-20,-38,3.6:3.7,0.5,0.0",
