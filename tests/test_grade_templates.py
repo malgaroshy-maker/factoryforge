@@ -257,6 +257,7 @@ CSHARP_MIRRORS = [
     (plant.WORK_PLANE_Y, "Parts/PartLayout.cs", r"WorkPlaneY = ([\d.]+)f"),
     (plant.BELT_THICKNESS, "Parts/PartLayout.cs", r"BeltThickness = ([\d.]+)f"),
     (plant.VFD_DEAD_BAND, "Parts/VariableConveyor.cs", r"DeadBand = ([\d.]+)f"),
+    (plant.DECK_SPEED, "Parts/TurnTable.cs", r"DeckSpeed \{ get; set; \} = ([\d.]+)f"),
     (ab.AB_BLADE_THICKNESS, "Parts/StopGate.cs", r"BladeThickness = ([\d.]+)f"),
     (rw.RW_SCALE_AREA, "Parts/WeighingConveyor.cs",
      r"new Vector3\(Size\.X \* ([\d.]+)f, 0\.30f, Size\.Z\)"),
@@ -1267,3 +1268,33 @@ def test_the_carriage_hands_a_carton_to_the_outfeed_only_at_level_one():
     # reaches the edge.
     early = trip(0.2)
     assert early["lane"] == "spill" and 0.3 < early["left_height"] < 0.9
+
+
+# --- the turntable's deck drive (IP-33) ---------------------------------
+
+def test_a_carton_on_the_deck_moves_only_while_the_deck_runs():
+    """`TurnTable.SetDeckRunning`: off, nothing; on, the deck's speed along its
+    lane, and the lane turns with the deck."""
+    assert plant.deck_lane_velocity(False, 0.0) == (0.0, 0.0)
+    assert plant.deck_lane_velocity(False, 90.0) == (0.0, 0.0)
+    assert plant.deck_lane_velocity(True, 0.0) == pytest.approx((plant.DECK_SPEED, 0.0))
+    # A quarter turn (Godot: +Y rotation takes +X to -Z): the lane follows.
+    assert plant.deck_lane_velocity(True, 90.0) == pytest.approx((0.0, -plant.DECK_SPEED), abs=1e-9)
+    for angle in (0.0, 30.0, 45.0, 135.0):
+        assert math.hypot(*plant.deck_lane_velocity(True, angle)) == pytest.approx(plant.DECK_SPEED)
+
+
+def test_the_deck_direction_and_speed_are_the_parts_own():
+    """`deck_dir` reverses or turns the lane; `deck_speed` scales it."""
+    assert plant.deck_lane_velocity(True, 0.0, 0.8, (-1.0, 0.0)) == pytest.approx((-0.8, 0.0))
+    assert plant.deck_lane_velocity(True, 0.0, 0.5, (0.0, 1.0)) == pytest.approx((0.0, 0.5))
+    assert plant.deck_lane_velocity(True, 0.0, 0.5, (0.0, 0.0)) == (0.0, 0.0)
+
+
+def test_the_deck_rollers_do_not_ask_the_index_drives_fault():
+    """The engine runs the rollers whatever `fault` says (`StepPart`); the model
+    has no fault argument to disagree with it. Pinned to the C# so a change of
+    mind there fails here."""
+    src = (PARTS_SRC / "TurnTable.cs").read_text(encoding="utf-8")
+    assert re.search(r'SetDeckRunning\(tick\.TryBit\("deck", out bool deck\) && deck\)', src)
+    assert "DeckDirection { get; set; } = Vector3.Right" in src

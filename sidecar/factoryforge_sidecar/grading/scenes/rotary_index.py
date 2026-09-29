@@ -153,9 +153,12 @@ class RotaryIndexScene(PlantScene):
             Tag("table.index", "Turntable 0 (Index)", "bit", "output"),
             # The deck drive (IP-33), declared because the engine declares it:
             # the grader offers exactly the engine's tags. This scene drops
-            # cartons on and pushes them off, so the model does not move a
-            # carton for it -- a program that runs the rollers here is marked as
-            # if it had not.
+            # cartons on and pushes them off, and models one axis (Z), so it
+            # does not move a carton for it -- a program that runs the rollers
+            # here is marked as if it had not. The rule itself is modelled as
+            # `plant.deck_lane_velocity`, for the belt-fed scene that will need
+            # it; a carton riding the lane leaves the deck sideways at home,
+            # which this model has no X axis to show.
             Tag("table.deck", "Turntable 0 (Deck Drive)", "bit", "output"),
             Tag("table.athome", "Turntable 0 (At Home)", "bit", "input", value=True),
             Tag("table.atindex", "Turntable 0 (At Index)", "bit", "input"),

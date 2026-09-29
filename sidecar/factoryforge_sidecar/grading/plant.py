@@ -447,6 +447,36 @@ class Vfd:
         return self.target > VFD_DEAD_BAND
 
 
+#: `TurnTable.cs` (`DeckSpeed`): the deck rollers' surface speed while `deck`
+#: is on, in m/s. A template may set `deck_speed`; this is the part's default.
+DECK_SPEED = 0.5
+
+
+def deck_lane_velocity(running: bool, angle_deg: float, speed: float = DECK_SPEED,
+                       direction: tuple[float, float] = (1.0, 0.0)) -> tuple[float, float]:
+    """The surface velocity `(x, z)`, in m/s, a turntable's deck hands a
+    carton on it, as `TurnTable.SetDeckRunning` computes it (IP-33).
+
+    A carton on the deck moves only while the deck runs: off, the deck hands
+    the solver nothing. On, it is `speed` along the deck's own `direction`
+    (`deck_dir`, +X by default) carried round by the deck's angle -- Godot
+    turns a body about +Y by a positive angle from +X towards -Z -- so the lane
+    points where the lane *is*, not where it was when the drive started. The
+    drive has a motor of its own: the index drive's fault does not stop it,
+    which is why there is no fault argument.
+
+    No graded scene calls this yet. `rotary-index` drops its cartons on the
+    deck and sweeps them off, and models one axis; a belt-fed turntable scene
+    (open, IP-33) would step its cartons with this."""
+    length = math.hypot(*direction)
+    if not running or length < 1e-3:
+        return (0.0, 0.0)
+    a = math.radians(angle_deg)
+    dx, dz = direction[0] / length, direction[1] / length
+    return (speed * (dx * math.cos(a) + dz * math.sin(a)),
+            speed * (dz * math.cos(a) - dx * math.sin(a)))
+
+
 #: A shuffled, seeded feed, the same argument as `feed_pattern` makes for the
 #: sorting line: an order a controller can guess is an order it can be written
 #: against. Every scene that feeds more than one kind of carton draws from one
