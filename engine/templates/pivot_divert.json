@@ -42,7 +42,7 @@
       "type": "Chute",
       "position": [3.0, 0.5, 0.5],
       "rotation": [0.0, 0.0, 0.0],
-      "properties": { "incline": "30", "friction": "0.15", "ramp_width": "1.4", "lip_drop": "0.04" }
+      "properties": { "incline": "30", "friction": "0.15", "ramp_width": "1.4" }
     },
     {
       "id": "tall_count",

@@ -664,10 +664,10 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 - **IP-05** — run sections F and G on Linux CI.
 - **IP-22 → IP-23 → IP-24** — every release self-test against the exported
   binary (Windows and Linux), tag `v1.1.0`, hand over.
-- Follow-ups found on the way: the grader does not model the turntable's
-  `table.deck` output, and no belt-fed turntable scene exists (IP-33); the
-  pivot-divert scene still carries its `lip_drop` 0.04 workaround (IP-40);
-  IP-08's Linux archive has not been built.
+- Follow-ups found on the way: no belt-fed turntable scene exists (IP-33;
+  the grader's rule for `table.deck` is modelled and tested, as
+  `plant.deck_lane_velocity`, but no scene calls it); IP-08's Linux archive
+  has not been built. The pivot-divert `lip_drop` workaround is gone (IP-40).
 
 ---
 
@@ -707,7 +707,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-30 | The window opens when the student's driver is up | 2 | M |  | **done** ddc74dd, 6a0887b |
 | IP-31 | A click on a momentary button must outlive the slowest poll | 3 | M | ● | **done** b808bdd, 15c57b1 (76 % of clicks missed at a 50 ms poll before, 0 after) |
 | IP-32 | The pivot diverter's blade must physically divert | 3 | S | ● | **done** 885df29, 85c0bc6 (plus the pivot-divert scene) |
-| IP-33 | A turntable that can take a carton off a belt | 3 | M |  | **done** e132303 (part and real-physics test; no belt-fed scene yet, and the grader model ignores table.deck) |
+| IP-33 | A turntable that can take a carton off a belt | 3 | M |  | **done** e132303 (part and real-physics test; no belt-fed scene yet, still open). Grader follow-up c850758: `plant.deck_lane_velocity` models the deck drive (moves only while `table.deck` runs, along a lane that turns with the deck, independent of the drive fault), pinned to the C# in `test_grade_templates.py`. No graded scene calls it: rotary-index has one axis and drops cartons on the deck, and a carton on a running deck leaves sideways, so wiring it there would be untested and would change verdicts |
 | IP-34 | The grader's panel press matches the engine's hold | 2 | S |  | **done** 89b184a |
 | IP-35 | The sorting grader presses the Start its brief promises | 2 | S | ● | **done** 2066cbd..814ad98, 0668cfc; run on a real OpenPLC: step 8 PASS 12/12 (found gotcha 25) |
 | IP-36 | Every command a release user is told to run exists in the release | 2 | S | ● | **done** (gate checks every shipped text file) |
@@ -715,7 +715,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-38 | The release carries the docs its guide links to | 5 | S |  | **done** (gate checks 322 relative links) |
 | IP-39 | Verify OpenPLC in WSL reaching the Windows sidecar | 2 | S | ● | open (needs the user's firewall decision) |
 | IP-41 | Starters warn that OpenPLC's first scans read every input FALSE | 2 | S |  | **done** dda69f5 (every OpenPLC starter's README and `.st` carry the warning and the `EstopSeen` pattern; `test_examples.py` fails without them) |
-| IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | **done** 768fce8 (pivot-divert still carries its lip_drop 0.04 workaround; its grader requires it) |
+| IP-40 | The chute's lip must not stand proud of the belt | 3 | S |  | **done** 768fce8 (the pivot-divert `lip_drop` 0.04 workaround has since been removed from the template; the grader now requires the chute's default lip; section H pivot-divert PASS chute=4 far=5, graded tests 12 passed) |
 
 ## Appendix B — where the findings came from
 

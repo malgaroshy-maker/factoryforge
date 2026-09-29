@@ -160,7 +160,7 @@ if not (_BELT.span()[0] <= PD_EMIT_AT < PD_EYE_AT < PD_GATE_AT
         # far edge within a metre of the post.
         and _CHUTE.x - _CHUTE.number("ramp_width") / 2 <= PD_GATE_AT
         and _CHUTE.x + _CHUTE.number("ramp_width") / 2 >= PD_GATE_AT + 1.0
-        and _CHUTE.number("lip_drop") >= 0.04):
+        and "lip_drop" not in _CHUTE.properties):
     raise TemplateError(f"{_PLANT.path.name}: the pivot diverter line's layout is not "
                         f"the one the grader's measured offsets belong to")
 
