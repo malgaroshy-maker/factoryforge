@@ -48,7 +48,6 @@ REC_SIZE = (1280, 720)      # what Godot renders
 GIF_SIZE = (1280, 720)      # what the GIF holds
 FPS = 12                    # recorded frames per game-second
 FRAME_MS = 80               # GIF frame time (12.5 fps; GIF times are 10 ms steps)
-COLOURS = 128               # one global palette keeps the dark UI clean and the file small
 
 # kind "start": the start screen (no arguments), held still.
 # kind "scene": --scene=<template> --demo. skip/take are game-seconds.
@@ -122,6 +121,52 @@ def render_card(size: tuple[int, int]) -> Image.Image:
     return img
 
 
+def encode_gif(segments: list[list[Image.Image]], out: Path, palette: str,
+               dither: bool) -> None:
+    """Quantize and write the GIF. ``segments`` is the film clip by clip.
+
+    The first version quantized the whole film to one 128-colour palette with
+    no dithering. Five scenes shared it, and the grey floor and the dark UI
+    took nearly all of it: orange cartons came out beige, the red and blue
+    panel buttons lost their colour, the end card's white/orange/blue turned
+    cream/tan/green, and the stack light's soft glow collapsed into a flat
+    blotch.
+
+    ``per-clip`` (the default) builds one 256-colour palette per clip from a
+    spread of that clip's own frames, so each scene keeps its own colours,
+    and a frame's unchanged areas stay byte-identical to the last frame's, so
+    GIF's frame differencing still compresses them. ``per-frame`` gives every
+    frame its own palette (truest colour, several times the size). Dithering
+    smooths gradients but its noise defeats the differencing: measured on
+    this film, per-frame with dithering was 128 MB and a single dithered
+    palette 55 MB, against a few MB without.
+    """
+    mode = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
+
+    def palette_from(frames: list[Image.Image]) -> Image.Image:
+        sample = frames[:: max(1, len(frames) // 12)]
+        strip = Image.new("RGB", (GIF_SIZE[0], GIF_SIZE[1] * len(sample)))
+        for i, im in enumerate(sample):
+            strip.paste(im, (0, i * GIF_SIZE[1]))
+        # FASTOCTREE, not MEDIANCUT: median cut splits by pixel count, so the
+        # acres of grey floor and dark UI won the palette and orange cartons,
+        # red buttons and the yellow bumper came out washed-out beige. Octree
+        # kept them indistinguishable from the raw frame (compared side by
+        # side on the sorting clip).
+        return strip.quantize(colors=256, method=Image.Quantize.FASTOCTREE,
+                              dither=Image.Dither.NONE)
+
+    frames_p = []
+    for seg in segments:
+        if palette == "per-frame":
+            frames_p += [im.quantize(palette=palette_from([im]), dither=mode) for im in seg]
+        else:
+            shared = palette_from(seg)
+            frames_p += [im.quantize(palette=shared, dither=mode) for im in seg]
+    frames_p[0].save(out, save_all=True, append_images=frames_p[1:], duration=FRAME_MS,
+                     loop=0, optimize=True, disposal=1)
+
+
 def run_godot(godot: str, args: list[str], log: Path) -> None:
     """Run Godot to completion with stdout/stderr in a file (gotcha 15)."""
     with open(log, "w", encoding="utf-8", errors="replace") as fh:
@@ -160,6 +205,10 @@ def main() -> None:
                     "(a clip whose folder is missing is recorded again)")
     ap.add_argument("--keep", action="store_true", help="keep the per-frame PNGs and print where")
     ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--palette", choices=["per-clip", "per-frame"], default="per-clip",
+                    help="one 256-colour palette per clip (default) or per frame (much larger)")
+    ap.add_argument("--dither", action="store_true",
+                    help="Floyd-Steinberg dithering: smoother gradients, many times the size")
     opts = ap.parse_args()
 
     work = opts.reuse or Path(tempfile.mkdtemp(prefix="ff_demo_"))
@@ -177,12 +226,12 @@ def main() -> None:
         if not (ENGINE / ".godot").exists():
             run_godot(opts.godot, ["--headless", "--path", ".", "--import"], work / "import.log")
 
-    sequence: list[Image.Image] = []
+    segments: list[list[Image.Image]] = []
     for clip in clips:
         if clip["kind"] == "card":
             card = render_card(GIF_SIZE)
             card.save(work / "card.png")
-            sequence += [card] * int(round(clip["take"] * 1000 / FRAME_MS))
+            segments.append([card] * int(round(clip["take"] * 1000 / FRAME_MS)))
             continue
         if opts.reuse and (work / clip["name"]).exists():
             frames = sorted((work / clip["name"]).glob("f*.png"))[int(round(clip["skip"] * FPS)):]
@@ -191,6 +240,7 @@ def main() -> None:
         keep = int(round(clip["take"] * FPS))
         # A start screen does not move; frames are frames all the same.
         zoom = clip.get("zoom")
+        segments.append([])
         for n, f in enumerate(frames[:keep]):
             with Image.open(f) as im:
                 im = im.convert("RGB")
@@ -203,19 +253,11 @@ def main() -> None:
                     y0 = (0.5 + (cy - 0.5) * k) - w / 2
                     im = im.crop((round(x0 * im.width), round(y0 * im.height),
                                   round((x0 + w) * im.width), round((y0 + w) * im.height)))
-                sequence.append(im.resize(GIF_SIZE, Image.LANCZOS))
-
-    # One palette for the whole film, built from a spread of its own frames.
-    sample = sequence[:: max(1, len(sequence) // 24)]
-    strip = Image.new("RGB", (GIF_SIZE[0], GIF_SIZE[1] * len(sample)))
-    for i, im in enumerate(sample):
-        strip.paste(im, (0, i * GIF_SIZE[1]))
-    palette = strip.quantize(colors=COLOURS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    frames_p = [im.quantize(palette=palette, dither=Image.Dither.NONE) for im in sequence]
+                segments[-1].append(im.resize(GIF_SIZE, Image.LANCZOS))
 
     opts.out.parent.mkdir(parents=True, exist_ok=True)
-    frames_p[0].save(opts.out, save_all=True, append_images=frames_p[1:], duration=FRAME_MS,
-                     loop=0, optimize=True, disposal=1)
+    encode_gif(segments, opts.out, opts.palette, opts.dither)
+    sequence = [im for seg in segments for im in seg]
     mb = opts.out.stat().st_size / 1e6
     print(f"wrote {opts.out}: {len(sequence)} frames, {len(sequence) * FRAME_MS / 1000:.1f} s, "
           f"{GIF_SIZE[0]}x{GIF_SIZE[1]}, {mb:.1f} MB")
