@@ -80,6 +80,26 @@ checkable ones.
   carton is orange, a short one blue, a lamp's colour is its state. Texturing
   keeps those signals.
 
+### Which model for which job (tested 2026-09-29)
+
+Generation goes through the user's Higgsfield **Cloud API** key, via the
+`higgsfield-api` MCP server (a local wrapper around Higgsfield's official
+`higgsfield-client` SDK; the key lives in the `HF_KEY` environment variable and
+nowhere else). The API offers 16 image models and **no 3D models**. Six general
+image models were run on the same four prompts and compared side by side;
+textures were also tiled 2×2 to expose seams.
+
+| Job | Use | Runner-up | Avoid, and why |
+|---|---|---|---|
+| Seamless textures | `xai/grok-imagine-image-2.0` — realistic, even, tiles with almost no seam | `alibaba/qwen-image-3/text-to-image` plus a seam-blend pass (corner vignette) | Ideogram (paints the repeats into the image), Recraft (reads as galvanised metal) |
+| Logo / icon | `xai/grok-imagine-image-2.0` — clearest box-on-conveyor-in-a-gear, reads small | `recraft/v4.1/pro/text-to-image` — cleanest vector look | `z-image/turbo` (wrote text into a "no text" icon) |
+| Printed text (carton labels, signs) | `recraft/v4.1/text-to-image` — every line right, flat print, 14 s | Grok, Qwen (also exact) | `z-image/turbo` (garbled barcode text, sideways arrows) |
+| Hero / site / README art | `xai/grok-imagine-image-2.0` — the only one that drew the pusher, chute and gantry asked for | `recraft/v4.1/text-to-image` | — |
+
+Grok is the slowest (70–96 s a job) and best at three of the four. The API does
+not report a job's price; read it from the console's usage page. Qwen and
+Z-Image were intermittently "temporarily unavailable" (not charged).
+
 ---
 
 ## Phase A — the look (Higgsfield)
@@ -123,6 +143,9 @@ non-interactive decoration that the property inspector can hide. Each model
 is rendered and dropped if it reads badly.
 *Verify:* renders; frame time; scene save/load round-trip keeps them.
 *Size:* L. *Credits:* preflight each; recorded in `ASSETS.md`.
+*Blocked on the API:* the Cloud API has no 3D models. This item needs the
+separate Higgsfield app account (the OAuth `higgsfield` connection, which has
+Meshy and Tripo image→3D) to hold credits, or it is dropped from v1.2.
 
 **V12-05 — Better housings for static parts** (stretch)
 Replace the static shells of a few parts — stack light, control panel,
