@@ -61,11 +61,11 @@ CAPTION_PX = 28             # caption text height at 1280x720
 # kind "scene": --scene=<template> --demo. skip/take are game-seconds.
 # kind "card":  the end card, rendered here.
 STORYBOARD = [
-    # The credit line at the foot of the start screen is ~9 px tall at 1440 wide, so this clip
-    # is recorded at twice the size and, after `hold` seconds, eased in on it over `over`
+    # The credit line at the foot of the start screen's left column is small, so this clip is
+    # recorded at twice the size and, after `hold` seconds, eased in on that corner over `over`
     # seconds. box is (centre x, centre y, width) as fractions of the frame.
     {"kind": "start", "skip": 1.0, "take": 3.5, "res": (2560, 1440),
-     "zoom": {"hold": 1.2, "over": 1.3, "box": (0.5, 0.82, 0.30)}},
+     "zoom": {"hold": 1.4, "over": 1.3, "box": (0.2, 0.8, 0.4)}},
     # Each scene clip shows the KEY ACTION of its machine, and is cut around it: it is recorded
     # for `record` game-seconds with --watch on the tags that make the action, then the log is
     # searched for `cut.event` (a tag change, or "action ..." for an --at) and the frames from
@@ -131,9 +131,15 @@ def shape_arabic(text: str) -> str:
 
 def render_card(size: tuple[int, int]) -> Image.Image:
     w, h = size
-    img = Image.new("RGB", size, (24, 27, 33))
+    # The logo on its own navy (V12-06), so the film ends on the same mark as
+    # the icon, the start screen and the README banner.
+    img = Image.new("RGB", size, (4, 25, 72))
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, w, 8], fill=(255, 140, 40))
+    logo_path = ENGINE / "assets" / "branding" / "logo_1024.png"
+    if logo_path.exists():
+        side = int(h * 0.20)
+        logo = Image.open(logo_path).resize((side, side), Image.LANCZOS)
+        img.paste(logo, ((w - side) // 2, int(h * 0.02)), logo)
     bold = ["segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"]
     regular = ["segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"]
     arabic = ["segoeui.ttf", "tahoma.ttf", "arial.ttf", "DejaVuSans.ttf"]
