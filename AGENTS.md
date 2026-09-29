@@ -132,6 +132,27 @@ cd sidecar && python -m factoryforge_sidecar connect --driver opcua-client \
 # and counts nothing over nothing, a fan that moves a heating station's balance
 # point, and a two-hand station that refuses two presses a second apart.
 "<GODOT>" --headless --path engine/ -- --self-test=lineparts --duration=60
+# The filming flags (below). Headless: --at fires on the game clock, operate
+# moves the guard door through a click's own call, --watch logs a change with
+# its game time. With a display (no --headless, test_plan D3) it also asserts
+# --film left no panel visible and --camera put the camera where it was told.
+"<GODOT>" --headless --path engine/ -- --self-test=film --duration=30
+
+# Filming (tools/record_demo.py). All CLI-only; without them the run is exactly
+# the run it was. --film (or --hide-ui) hides every panel, toolbar and overlay
+# so the 3D view fills the frame, and keeps them hidden. --camera=yaw,pitch,dist:tx,ty,tz
+# places the orbit camera (degrees, degrees, metres : look-at point in world
+# metres; yaw 0 looks along -Z from +Z, positive yaw walks the camera toward
+# +X, negative pitch looks down) and pins it, so a scene load's own framing
+# cannot move it. --at=SECONDS:ACTION, repeatable, on the GAME clock (physics
+# ticks since the scene loaded, the clock Movie Maker's frames are on):
+# force:TAG=VALUE, release:TAG, and operate:PART, which is a click on the part
+# (the call a Run-mode click ends in, so a guard door slides or refuses exactly
+# as for a mouse -- not a forced input tag). --watch=TAG,TAG logs each change.
+# Every action and watched change prints "[film] t=9.283 pusher.extend=true".
+"<GODOT>" --path engine/ --write-movie C:/tmp/f.png --fixed-fps 12 --quit-after 150 -- \
+    --scene=res://templates/guarded_cell.json --demo --film \
+    --camera=-25,-28,3.4:1.7,0.5,0.7 --at=9:operate:guard_a --watch=belt.rotate,guard_a.closed
 
 # Open a specific scene instead of the start screen (scripting, screenshots)
 "<GODOT>" --path engine/ -- --scene=res://templates/tank_level_control.json

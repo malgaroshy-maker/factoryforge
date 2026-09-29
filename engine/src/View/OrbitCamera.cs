@@ -62,6 +62,7 @@ public partial class OrbitCamera : Camera3D
     /// looking at the back of it.</param>
     public void Frame(Aabb bounds, bool overviewPitch = false)
     {
+        if (_pinned) return;    // placed by --camera=, see Place
         _targetGoal = bounds.GetCenter();
         if (overviewPitch) _pitchGoal = Mathf.Clamp(-0.52f, MinPitch, MaxPitch);
 
@@ -103,6 +104,28 @@ public partial class OrbitCamera : Camera3D
         };
         _settled = false;
     }
+
+    /// <summary>
+    /// Put the camera exactly here, now, with no chase. For filming
+    /// (<c>--camera=</c>): a recording has to open on the shot, not swing
+    /// into it. Angles are degrees, distance and target are metres; a yaw of
+    /// 0 looks along -Z from +Z, positive yaw walks the camera toward +X, and
+    /// a negative pitch looks down.
+    /// </summary>
+    public void Place(float yawDegrees, float pitchDegrees, float distance, Vector3 target)
+    {
+        Target = _targetGoal = target;
+        Distance = _distanceGoal = Mathf.Clamp(distance, 0.3f, 25f);
+        Yaw = _yawGoal = Mathf.DegToRad(yawDegrees);
+        Pitch = _pitchGoal = Mathf.Clamp(Mathf.DegToRad(pitchDegrees), MinPitch, MaxPitch);
+        _settled = true;
+        // A scene load frames its whole line, and that can land after this
+        // call. The shot that was asked for wins.
+        _pinned = true;
+        Apply();
+    }
+
+    private bool _pinned;
 
     public enum CameraPreset { Iso, Top, Front, Side }
 

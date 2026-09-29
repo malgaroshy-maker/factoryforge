@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Nodes;
 using Godot;
 using FactoryForge.Editor;
@@ -64,6 +65,13 @@ public partial class Main : Node
     /// concurrent runs coexist. -1 means "leave the default alone".</summary>
     private int _busPort = -1;
 
+    /// <summary>Filming options (tools/record_demo.py), all CLI-only and inert
+    /// when absent. See <see cref="FilmDirector"/>.</summary>
+    private bool _film;
+    private string? _cameraSpec;
+    private readonly List<string> _atSpecs = new();
+    private readonly List<string> _watchSpecs = new();
+
     public override void _Ready()
     {
         foreach (var arg in OS.GetCmdlineUserArgs())
@@ -92,6 +100,14 @@ public partial class Main : Node
                 _printTags = true;
             else if (arg.StartsWith("--bus-port="))
                 _busPort = arg.Substring("--bus-port=".Length).ToInt();
+            else if (arg == "--film" || arg == "--hide-ui")
+                _film = true;
+            else if (arg.StartsWith("--camera="))
+                _cameraSpec = arg.Substring("--camera=".Length);
+            else if (arg.StartsWith("--at="))
+                _atSpecs.Add(arg.Substring("--at=".Length));
+            else if (arg.StartsWith("--watch="))
+                _watchSpecs.Add(arg.Substring("--watch=".Length));
         }
 
         // A fixed regression scene, not a template — the deterministic
@@ -316,6 +332,42 @@ public partial class Main : Node
         {
             AddChild(new IndustrialPartsSelfTest { Name = "IndustrialPartsSelfTest", Editor = _editor!, Tags = tags });
         }
+        if (_selfTest == "film")
+        {
+            AddChild(new FilmSelfTest { Name = "FilmSelfTest", Editor = _editor!, Tags = tags });
+        }
+
+        AddFilmDirector(tags);
+    }
+
+    /// <summary>
+    /// <c>--film</c>, <c>--camera=</c>, <c>--at=</c> and <c>--watch=</c>: the
+    /// stage manager for a recording. Added last, so it reads each tick's tags
+    /// after the parts have written them. Nothing is added when none of the
+    /// four is present, and a malformed one refuses to start (as
+    /// <c>--deterministic</c> with <c>--scene=</c> does) rather than filming
+    /// something other than what was asked for.
+    /// </summary>
+    private void AddFilmDirector(TagTable tags)
+    {
+        if (!_film && _cameraSpec is null && _atSpecs.Count == 0 && _watchSpecs.Count == 0) return;
+
+        var director = new FilmDirector { Name = "FilmDirector", Tags = tags, Editor = _editor, Film = _film };
+        if (_cameraSpec is not null && director.SetCamera(_cameraSpec) is { } cameraProblem)
+        {
+            GD.PrintErr(cameraProblem);
+            GetTree().Quit(1);
+            return;
+        }
+        foreach (var at in _atSpecs)
+        {
+            if (director.Schedule(at) is not { } problem) continue;
+            GD.PrintErr(problem);
+            GetTree().Quit(1);
+            return;
+        }
+        foreach (var w in _watchSpecs) director.Watch(w);
+        AddChild(director);
     }
 
     private void BuildView(TagTable tags)

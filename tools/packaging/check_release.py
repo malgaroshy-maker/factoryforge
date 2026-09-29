@@ -72,6 +72,8 @@ SELF_TESTS = [
     # stuck, a star-delta short that trips and latches, raw counts that track
     # a receiver's pressure, a servo that holds on a fault until acknowledged.
     "industrialparts",
+    # The filming flags (--at, --watch, operate) fire on the game clock.
+    "film",
 ]
 
 

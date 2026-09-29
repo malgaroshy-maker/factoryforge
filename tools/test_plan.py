@@ -727,13 +727,19 @@ def section_c() -> None:
     _self_test("C32", "the arm, the pallet station and the lift do what their geometry claims",
                "handlingparts")
 
+    # The filming flags recording depends on (tools/record_demo.py): --at fires
+    # on the game clock, operate moves the door through the click's own call,
+    # a watched tag's change is logged with its game time. The half that needs
+    # a display (--film hides the panels, --camera places the camera) is D3.
+    _self_test("C33", "--at, --watch and operate fire on the game clock (filming flags)", "film")
+
     # The release gate keeps its own list (check_release.SELF_TESTS), and a
     # self-test added only there ran at release time and never in CI:
     # --self-test=analog (IP-16) was exactly that when it landed. Run whatever
     # the gate holds that no line above names, at the gate's own duration, so
     # the two lists cannot drift apart silently. A self-test that deserves a
     # sentence of its own should still get a named line above.
-    for n, which in enumerate(_release_gate_self_tests_not_run(), start=33):
+    for n, which in enumerate(_release_gate_self_tests_not_run(), start=34):
         _self_test(f"C{n}", f"release-gate self-test '{which}' (named only in check_release.py)",
                    which, duration=90)
 
@@ -754,6 +760,8 @@ def section_d(enabled: bool) -> None:
                "not run (pass --gui)", skipped=True)
         record("D2", "whole drag path, synthesized press/motion/release to a moved part", True,
                "not run (pass --gui)", skipped=True)
+        record("D3", "--film hides every panel and --camera places the camera", True,
+               "not run (pass --gui)", skipped=True)
         return
     _self_test("D1", "whole click path, synthesized mouse event to tag", "click", headless=False)
     # C24's headless half enters at the ray seam, which skips the two things
@@ -762,6 +770,11 @@ def section_d(enabled: bool) -> None:
     # than under wherever the cursor is when the event is processed (OP-08).
     _self_test("D2", "whole drag path, synthesized press/motion/release to a moved part",
                "dragpath", headless=False)
+    # The same self-test as C33, run where panels and a camera exist: it then
+    # also asserts --film left no panel visible and --camera put the camera
+    # where it was told. Those are the parts a headless run cannot see.
+    _self_test("D3", "--film hides every panel and --camera places the camera", "film",
+               headless=False)
 
 
 # --- E. determinism and the regression contract -----------------------------

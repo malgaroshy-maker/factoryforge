@@ -429,6 +429,18 @@ public partial class SceneEditor
         part.Operate(new PartOperate(Tags, entry.TagIds, entry.InstanceId, region, PulseTag));
     }
 
+    /// <summary>Operate a part by its instance id, as a click on it would
+    /// (<c>--at=T:operate:ID</c>, the film director). It is the very call a
+    /// click ends in, so a guard door slides or refuses exactly as it does for
+    /// a mouse. False when there is no such part.</summary>
+    public bool OperatePartById(string instanceId, string region = "")
+    {
+        int index = _placedParts.FindIndex(p => p.InstanceId == instanceId);
+        if (index < 0) return false;
+        OperatePart(_placedParts[index], region);
+        return true;
+    }
+
     /// <summary>Raise a tag and release it a moment later, for a control that
     /// means a rising edge rather than a level. The timer belongs to the scene
     /// tree, which a part has no business reaching into.</summary>
