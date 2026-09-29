@@ -655,8 +655,11 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 - **IP-39** — allow the sidecar through the Windows firewall once, then
   follow the first-hour guide from WSL exactly.
-- **IP-11, IP-13** — permission to connect to PLCSIM Advanced
-  (`192.168.1.20`) and a program nobody on the project wrote.
+- **IP-11, IP-13** — the Siemens/native halves were done on 2026-09-29
+  with the user's permission (TIA project `FactoryForge_Sorting`, instance
+  `test`, Softbus). Left: IP-13's OPC UA half (the instance in TCP/IP mode on
+  the PLCSIM virtual adapter's subnet, 192.168.0.x), IP-11's OpenPLC half, and
+  a program a student wrote.
 
 ### Left, no one else needed
 
@@ -686,9 +689,9 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
 | IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282, except the WSL-to-Windows firewall crossing (IP-39) |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
-| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open |
+| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half open; no student-written program yet |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | open: faults marked on sorting, dosing, heat-treat (ae3c44e); operator contract on every panel scene still open |
-| IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | open |
+| IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | partly done 2026-09-29: native half -- unchanged `Sorting.scl` v0.4 on PLCSIM (Softbus), `demo --driver plcsim-advanced`: 48 tall / 48 short in 300 s, and 18 / 20 in 120 s (one tall carton counted short at 81 s); OPC UA half open (needs the instance in TCP/IP mode) |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | **done** ba6a72a, 728d65c |
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |

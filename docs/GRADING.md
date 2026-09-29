@@ -9,7 +9,11 @@ verified the same way, in lockstep at seeds 11 and 5, and so was `pivot-divert`
 the model carton for carton. So was `mezzanine-lift` (IP-15), the first scene
 on two levels. **Nobody has graded a real student's program with
 any of them.** Those are two different claims and this file will say so until
-the second one is true.*
+the second one is true. What has been graded is a real controller: on
+2026-09-29 two programs this project wrote ran on an S7-1500 in PLCSIM
+Advanced and were marked through the native driver --
+[`examples/graded/`](../examples/graded/README.md) has the reports, including
+why the controller has to be restarted before every graded run.*
 
 Marking a PLC exercise by hand means watching a line run and forming an
 opinion. It does not scale past a small class, it is not reproducible, and two

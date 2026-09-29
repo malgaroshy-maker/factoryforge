@@ -30,9 +30,9 @@ parts, and €278/year. See [`docs/PRD.md`](docs/PRD.md) for the full rationale.
 
 | What | Detail |
 |---|---|
-| **S7-PLCSIM Advanced** | `192.168.1.20`, OPC UA at `opc.tcp://192.168.1.20:4840` |
+| **S7-PLCSIM Advanced** | V6.0 Upd1. On 2026-09-29: instance `test` in PLCSIM (Softbus) mode, so only the native driver reaches it; the project sets 192.168.0.20. The PLCSIM virtual adapter ("Ethernet 2") is 192.168.0.100/24, so a TCP/IP-mode instance belongs on 192.168.0.x -- the old `192.168.1.20` is the Wi-Fi's subnet and was unreachable |
 | CPU | 1511-1 PN, FW V2.9, TIA Portal V19 |
-| PLC program | Global DB `FF_IO` + FB `Sorting` (instance `Sorting_DB`), currently **SCL v0.3** |
+| PLC program | TIA project `D:\projects\Tia portal mcp\projects\FactoryForge_Sorting` (built through TiaCommander + Openness on 2026-09-29): the 19-member `FF_IO` + FB `SortingByHeight` (the first-hour program, `examples/graded/first_hour_sorting_by_height.scl`). The `Sorting.scl` v0.4 build is archived as `D:\projects\Tia portal mcp\archives\FactoryForge_Sorting_scl_v04_*.zap19` |
 | Node ids | `ns=3;s="FF_IO"."ConveyorRotate"` etc. — quotes are part of the identifier |
 
 The user has **no physical PLC**. PLCSIM Advanced is the reference target and
@@ -454,6 +454,8 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
     FALSE, so a cut wire still stops the line. The converse also bites: when
     the Modbus link drops, OpenPLC keeps its last inputs and keeps running, so
     a line left running is already turning when the next grader connects.
+    An S7-1500 does the same (2026-09-29, `examples/graded/README.md`):
+    restart the controller before every graded run.
 
 ---
 

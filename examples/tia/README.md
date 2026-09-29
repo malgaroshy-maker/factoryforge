@@ -7,6 +7,13 @@ S7-1500 sorts boxes by height in the FactoryForge simulation, over OPC UA.
 Only Advanced provides a virtual Ethernet adapter, and without it nothing
 outside TIA Portal can reach the CPU.
 
+**Restart the CPU before every graded run.** A PLC keeps its program state
+when the grader disconnects, so a line the last run left started is already
+running when the next exam begins, and fails `line.started_by_start` at 0.01 s.
+STOP then RUN the CPU (the PLCSIM Advanced control panel, or TIA Portal's
+online toolbar) before each `grade`. Measured on 2026-09-29; see
+[`../graded/README.md`](../graded/README.md).
+
 **Starters for the other scenes.** Every graded scene has a folder here --
 `batch-dosing/`, `guarded-cell/`, ... -- with an SCL source (a global DB
 `FF_IO` holding every signal, and an empty FB) and the mapping file for each

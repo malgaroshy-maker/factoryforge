@@ -1,0 +1,320 @@
+{
+  "tool": "factoryforge-grade",
+  "format": 1,
+  "scene": "sorting-by-height",
+  "student": "the first-hour program (GETTING_STARTED steps 7-8) in SCL, on an S7-1500 in PLCSIM Advanced",
+  "started": "2026-09-28T23:48:02+00:00",
+  "duration_s": 60.0,
+  "verdict": "PASS",
+  "exit_code": 0,
+  "headline": "every check met",
+  "checks": [
+    {
+      "id": "controller.stayed_connected",
+      "ok": true,
+      "detail": "1 session(s), 0 of them dropped before the end"
+    },
+    {
+      "id": "integrity.no_forced_tags",
+      "ok": true,
+      "detail": "no tag was forced"
+    },
+    {
+      "id": "integrity.no_input_writes",
+      "ok": true,
+      "detail": "no writes aimed at simulator-owned tags"
+    },
+    {
+      "id": "line.ran",
+      "ok": true,
+      "detail": "13 cartons reached a lane (at least 8 needed in the 60s window)"
+    },
+    {
+      "id": "line.both_lanes",
+      "ok": true,
+      "detail": "chute 7, far end 6 (at least 3 each)"
+    },
+    {
+      "id": "sort.tall_diverted",
+      "ok": true,
+      "detail": "no tall carton ran off the far end"
+    },
+    {
+      "id": "sort.short_passed",
+      "ok": true,
+      "detail": "no short carton was diverted"
+    },
+    {
+      "id": "line.conservation",
+      "ok": true,
+      "detail": "15 fed = 13 sorted + 2 still on the belt"
+    },
+    {
+      "id": "line.started_by_start",
+      "ok": true,
+      "detail": "the belt never started without somebody pressing Start"
+    },
+    {
+      "id": "estop.stopped_the_belt",
+      "ok": true,
+      "detail": "the belt moved 30 mm after the mushroom was struck (at most 100 mm, which is 200 ms of belt)"
+    },
+    {
+      "id": "estop.latched_until_reset",
+      "ok": true,
+      "detail": "the belt stayed still from the release until Reset and then Start"
+    },
+    {
+      "id": "estop.restarted_after_reset",
+      "ok": true,
+      "detail": "the belt was running again 0.06s after Start at 22.83s (within 1s)"
+    },
+    {
+      "id": "fault.no_feed_while_faulted",
+      "ok": true,
+      "detail": "no carton was fed onto the belt while its drive was faulted, from 32s to 35.01s"
+    },
+    {
+      "id": "fault.latched_until_reset",
+      "ok": true,
+      "detail": "the belt stayed still from the fault clearing at 35.01s until Reset and then Start"
+    },
+    {
+      "id": "fault.restarted_after_reset",
+      "ok": true,
+      "detail": "the belt was running again 0.07s after Start at 38.01s (within 1s)"
+    }
+  ],
+  "feedback": [
+    "Sorting was clean: 7 tall down the chute, 6 short past the end, none misrouted."
+  ],
+  "evidence": {
+    "seed": 1,
+    "window": {
+      "opened_on": "controller ready",
+      "controller_connected_at": 6.436,
+      "controller_described_at": 6.436,
+      "controller_ready_at": 7.583,
+      "driver": "plcsim-advanced",
+      "ready_wait": 30.0,
+      "opened_at": 7.583,
+      "plant_seconds_before": 0.0
+    },
+    "sessions": [
+      {
+        "connected_at": 6.436,
+        "described_at": 6.436,
+        "ready_at": 7.583,
+        "disconnected_at": 67.631,
+        "controller": [
+          {
+            "at": 6.483,
+            "ready": false,
+            "driver": "plcsim-advanced",
+            "message": "attaching to PLCSIM Advanced instance 'test'"
+          },
+          {
+            "at": 7.583,
+            "ready": true,
+            "driver": "plcsim-advanced",
+            "message": "attached to PLCSIM Advanced instance 'test'; 13 input(s) seeded"
+          }
+        ]
+      }
+    ],
+    "forces": [],
+    "input_write_attempts": [],
+    "forced_tags": {},
+    "ticks": 6004,
+    "sim_seconds": 60.04,
+    "emitted": 15,
+    "sorted": 13,
+    "still_on_belt": 2,
+    "chute": {
+      "total": 7,
+      "tall": 7,
+      "short": 0
+    },
+    "far_end": {
+      "total": 6,
+      "short": 6,
+      "tall": 0
+    },
+    "misrouted": [],
+    "crowded_on_the_faulted_belt": [],
+    "cartons": [
+      {
+        "carton": 1,
+        "height": "short",
+        "lane": "far-end",
+        "at": 8.55
+      },
+      {
+        "carton": 2,
+        "height": "tall",
+        "lane": "chute",
+        "at": 10.63
+      },
+      {
+        "carton": 3,
+        "height": "short",
+        "lane": "far-end",
+        "at": 14.69
+      },
+      {
+        "carton": 4,
+        "height": "tall",
+        "lane": "chute",
+        "at": 16.82
+      },
+      {
+        "carton": 5,
+        "height": "tall",
+        "lane": "chute",
+        "at": 25.81
+      },
+      {
+        "carton": 6,
+        "height": "short",
+        "lane": "far-end",
+        "at": 30.4
+      },
+      {
+        "carton": 7,
+        "height": "short",
+        "lane": "far-end",
+        "at": 39.52
+      },
+      {
+        "carton": 8,
+        "height": "tall",
+        "lane": "chute",
+        "at": 41.66
+      },
+      {
+        "carton": 9,
+        "height": "tall",
+        "lane": "chute",
+        "at": 44.62
+      },
+      {
+        "carton": 10,
+        "height": "short",
+        "lane": "far-end",
+        "at": 48.63
+      },
+      {
+        "carton": 11,
+        "height": "tall",
+        "lane": "chute",
+        "at": 50.75
+      },
+      {
+        "carton": 12,
+        "height": "short",
+        "lane": "far-end",
+        "at": 54.76
+      },
+      {
+        "carton": 13,
+        "height": "tall",
+        "lane": "chute",
+        "at": 56.9
+      }
+    ],
+    "pusher": {
+      "fired": 7,
+      "mean_delay_after_beam_s": 0.954,
+      "delays_s": [
+        0.93,
+        0.98,
+        0.93,
+        0.94,
+        0.94,
+        0.98,
+        0.98
+      ],
+      "required_window_s": [
+        0.6,
+        1.2
+      ],
+      "held_out_fraction": 0.178
+    },
+    "belt_running_fraction": 0.782,
+    "emit_pulses": 15,
+    "panel": {
+      "presses": [
+        [
+          0.99,
+          "start"
+        ],
+        [
+          19.82,
+          "start"
+        ],
+        [
+          21.32,
+          "reset"
+        ],
+        [
+          22.82,
+          "start"
+        ],
+        [
+          36.5,
+          "reset"
+        ],
+        [
+          38.0,
+          "start"
+        ]
+      ],
+      "exam": {
+        "reached_for_the_mushroom_at": 16.01,
+        "struck_at": 16.83,
+        "waited_for_a_clear_plate": true,
+        "start_alone_at": 19.83,
+        "reset_at": 21.33,
+        "restart_at": 22.83
+      },
+      "trip": {
+        "struck_at": 16.83,
+        "moving_at_strike": true,
+        "released_at": 18.83,
+        "reset_at": 21.33,
+        "cleared_at": 22.83,
+        "stop_lag_s": 0.06,
+        "struck_travel_m": 0.03,
+        "latched_travel_m": 0.0,
+        "latched_moved_at": null,
+        "restarted_at": 22.89
+      },
+      "allowed_m": 0.1,
+      "started_without_a_press_at": []
+    },
+    "drive_fault": {
+      "exam": {
+        "reached_for_the_drive_at": 32.0,
+        "faulted_at": 32.0,
+        "waited_for_a_clear_plate": true,
+        "cleared_at": 35.01,
+        "reset_at": 36.51,
+        "restart_at": 38.01
+      },
+      "trip": {
+        "struck_at": 32.0,
+        "moving_at_strike": true,
+        "released_at": 35.01,
+        "reset_at": 36.51,
+        "cleared_at": 38.01,
+        "stop_lag_s": 0.0,
+        "struck_travel_m": 0.0,
+        "latched_travel_m": 0.0,
+        "latched_moved_at": null,
+        "restarted_at": 38.08
+      },
+      "fed_while_faulted": [],
+      "reaction_allowed_s": 0.2
+    }
+  }
+}

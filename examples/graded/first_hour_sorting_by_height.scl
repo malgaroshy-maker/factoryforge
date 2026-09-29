@@ -1,0 +1,86 @@
+// The program graded in sorting-by-height_first-hour-scl_plcsim_seed{1,2,3}.json.
+//
+// docs/GETTING_STARTED.md steps 7 and 8 -- the OpenPLC first-hour program --
+// translated statement for statement to SCL, for the nineteen-member FF_IO of
+// examples/tia/sorting-by-height/sorting_by_height.scl. Paste this body into
+// that starter's empty "SortingByHeight" and add the statics below. It was
+// entered through TIA Portal Openness, compiled with 0 errors and 0 warnings,
+// and downloaded to an S7-1500 (1511-1 PN, FW 2.9) on PLCSIM Advanced V6.0
+// Upd1 on 2026-09-29. See README.md beside this file for how it was graded.
+
+FUNCTION_BLOCK "SortingByHeight"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR
+      Running : Bool;     // the line is running
+      Tripped : Bool;     // the E-stop or a drive fault tripped; only Reset clears it
+      EstopSeen : Bool;   // the E-stop has read healthy since the CPU started
+      rStart {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;   // the moment Start goes down
+      rReset {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;   // the moment Reset goes down
+      tEmit : TON_TIME;   // times the feed: one carton every 3 s
+      EmitFlag : Bool;
+      HighMem : Bool;     // the high beam, one scan ago
+      PushReq : Bool;     // a tall carton is on its way to the pusher
+      tDelay : TON_TIME;  // high beam -> carton in front of the pusher
+      tPush : TON_TIME;   // how long the pusher stays out
+   END_VAR
+
+BEGIN
+    // The operator panel. Start and Reset are momentary: act on the scan
+    // the button goes down, not for as long as it is held.
+    #rStart(CLK := "FF_IO".PanelStart);
+    #rReset(CLK := "FF_IO".PanelReset);
+
+    // A trip only counts once the E-stop has been seen healthy (gotcha 25).
+    IF "FF_IO".PanelEstop THEN
+        #EstopSeen := TRUE;
+    END_IF;
+
+    // The E-stop trips the line, and so does the belt's drive faulting.
+    // The trip latches; only Reset clears it, and not while the fault is there.
+    IF (#EstopSeen AND NOT "FF_IO".PanelEstop) OR "FF_IO".ConveyorFault THEN
+        #Tripped := TRUE;
+    ELSIF #rReset.Q THEN
+        #Tripped := FALSE;
+    END_IF;
+
+    // Start runs the line, only while the E-stop reads healthy. Stop or a trip
+    // stops it. Reset alone does not start anything.
+    IF #Tripped OR "FF_IO".PanelStop OR NOT "FF_IO".PanelEstop THEN
+        #Running := FALSE;
+    ELSIF #rStart.Q THEN
+        #Running := TRUE;
+    END_IF;
+
+    "FF_IO".ConveyorRotate  := #Running;
+    "FF_IO".StackLightGreen := #Running;
+    "FF_IO".PanelGreen      := #Running;
+    "FF_IO".PanelRed        := #Tripped;
+
+    // Feed while the line runs: a square wave, 1.5 s high and 1.5 s low,
+    // one carton per rising edge.
+    IF #Running THEN
+        #tEmit(IN := TRUE, PT := T#1500MS);
+        IF #tEmit.Q THEN
+            #EmitFlag := NOT #EmitFlag;
+            #tEmit(IN := FALSE, PT := T#1500MS);
+        END_IF;
+    ELSE
+        #tEmit(IN := FALSE, PT := T#1500MS);
+        #EmitFlag := FALSE;
+    END_IF;
+    "FF_IO".EmitterEmit := #EmitFlag;
+
+    // A tall carton breaks the high beam 1.2 s before it reaches the pusher,
+    // and the pusher takes 0.3 s to come out: wait 0.9 s, then push.
+    IF "FF_IO".SensorHighDetect AND NOT #HighMem THEN
+        #PushReq := TRUE;
+    END_IF;
+    #HighMem := "FF_IO".SensorHighDetect;
+    #tDelay(IN := #PushReq, PT := T#900MS);
+    #tPush(IN := #tDelay.Q, PT := T#1500MS);
+    "FF_IO".PusherExtend := #tDelay.Q AND NOT #tPush.Q;
+    IF #tPush.Q THEN
+        #PushReq := FALSE;
+    END_IF;
+END_FUNCTION_BLOCK
