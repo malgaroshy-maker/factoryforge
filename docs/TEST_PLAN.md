@@ -152,6 +152,15 @@ each driver module sets.
 | G6 | Forcing an input tag while paused still reaches the bus | `check_force_while_paused.py`, FF-14 |
 | G7 | Forcing an int tag and a float tag both reach the bus, not just bits | `check_force_types.py`, UX-45 -- §2.8's Force-button bug at the wire-protocol level, independent of any UI |
 
+**In CI.** The `test-plan` job runs `--only A,B,C,E,F,G,H` on Ubuntu (IP-05);
+only D, which needs a display, stays behind `--gui`. F and G use headless Godot
+and the sidecar and nothing else. G1 finds `user://` through `_user_dir()` in
+`tools/test_plan.py`, which knows Windows, macOS and Linux (`XDG_DATA_HOME`).
+To see G5 catch a dead sidecar, run
+`FF_TESTPLAN_KILL_SIDECAR=1 python tools/test_plan.py --only G`: the sidecar is
+killed as it starts and G5 must FAIL with "the sidecar never connected". The
+variable exists for that proof only; never set it in CI.
+
 ### H. Scene exercises (`tools/try_scene.py`)
 
 One check per scene in `engine/templates/manifest.json`, numbered in manifest

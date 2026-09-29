@@ -6,14 +6,17 @@ name: test-plan
 # FF-28 (docs/history/FIX_PLAN.md); docs/TEST_PLAN.md says what each check is
 # for.
 #
-# Deliberately --only A,B,C,E,H. H (tools/try_scene.py against every shipped
-# scene) needs no display -- the spike behind UX-10 proved templates simulate
-# headless -- so it belongs beside A/C/E rather than behind --gui. D needs a
-# display. F (the sidecar-seam checks) and G (robustness, including the
-# engine-kill and pause-force regression tests) exercise process lifecycle and
-# port timing and have only ever been run on Windows. Bringing them here is
-# IP-05 in docs/IMPROVEMENT_PLAN.md: run them on Linux for real rather than
-# assume they work.
+# --only A,B,C,E,F,G,H. H (tools/try_scene.py against every shipped scene)
+# needs no display -- the spike behind UX-10 proved templates simulate
+# headless -- and neither do F (the engine/sidecar seam) or G (robustness:
+# corrupt scene file, engine killed under a connected sidecar, force while
+# paused): they use only headless Godot and the sidecar. F and G were
+# Windows-only until IP-05. What kept them off a shared runner was fixed ports
+# (HP-53) and waits that could not tell a dead engine from a slow one (HP-54);
+# the one Windows assumption left in them was where Godot keeps user://
+# (tools/test_plan.py `_user_dir`). Only D needs a display; it stays behind
+# --gui. To see that G5 reports a dead sidecar, run once with
+# FF_TESTPLAN_KILL_SIDECAR=1: G5 must FAIL, naming a sidecar that never connected.
 #
 # Two jobs, in parallel. `test-plan` is everything above except the graded
 # tests; `grader` is the graded tests alone (IP-04). Each should be a required
@@ -34,7 +37,7 @@ jobs:
   # about twice what this job took before the grader existed (~16 min).
   test-plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -83,8 +86,8 @@ jobs:
       - name: Install the sidecar (with test extras)
         run: pip install -e "sidecar[dev,siemens]"
 
-      - name: Run the test plan (A, B without the graded tests, C, E, H)
-        run: python tools/test_plan.py --only A,B,C,E,H --pytest-marker "not graded"
+      - name: Run the test plan (A, B without the graded tests, C, E, F, G, H)
+        run: python tools/test_plan.py --only A,B,C,E,F,G,H --pytest-marker "not graded"
 
   # The graded tests: tests/test_grade.py, marked `graded` by tests/conftest.py.
   # They run the headless grader (factoryforge_sidecar.grading) against

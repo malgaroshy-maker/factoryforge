@@ -679,7 +679,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-02 | Take the counts out of the prose | 0 | S |  | **done** ee4ede9 |
 | IP-03 | B1 reads pytest's result, not its prose | 1 | S | ● | **done** 609e07b |
 | IP-04 | Graded tests get their own job | 1 | S | ● | **done** d1ac12d; CI run 36447686787: test-plan 27 min and grader 23 min in parallel, both green |
-| IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | open |
+| IP-05 | Run F and G on Linux (HP-44) | 1 | M |  | code done (see git log); CI unverified until a green run shows F and G in the log |
 | IP-06 | A graded test must not depend on machine load | 1 | M | ● | **done** e64157b, 01bd35c |
 | IP-07 | The all-parts dispatch check asserts something (HP-08) | 1 | L |  | **done** e85df0c, 7dd30bc |
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
