@@ -85,6 +85,11 @@ public partial class KeyHelpUI : Control
         dismiss.AddThemeFontSizeOverride("font_size", 11);
         dismiss.AddThemeColorOverride("font_color", new Color(0.55f, 0.58f, 0.64f));
         body.AddChild(dismiss);
+
+        var credit = new Label { Text = Credits.Line, HorizontalAlignment = HorizontalAlignment.Center };
+        credit.AddThemeFontSizeOverride("font_size", 11);
+        credit.AddThemeColorOverride("font_color", new Color(0.55f, 0.58f, 0.64f));
+        body.AddChild(credit);
     }
 
     public void Toggle() => Visible = !Visible;

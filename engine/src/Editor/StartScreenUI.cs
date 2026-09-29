@@ -161,6 +161,11 @@ public partial class StartScreenUI : Control
 
         page.AddChild(new HSeparator());
         BuildControlsFooter(page);
+
+        var credit = new Label { Text = Credits.Line, HorizontalAlignment = HorizontalAlignment.Center };
+        credit.AddThemeFontSizeOverride("font_size", 11);
+        credit.AddThemeColorOverride("font_color", new Color(0.55f, 0.58f, 0.64f));
+        page.AddChild(credit);
     }
 
     private void BuildTemplateColumn(HBoxContainer columns)

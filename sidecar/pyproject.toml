@@ -9,6 +9,7 @@ description = "PLC driver sidecar for FactoryForge -- bridges the simulation tag
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Mahamed Algaroshy" }]
 dependencies = [
     "websockets>=12",
 ]

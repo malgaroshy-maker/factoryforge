@@ -308,6 +308,8 @@ async def connect(args) -> int:
     driver = drivers.create(args.driver, bus, **config)
     await driver.start()
 
+    from . import __version__, credit_line
+    print(f"factoryforge-sidecar {__version__}, {credit_line()}", flush=True)
     print(f"connected to scene '{bus.scene}' — {len(bus.table)} tags", flush=True)
     print(f"driver '{args.driver}' started: {config or 'defaults'}", flush=True)
 
@@ -457,6 +459,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="factoryforge-sidecar")
     parser.add_argument("-v", "--verbose", action="store_true")
+    from . import __version__, credit_line
+    parser.add_argument("--version", action="version",
+                        version=f"factoryforge-sidecar {__version__}, {credit_line()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("drivers", help="list the protocol drivers this build can actually run")

@@ -330,6 +330,7 @@ public partial class Main : Node
         // both start clipping (FF-17, FF-18). project.godot sets a sane
         // default size; this is the floor a user can still resize down to.
         GetWindow().MinSize = new Vector2I(1000, 700);
+        GetWindow().Title = Credits.WindowTitle;
 
         StudioEnvironment.AddEnvironment(this);
         StudioEnvironment.AddFloor(this);

@@ -127,6 +127,8 @@ jobs:
           files: artifacts/*.zip
           generate_release_notes: true
           body: |
+            Developed by Mahamed Algaroshy (محمد الجروشي).
+
             Download the archive for your platform, extract it, and run
             `FactoryForge`. No Godot, no .NET SDK and no Python needed.
 
