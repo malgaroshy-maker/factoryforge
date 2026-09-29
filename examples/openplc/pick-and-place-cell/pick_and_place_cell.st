@@ -15,7 +15,11 @@
      every carry -- a cycle that runs with holding false carried air.
      Careful with inposition: a target written this scan does not reach the
      machine until the next one, so on the scan that issues a move it still
-     reports the place you are trying to leave.
+     reports the place you are trying to leave. The mushroom (panel.estop,
+     normally closed) stops the infeed, the pick station and the gantry's
+     travel, without letting go of what the cup holds, within 200 ms and
+     its trip latches: releasing it restarts nothing, and neither does
+     Start or Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

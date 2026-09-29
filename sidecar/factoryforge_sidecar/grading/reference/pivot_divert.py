@@ -11,7 +11,7 @@ from __future__ import annotations
 from ..lockstep import run_scan
 from ..plant import CARTON_LENGTH
 from ..scenes.pivot_divert import PD_BELT_SPEED, PD_EYE_AT, PD_GATE_AT, PD_RELEASE
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "pivot-divert"
@@ -126,4 +126,5 @@ async def _pd_everyother(bus, stop):
 
 
 REFERENCES = {"good": _pd_good, "timed": _pd_timed, "unlatched": _pd_unlatched,
-              "late": _pd_late, "everyother": _pd_everyother}
+              "late": _pd_late, "everyother": _pd_everyother,
+              **contract_references(_pd_good)}

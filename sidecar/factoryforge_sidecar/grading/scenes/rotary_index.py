@@ -12,9 +12,11 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, CARTON_WIDTH, EngineFeed, Item, PlantScene, Script,
-                     declare_stack_light, fault_input, pot_start)
+from ..plant import (CARTON_LENGTH, CARTON_WIDTH, EngineFeed, Item, OperatorExam,
+                     PlantScene, Script, declare_stack_light, fault_input,
+                     operator_exam_ends_by, pot_start)
 from ..templates import TemplateError, template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "rotary-index"
@@ -81,6 +83,25 @@ RI_SLOW_AT = 24.0
 #: A carton leaves "square" if the deck was within this of its index angle
 #: when the plate met it, in degrees.
 RI_SQUARE = 2.0
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the indexing exam, the E-stop sheet (`plant.OperatorExam`). "Stopped"
+# is the outfeed belt, and neither the deck nor the rod sent anywhere new.
+# Neither can be stopped part way by any command a program has: `table.index`
+# is an end position the deck turns to, and a 5/2 valve with no spring keeps
+# the rod going where its spool last sent it. So what counts is a new end sent
+# to either -- the tick `table.index` changes or the spool shifts -- and not
+# the travel after it, which is the part's own. The examiner strikes with the
+# deck and the rod both at rest where they were last sent, so nothing is in
+# flight; a command the program had already sent inside the 200 ms is within
+# the limit, and one sent after it is a motion started while the trip stands.
+# The cycle is marked up to `RI_TESTS_END`, as it was before the sheet existed.
+
+#: Where the window used to end.
+RI_TESTS_END = 60.0
+RI_ESTOP_AT = RI_TESTS_END + 0.5
+RI_EXAM_ENDS_BY = operator_exam_ends_by(RI_ESTOP_AT)
 
 # The layout the model assumes, checked rather than trusted: the emitter over
 # the deck's centre, the pusher behind the deck stroking +Z across it, the eye
@@ -176,6 +197,14 @@ class RotaryIndexScene(PlantScene):
             (1.0, self.panel.press("start")),
             (RI_SLOW_AT, self._slow_the_deck),
         ])
+        #: Whether the deck or the rod moved on the last tick, and whether
+        #: both stood at the end they were last sent to.
+        self.moving_parts = False
+        self.at_rest = True
+        self._commands = (False, False)
+        self.operator = OperatorExam(self, RI_ESTOP_AT, noun="station",
+                                     what="the station",
+                                     ready=lambda: self.at_rest)
 
     def _slow_the_deck(self) -> None:
         """What the turntable's "Index Speed" slider does in the engine. No
@@ -215,12 +244,16 @@ class RotaryIndexScene(PlantScene):
             self.spool_extends = False
         target = RI_STROKE if self.spool_extends else 0.0
         step = RI_ROD_SPEED * dt
+        was_extension = self.extension
         self.extension += max(min(target - self.extension, step), -step)
+        self.moving_parts = (abs(self.angle - was_angle) > 1e-9
+                             or abs(self.extension - was_extension) > 1e-9)
         self.tags.set("pusher.extended", self.extension >= RI_STROKE - RI_REED_BAND)
         self.tags.set("pusher.retracted", self.extension <= RI_REED_BAND)
         front = _PUSHER.position[2] + self.extension + RI_ROD_STUB + RI_PLATE_THICKNESS
 
-        if self.extension > RI_PLATE_OVER_DECK and abs(self.angle - was_angle) > 1e-9:
+        if (self.extension > RI_PLATE_OVER_DECK and abs(self.angle - was_angle) > 1e-9
+                and self.t <= RI_TESTS_END):
             self.turned_under_the_plate += abs(self.angle - was_angle)
             if not self.turned_under_the_plate_at or \
                     self.t - self.turned_under_the_plate_at[-1] > 1.0:
@@ -229,6 +262,15 @@ class RotaryIndexScene(PlantScene):
         # The cartons: on the deck they turn with it until the plate meets
         # them; the plate sweeps them to +Z; on the outfeed they ride it.
         belt = self.bit("outfeed.rotate") and not self.bit("outfeed.fault")
+        # A new motion is a new end sent to the deck or the spool; the travel
+        # that follows is the part's, and nothing a program has can stop it.
+        commands = (self.bit("table.index"), self.spool_extends)
+        sent = commands != self._commands
+        self._commands = commands
+        self.at_rest = (not self.moving_parts
+                        and abs(self.angle - (RI_INDEX if commands[0] else 0.0)) < 1e-9
+                        and abs(self.extension - target) < 1e-9)
+        self.operator.driven = belt or sent
         still: list[Item] = []
         for item in self.items:
             record = self.ledger[item.id]
@@ -252,7 +294,7 @@ class RotaryIndexScene(PlantScene):
 
         on_deck = [i for i in self.items if self._on_deck(i)]
         crowded = len(on_deck) > 1
-        if crowded and not self._crowded:
+        if crowded and not self._crowded and self.t <= RI_TESTS_END:
             self.crowded_at.append(round(self.t, 2))
         self._crowded = crowded
 
@@ -270,7 +312,8 @@ class RotaryIndexScene(PlantScene):
 def grade_rotary_index(watched: Watched, engine: GradedEngine, report: Report,
                        duration: float) -> None:
     sim: RotaryIndexScene = watched.inner
-    pushed = [dict(id=k, **v) for k, v in sim.ledger.items() if v["met_at"] is not None]
+    pushed = [dict(id=k, **v) for k, v in sim.ledger.items()
+              if v["met_at"] is not None and v["met_at"] <= RI_TESTS_END]
     skewed = [p for p in pushed
               if abs(p["deck_at_push"] - p["deck_at_drop"] - RI_INDEX) > RI_SQUARE]
     delivered = len(sim.delivered)
@@ -334,6 +377,7 @@ def grade_rotary_index(watched: Watched, engine: GradedEngine, report: Report,
     if sim.crowded_at:
         say("Two cartons were on the deck at once. Drop the next one only once the "
             "deck is home and `deck_eye.detect` says the last one has gone.")
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _summary_rotary(evidence: dict, out) -> None:
@@ -345,6 +389,7 @@ def _summary_rotary(evidence: dict, out) -> None:
     out(f"deck angle each carton was pushed at (deg): {turns or 'none'}")
     out(f"turned with the plate over the deck: {evidence['turned_under_the_plate_deg']:g} deg; "
         f"two on the deck: {evidence['crowded_at'] or 'never'}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -354,13 +399,15 @@ RUBRIC = {
     "task": ("Drop a carton on the deck, turn it a quarter, sweep it onto the "
              "outfeed, and turn back for the next -- each motion only when the "
              "other has finished, on the limit switches and the reeds. This run "
-             "slows the deck."),
+             "slows the deck. The mushroom is normally closed, stops the "
+             "outfeed within 200 ms and starts no new motion of the deck or "
+             "the rod, and latches -- only Reset, then Start, carries on."),
     "build": RotaryIndexScene,
     "observe": None,
     "grade": grade_rotary_index,
     "summary": _summary_rotary,
-    "duration": 60.0,
-    "references": ("good", "timed", "notretracted"),
+    "duration": RI_EXAM_ENDS_BY,
+    "references": ("good", "timed", "notretracted", "noestop", "startalone"),
     "tags": ("emitter.emit, table.index, pusher.extend, pusher.retract, "
              "outfeed.rotate, tower.green/yellow/red, panel.green, panel.red "
              "are yours to write; table.athome, table.atindex, table.fault, "

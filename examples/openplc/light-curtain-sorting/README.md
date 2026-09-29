@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Sort on a measurement rather than on two bits. The curtain reports how tall each carton is, in metres, so the threshold is yours to choose — put it on the panel's pot and you can change your mind without editing the program.
 
-**Done when.** Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured.
+**Done when.** Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -90,7 +90,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x5 | `PanelEstop` %IX100.5 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x3 | `PanelGreen` %QX100.3 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x4 | `PanelRed` %QX100.4 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x6 | `PanelReset` %IX100.6 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x6 | `PanelReset` %IX100.6 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x2 + 3x3 | `PanelSetpointHi` %IW102 + `PanelSetpointLo` %IW103 -> `PanelSetpoint` : REAL | the operator's pot, 0..0.5 m (starts at 0.15) | yes |
 | `panel.start` | PLC reads | bit | 1x7 | `PanelStart` %IX100.7 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x8 | `PanelStop` %IX101.0 | Stop button, momentary: a short pulse per press | yes |

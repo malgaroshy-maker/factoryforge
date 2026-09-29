@@ -12,8 +12,9 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script, pot_start
+from ..plant import OperatorExam, PlantScene, Script, operator_exam_ends_by, pot_start
 from ..templates import TemplateError, template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "air-receiver"
@@ -100,6 +101,19 @@ AR_SETTLE = 5.0
 #: The alarm's deadline after the command that the seized valve ignores.
 AR_ALARM_WITHIN = AR_TRAVEL + 1.0
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the seized valve's test, with the station running again since the
+# Reset and Start at AR_FREE_AT + 2, the E-stop sheet (`plant.OperatorExam`).
+# "Stopped" is the station's two outputs dropped: the supply valve shut, so
+# the receiver is not loading, and the isolation valve not commanded open --
+# its spring closes it over the travel time, which is the valve's own doing.
+
+#: Where the window used to end, and the E-stop test after it.
+AR_TESTS_END = 75.0
+AR_ESTOP_AT = AR_TESTS_END + 0.5
+AR_EXAM_ENDS_BY = operator_exam_ends_by(AR_ESTOP_AT)
+
 
 def to_raw(engineering: float, low: float, high: float) -> int:
     """`AnalogSignal.ToRaw` (:168): the S7-1500 analog value table."""
@@ -164,6 +178,8 @@ class AirReceiverScene(PlantScene):
             (AR_FREE_AT + 1.0, self.panel.press("reset")),
             (AR_FREE_AT + 2.0, self.panel.press("start")),
         ])
+        self.operator = OperatorExam(self, AR_ESTOP_AT, noun="station",
+                                     what="the station")
 
     # --- the examiner ---
 
@@ -206,6 +222,7 @@ class AirReceiverScene(PlantScene):
 
         # The receiver: `PressureTransmitter.Step`.
         supply = self.bit("receiver.supply")
+        self.operator.driven = supply or command
         inflow = AR_SUPPLY_RATE * max(AR_SUPPLY - self.pressure, 0.0) if supply else 0.0
         outflow = AR_CONSUMPTION_RATE * max(self.consumption, 0.0) / 100.0 * self.pressure
         self.pressure = max(self.pressure + (inflow - outflow) * dt, 0.0)
@@ -288,6 +305,7 @@ def grade_air_receiver(watched: Watched, engine: GradedEngine, report: Report,
                f"first at {sim.false_alarms[0]:g}s")
 
     _air_feedback(report, sim, outside, worst, gauge_error)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _air_feedback(report, sim, outside, worst, gauge_error) -> None:
@@ -334,6 +352,7 @@ def _summary_air(evidence: dict, out) -> None:
     out(f"valve seized, commanded at {evidence['stuck_command_at']}s, alarm at "
         f"{evidence['alarm_after_stuck_at']}s; false alarms: "
         f"{evidence['false_alarms_at'] or 'none'}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -343,13 +362,16 @@ RUBRIC = {
     "task": ("Keep the receiver between the pot less 0.5 bar and the pot, "
              "reading a raw 4-20 mA count, and prove the isolation valve open "
              "by its feedback within its travel time. This run draws harder, "
-             "moves the pot, and seizes the valve."),
+             "moves the pot, and seizes the valve. The mushroom is normally "
+             "closed, drops the supply and the valve within 200 ms and "
+             "latches -- only Reset, then Start, runs the station again."),
     "build": AirReceiverScene,
     "observe": None,
     "grade": grade_air_receiver,
     "summary": _summary_air,
-    "duration": 75.0,
-    "references": ("good", "by32767", "nodiscrepancy", "impatient"),
+    "duration": AR_EXAM_ENDS_BY,
+    "references": ("good", "by32767", "nodiscrepancy", "impatient", "noestop",
+                   "startalone"),
     "tags": ("receiver.supply, valve.open, pressure_gauge.value, "
              "alarm.beacon, alarm.horn, panel.green, panel.red are yours to "
              "write; receiver.pressure (a raw count), receiver.wirebreak, "

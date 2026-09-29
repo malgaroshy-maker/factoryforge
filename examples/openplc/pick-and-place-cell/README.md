@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Sequence three motions against feedback, not timers. Ramp the infeed drive, read each carton's code at the scanner, then travel · lower · grip · raise · travel · release to put it on the outfeed. The gantry reports whether the vacuum actually caught anything.
 
-**Done when.** Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave.
+**Done when.** Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave. The mushroom (panel.estop, normally closed) stops the infeed, the pick station and the gantry's travel, without letting go of what the cup holds, within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -99,7 +99,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x7 | `PanelEstop` %IX100.7 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x6 | `PanelGreen` %QX100.6 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x7 | `PanelRed` %QX100.7 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x8 | `PanelReset` %IX101.0 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x8 | `PanelReset` %IX101.0 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x6 + 3x7 | `PanelSetpointHi` %IW106 + `PanelSetpointLo` %IW107 -> `PanelSetpoint` : REAL | the operator's pot, 10..100 % (starts at 60) |  |
 | `panel.start` | PLC reads | bit | 1x9 | `PanelStart` %IX101.1 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x10 | `PanelStop` %IX101.2 | Stop button, momentary: a short pulse per press | yes |

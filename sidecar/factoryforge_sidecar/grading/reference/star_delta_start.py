@@ -9,7 +9,7 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "star-delta-start"
@@ -86,4 +86,5 @@ async def _sd_timed(bus, stop):
     await _sd_body(bus, stop, on_speed=False, dead_time=True)
 
 
-REFERENCES = {"good": _sd_good, "samescan": _sd_samescan, "timed": _sd_timed}
+REFERENCES = {"good": _sd_good, "samescan": _sd_samescan, "timed": _sd_timed,
+              **contract_references(_sd_good)}

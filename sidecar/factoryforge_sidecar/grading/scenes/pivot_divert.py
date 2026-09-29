@@ -12,9 +12,11 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, PlantScene, Script,
-                     fault_input, pot_start, remover_catch, shuffled_cycle)
+from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, OperatorExam,
+                     PlantScene, Script, fault_input, operator_exam_ends_by, pot_start,
+                     remover_catch, shuffled_cycle)
 from ..templates import TemplateError, template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "pivot-divert"
@@ -163,6 +165,22 @@ if not (_BELT.span()[0] <= PD_EMIT_AT < PD_EYE_AT < PD_GATE_AT
                         f"the one the grader's measured offsets belong to")
 
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the diverting exam, the E-stop sheet (`plant.OperatorExam`).
+# "Stopped" is the belt. The blade is not part of it: a swing already begun
+# finishes on its own drive, and a blade held across a stopped belt holds the
+# carton on it, which slides on along the blade when the belt restarts --
+# where a carton is on the blade scales with belt travel, not with time, so no
+# carton is the E-stop's to missort, and the examiner strikes whenever the
+# belt is running.
+
+#: Where the window used to end.
+PD_TESTS_END = 75.0
+PD_ESTOP_AT = PD_TESTS_END + 0.5
+PD_EXAM_ENDS_BY = operator_exam_ends_by(PD_ESTOP_AT)
+
+
 class PivotDivertScene(PlantScene):
     name = "pivot-divert"
 
@@ -200,6 +218,7 @@ class PivotDivertScene(PlantScene):
             (1.0, self.panel.press("start")),
             (PD_SLOW_AT, self._slow_the_belt),
         ])
+        self.operator = OperatorExam(self, PD_ESTOP_AT, noun="belt", what="the belt")
 
     def _slow_the_belt(self) -> None:
         """What the belt's "Belt Speed" slider does in the engine. No tag
@@ -244,6 +263,7 @@ class PivotDivertScene(PlantScene):
         # travel; what the blade has done to a carton decides where that
         # travel takes it.
         running = self.bit("belt.rotate") and not self.bit("belt.fault")
+        self.operator.driven = running
         travel = self.belt_speed * dt if running else 0.0
         still: list[Item] = []
         for item in self.items:
@@ -377,6 +397,7 @@ def grade_pivot_divert(watched: Watched, engine: GradedEngine, report: Report,
             f"when the carton is beside it; a blade has to be across before the carton "
             f"reaches it -- swing it out when `tall_eye` sees the carton, and it is waiting "
             f"with time to spare.")
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _summary_pivot(evidence: dict, out) -> None:
@@ -390,6 +411,7 @@ def _summary_pivot(evidence: dict, out) -> None:
                                   if entry["released_at"] is not None else ""))
     if evidence["struck"]:
         out(f"struck by a moving blade: {[s['carton'] for s in evidence['struck']]}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -399,13 +421,16 @@ RUBRIC = {
     "task": ("Turn every tall carton off a running belt into the chute and let "
              "every short one run on: the blade across before a tall carton "
              "reaches it, held until the chute has it, home for the short one "
-             "behind. This run slows the belt."),
+             "behind. This run slows the belt. The mushroom is normally "
+             "closed, stops the belt within 200 ms and latches -- only Reset, "
+             "then Start, runs it again."),
     "build": PivotDivertScene,
     "observe": None,
     "grade": grade_pivot_divert,
     "summary": _summary_pivot,
-    "duration": 75.0,
-    "references": ("good", "timed", "unlatched", "late", "everyother"),
+    "duration": PD_EXAM_ENDS_BY,
+    "references": ("good", "timed", "unlatched", "late", "everyother", "noestop",
+                   "startalone"),
     "tags": ("belt.rotate, emitter.emit, gate.divert, panel.green, panel.red are "
              "yours to write; entry_eye.detect, tall_eye.detect, gate.diverted, "
              "gate.home, gate.fault, belt.fault, tall_count.count, "

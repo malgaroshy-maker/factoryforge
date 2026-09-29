@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Let cartons pile up behind the blade stop on a belt that never stops, then release a batch. Time the release by encoder pulses rather than by seconds: the pot is a release window in pulses, which is a distance.
 
-**Done when.** Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many.
+**Done when.** Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many. The mushroom (panel.estop, normally closed) stops the buffer's drive and the outfeed within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -93,7 +93,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x3 | `PanelEstop` %IX100.3 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x4 | `PanelGreen` %QX100.4 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x5 | `PanelRed` %QX100.5 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x4 | `PanelReset` %IX100.4 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x4 | `PanelReset` %IX100.4 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x6 + 3x7 | `PanelSetpointHi` %IW106 + `PanelSetpointLo` %IW107 -> `PanelSetpoint` : REAL | the operator's pot, 40..300 p (starts at 120) | yes |
 | `panel.start` | PLC reads | bit | 1x5 | `PanelStart` %IX100.5 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x6 | `PanelStop` %IX100.6 | Stop button, momentary: a short pulse per press | yes |

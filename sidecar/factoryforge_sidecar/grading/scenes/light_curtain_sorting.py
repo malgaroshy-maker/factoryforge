@@ -10,9 +10,11 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, Item, PlantScene, Script, fault_input, pot_start,
-                     remover_catch, shuffled_cycle)
+from ..plant import (CARTON_LENGTH, Item, OperatorExam, PlantScene, Script,
+                     fault_input, operator_exam_ends_by, pot_start, remover_catch,
+                     shuffled_cycle)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "light-curtain-sorting"
@@ -72,6 +74,23 @@ LC_CURTAIN_HEIGHT = _CURTAIN.number("curtain_height")
 #: shortest carton still breaks one. No template sets it.
 LC_LOWEST_BEAM = 0.02
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the sorting exam, the E-stop sheet (`plant.OperatorExam`); "stopped"
+# is the belt. The brief lets a program time its diverter from the curtain on
+# a clock, as the sorting line's lets it time the pusher from the beam, so a
+# stop that caught a measured carton between the curtain and the plate would
+# leave it to be missorted by the E-stop rather than by the program. The
+# examiner waits, as the sorting line's does, for no carton between the
+# curtain's near edge and the plate's far catch -- and if one is there when
+# the wait runs out, that carton is the E-stop's, and is left out of
+# `sort.followed_the_measurement`.
+
+#: Where the window used to end.
+LC_TESTS_END = 65.0
+LC_ESTOP_AT = LC_TESTS_END + 0.5
+LC_EXAM_ENDS_BY = operator_exam_ends_by(LC_ESTOP_AT)
+
 
 def lc_beam_ladder() -> list[float]:
     """Where each beam sits above the belt.
@@ -125,12 +144,26 @@ class LightCurtainScene(PlantScene):
             (1.0, self.panel.press("start")),
             (32.0, self.panel.set_setpoint(round(self.thresholds[1], 4))),
         ])
+        #: Cartons committed to the plate when the mushroom was struck, if
+        #: the examiner could not find a moment with none (see above).
+        self.stranded: set[int] = set()
+        self.operator = OperatorExam(
+            self, LC_ESTOP_AT, noun="belt", what="the belt",
+            ready=lambda: not self._committed(),
+            on_strike=lambda: self.stranded.update(i.id for i in self._committed()))
 
         self.items: list[Item] = []
         self.sorted_items: list[Item] = []
         self._next_id = 1
         self._emit_edge = False
         self.extension = 0.0
+
+    def _committed(self) -> list[Item]:
+        """Cartons between the curtain and the far edge of the plate's
+        catch: measured, or being measured, and not yet in a lane."""
+        near = LC_CURTAIN_POS - CARTON_LENGTH / 2
+        far = LC_DIVERTER_POS + LC_CATCH
+        return [i for i in self.items if near <= i.position <= far]
 
     # --- the plant ---
 
@@ -144,6 +177,7 @@ class LightCurtainScene(PlantScene):
             self._next_id += 1
         self._emit_edge = emit
 
+        self.operator.driven = self.bit("belt.rotate")
         if self.bit("belt.rotate"):
             for item in self.items:
                 item.position += LC_BELT_SPEED * dt
@@ -201,7 +235,8 @@ def grade_light_curtain(watched: Watched, engine: GradedEngine, report: Report,
     far = [i for i in sim.sorted_items if i.lane == "far-end"]
 
     wrong = [i for i in judged
-             if (i.measured >= i.threshold) != (i.lane == "chute")]
+             if (i.measured >= i.threshold) != (i.lane == "chute")
+             and i.id not in sim.stranded]
     rules = sorted({round(i.threshold, 4) for i in judged})
     per_rule = {f"{r:.3f}": sum(1 for i in judged if abs(i.threshold - r) < 1e-6)
                 for r in rules}
@@ -217,6 +252,7 @@ def grade_light_curtain(watched: Watched, engine: GradedEngine, report: Report,
                        "threshold_m": round(i.threshold, 3), "lane": i.lane}
                       for i in wrong][:20],
         "unmeasured": len(unmeasured),
+        "stranded_by_the_estop": sorted(sim.stranded),
         "diverter_out_fraction": round(watched.held_true("diverter.extend"), 3),
     })
 
@@ -242,6 +278,7 @@ def grade_light_curtain(watched: Watched, engine: GradedEngine, report: Report,
                f"{len(sim.items)} still on the belt")
 
     _light_curtain_feedback(report, watched, sim, wrong, per_rule)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _light_curtain_feedback(report, watched, sim, wrong, per_rule) -> None:
@@ -302,6 +339,7 @@ def _summary_light_curtain(evidence: dict, out) -> None:
     for entry in evidence["misrouted"][:8]:
         out(f"  carton {entry['carton']:>3} measured {entry['measured_m']:.3f} m "
             f"against {entry['threshold_m']:.3f} m -> {entry['lane']}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -311,13 +349,15 @@ RUBRIC = {
     "task": ("Sort on a measurement rather than on two bits. The curtain "
              "reports how tall each carton is, in metres, and the pot is "
              "the threshold -- read it when you measure each carton, "
-             "because this run turns it."),
+             "because this run turns it. The mushroom is normally closed, "
+             "stops the belt within 200 ms and latches -- only Reset, then "
+             "Start, runs it again."),
     "build": LightCurtainScene,
     "observe": None,
     "grade": grade_light_curtain,
     "summary": _summary_light_curtain,
-    "duration": 65.0,
-    "references": ("good", "fixed", "everyother"),
+    "duration": LC_EXAM_ENDS_BY,
+    "references": ("good", "fixed", "everyother", "noestop", "startalone"),
     "tags": ("belt.rotate, emitter.emit, diverter.extend, panel.green, "
              "panel.red are yours to write; height_gauge.height, "
              "height_gauge.blocked, diverter.extended, diverter.retracted, "

@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Run the belt and emit a carton every panel.setpoint seconds. Two beams cross the belt at the same place: entry_eye, low, sees every carton, and tall_eye, high, sees only the tall ones. Every tall carton goes into the chute and every short one runs on to the end. Swing the blade across (gate.divert) as soon as tall_eye sees a tall carton, and hold it there until tall_count.count says the carton has arrived in the chute -- then home it for the short one behind. A turned carton slides along the blade, driven only by the belt under it: it is off the belt after about two metres of belt travel past the eyes, which at a slower belt takes longer.
 
-**Done when.** Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made.
+**Done when.** Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -89,7 +89,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x5 | `PanelEstop` %IX100.5 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x3 | `PanelGreen` %QX100.3 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x4 | `PanelRed` %QX100.4 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x6 | `PanelReset` %IX100.6 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x6 | `PanelReset` %IX100.6 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x0 + 3x1 | `PanelSetpointHi` %IW100 + `PanelSetpointLo` %IW101 -> `PanelSetpoint` : REAL | the operator's pot, 4..10 s (starts at 6) | yes |
 | `panel.start` | PLC reads | bit | 1x7 | `PanelStart` %IX100.7 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x8 | `PanelStop` %IX101.0 | Stop button, momentary: a short pulse per press | yes |

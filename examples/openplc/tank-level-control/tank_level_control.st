@@ -14,7 +14,10 @@
      The level settles within a few percent of the setpoint and holds
      there, and it still settles after you move the pot to a different
      level. A seized valve (tank.fault) keeps its opening while your
-     command reads zero.
+     command reads zero. The mushroom (panel.estop, normally closed) shuts
+     both valves within 200 ms and its trip latches: releasing it restarts
+     nothing, and neither does Start or Reset alone -- only Reset, then
+     Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

@@ -12,8 +12,10 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script, declare_stack_light, pot_start
+from ..plant import (OperatorExam, PlantScene, Script, declare_stack_light,
+                     operator_exam_ends_by, pot_start)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "servo-positioning"
@@ -74,6 +76,20 @@ SV_HELD_WITHIN = 1.0
 #: How long after the pot moved before an arrival at the old station B counts
 #: against the program: one move of the whole stroke.
 SV_POT_GRACE = 3.0
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the fault exam, the E-stop sheet (`plant.OperatorExam`), struck while
+# the carriage is moving. "Stopped" is the drive no longer driving it: either
+# disabled -- `ServoAxis.cs` then quick-stops the carriage on its own ramp,
+# which is the drive's stop and not the program's to hurry -- or enabled and
+# holding still. Nothing marked before `SV_TESTS_END` changes: a quick stop
+# away from a station is not an arrival at one.
+
+#: Where the window used to end.
+SV_TESTS_END = 40.0
+SV_ESTOP_AT = SV_TESTS_END + 0.5
+SV_EXAM_ENDS_BY = operator_exam_ends_by(SV_ESTOP_AT)
 
 
 class ServoDrive:
@@ -193,6 +209,7 @@ class ServoScene(PlantScene):
             (1.0, self.panel.press("start")),
             (SV_POT_AT, self._move_the_pot),
         ])
+        self.operator = OperatorExam(self, SV_ESTOP_AT, noun="axis", what="the axis")
 
     def _move_the_pot(self) -> None:
         self.panel.set_setpoint(self.pot_then)()
@@ -220,6 +237,7 @@ class ServoScene(PlantScene):
         was_error = drive.error
         cleared = drive.step(self.bit("axis.enable"), self.bit("axis.ack"), faulted,
                              self.num("axis.target"), self.num("axis.velocity"), dt)
+        self.operator.driven = drive.ready and abs(drive.velocity) > 1e-6
         if drive.error and not was_error:
             self.errors.append({"at": round(self.t, 2), "why": drive.error_text,
                                 "position_mm": round(drive.position, 1)})
@@ -320,6 +338,7 @@ def grade_servo(watched: Watched, engine: GradedEngine, report: Report,
                    "the error was never acknowledged, so the axis never moved again")
 
     _servo_feedback(report, sim, at_a, at_b, at_old_b, refused)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _servo_feedback(report, sim, at_a, at_b, at_old_b, refused) -> None:
@@ -368,6 +387,7 @@ def _summary_servo(evidence: dict, out) -> None:
         out(f"fault at {f['raised_at']:g}s, cleared {f['cleared_at']}s, Reset {f['reset_at']}s, "
             f"acknowledged {f['acknowledged_at']}s, moved {f['moved_before_reset_mm']:g} mm "
             f"before Reset")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -377,13 +397,15 @@ RUBRIC = {
     "task": ("Shuttle the axis between station A (100 mm) and station B (the "
              "pot), dwelling a second at each. The drive is faulted mid-move: "
              "hold the sequence, acknowledge only on the operator's Reset once "
-             "the fault has gone, and carry on."),
+             "the fault has gone, and carry on. The mushroom is normally "
+             "closed, stops the axis within 200 ms and latches -- only Reset, "
+             "then Start, moves it again."),
     "build": ServoScene,
     "observe": None,
     "grade": grade_servo,
     "summary": _summary_servo,
-    "duration": 40.0,
-    "references": ("good", "autoack", "noack"),
+    "duration": SV_EXAM_ENDS_BY,
+    "references": ("good", "autoack", "noack", "noestop", "startalone"),
     "tags": ("axis.enable, axis.ack, axis.target, axis.velocity, "
              "position_display.value, tower.green/yellow/red, panel.green, "
              "panel.red are yours to write; axis.ready, axis.error, "

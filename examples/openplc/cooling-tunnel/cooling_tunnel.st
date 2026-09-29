@@ -20,7 +20,10 @@
      trims holds every setpoint and heats the air it blows away -- watch
      oven.heater and fan.airflow and they are never both up. Fail the fan
      (fan.fault) and fan.speed keeps reading your reference while the
-     airflow collapses.
+     airflow collapses. The mushroom (panel.estop, normally closed) stops
+     the heater and the fan within 200 ms and its trip latches: releasing
+     it restarts nothing, and neither does Start or Reset alone -- only
+     Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

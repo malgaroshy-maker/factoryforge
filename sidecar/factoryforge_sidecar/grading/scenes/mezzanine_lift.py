@@ -11,8 +11,10 @@ from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
 from ..plant import (BELT_THICKNESS, CARTON_LENGTH, SHORT_HEIGHT, EngineFeed, Item,
-                     PlantScene, Script, fault_input, pot_start)
+                     OperatorExam, PlantScene, Script, fault_input,
+                     operator_exam_ends_by, pot_start)
 from ..templates import LEVEL_HEIGHT, TemplateError, template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "mezzanine-lift"
@@ -100,6 +102,24 @@ ML_GATE_OPEN = 0.02
 #: frame -- both of which the engine resolves unpredictably.
 ML_SLOWED = (0.30, 0.35)
 ML_SLOW_AT = 30.0
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the lifting exam, the E-stop sheet (`plant.OperatorExam`). "Stopped"
+# is the infeed, the outfeed and the carriage's deck, and the carriage sent
+# nowhere new. The hoist itself has no stop a program can give it: `lift.target`
+# is a level, and a carriage already travelling to one arrives, as
+# `VerticalLift.cs` has it. So for the carriage what counts is a new level
+# called -- the tick `lift.target` changes -- and not the travel after it. The
+# examiner strikes with the carriage standing at the level it was last called
+# to, so nothing is in flight; a call already made inside the 200 ms is within
+# the limit, and one made after it is the lift sent somewhere while the trip
+# stands.
+
+#: Where the window used to end.
+ML_TESTS_END = 75.0
+ML_ESTOP_AT = ML_TESTS_END + 0.5
+ML_EXAM_ENDS_BY = operator_exam_ends_by(ML_ESTOP_AT)
 
 # The layout the model assumes, checked rather than trusted: a line along +X
 # at z = 0; the infeed on level 0 running up to the lift's mouth, the outfeed on
@@ -198,6 +218,13 @@ class MezzanineLiftScene(PlantScene):
             (1.0, self.panel.press("start")),
             (ML_SLOW_AT, self._slow_the_hoist),
         ])
+        #: Whether the carriage moved on the last tick, and the level it was
+        #: last called to.
+        self.hoisting = False
+        self._called = 0
+        self.operator = OperatorExam(
+            self, ML_ESTOP_AT, noun="lift", what="the lift",
+            ready=lambda: not self.hoisting and self._at(self._called))
 
     def _slow_the_hoist(self) -> None:
         """What the lift's Hoist Speed slider does in the engine. No tag reports
@@ -230,10 +257,14 @@ class MezzanineLiftScene(PlantScene):
 
         # `Step`: occupancy first, then the hoist, then the gate, then the deck.
         occupied = self._occupied()
+        was_height = self.height
         if not faulted:
             goal = target * ML_SPACING
             step = self.hoist_speed * dt
             self.height += max(min(goal - self.height, step), -step)
+        self.hoisting = abs(self.height - was_height) > 1e-9
+        called = target != self._called
+        self._called = target
         gate_should_open = not faulted and self._at(0) and not occupied
         want = 0.0 if gate_should_open else 1.0
         step = ML_BLADE_SPEED * dt
@@ -294,6 +325,7 @@ class MezzanineLiftScene(PlantScene):
 
         # The outfeed, to the remover at its end.
         belt = self.bit("outfeed.rotate") and not self.bit("outfeed.fault")
+        self.operator.driven = running or belt or deck or called
         kept: list[Item] = []
         for item in self.outfeed:
             if belt:
@@ -388,6 +420,7 @@ def grade_mezzanine_lift(watched: Watched, engine: GradedEngine, report: Report,
     if delivered and not lifted_after:
         say(f"No carton was lifted after {ML_SLOW_AT:g}s. A program has to go on working "
             f"once the hoist is slower, not only until it is.")
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 #: The fewest cartons a working program delivers in the window. The `good`
@@ -403,6 +436,7 @@ def _summary_mezzanine(evidence: dict, out) -> None:
     heights = ", ".join(f"{c['left_height']:.2f}" for c in evidence["cartons"]
                         if c["left_height"] is not None)
     out(f"carriage height each carton left it at (m): {heights or 'none'}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -412,13 +446,16 @@ RUBRIC = {
     "task": ("Take cartons from the floor conveyor up to the mezzanine one at a time: "
              "draw each aboard and stop the deck on lift.occupied, call level 1, "
              "discharge only once lift.atlevel says the carriage is there, and send it "
-             "back when out_eye sees the carton on the outfeed. This run slows the hoist."),
+             "back when out_eye sees the carton on the outfeed. This run slows the hoist. "
+             "The mushroom is normally closed, stops both belts and the deck within "
+             "200 ms and sends the carriage nowhere new, and latches -- only Reset, "
+             "then Start, runs the lift again."),
     "build": MezzanineLiftScene,
     "observe": None,
     "grade": grade_mezzanine_lift,
     "summary": _summary_mezzanine,
-    "duration": 75.0,
-    "references": ("good", "timed", "nostop"),
+    "duration": ML_EXAM_ENDS_BY,
+    "references": ("good", "timed", "nostop", "noestop", "startalone"),
     "tags": ("emitter.emit, infeed.rotate, lift.target, lift.transfer, outfeed.rotate, "
              "panel.green, panel.red are yours to write; lift.level, lift.atlevel, "
              "lift.height, lift.occupied, lift.ready, lift.fault, gate_eye.detect, "

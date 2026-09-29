@@ -17,6 +17,9 @@
      commanded while the temperature falls: the output tells you nothing,
      only the measurement does. Light alarm.beacon within five seconds of
      the failure and keep it lit -- and never while the element is healthy.
+     The mushroom (panel.estop, normally closed) cuts the heater within 200
+     ms and its trip latches: releasing it restarts nothing, and neither
+     does Start or Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

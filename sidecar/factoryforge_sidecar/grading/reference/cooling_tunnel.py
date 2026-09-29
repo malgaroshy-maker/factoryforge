@@ -9,7 +9,7 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "cooling-tunnel"
@@ -92,4 +92,5 @@ async def _ct_fight(bus, stop):
     await _ct_body(bus, stop, split=True, fan_floor=CT_FIGHT_FAN)
 
 
-REFERENCES = {"good": _ct_good, "heatonly": _ct_heatonly, "fight": _ct_fight}
+REFERENCES = {"good": _ct_good, "heatonly": _ct_heatonly, "fight": _ct_fight,
+              **contract_references(_ct_good)}

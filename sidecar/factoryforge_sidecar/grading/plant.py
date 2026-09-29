@@ -357,6 +357,10 @@ class PlantScene:
         self.panel.declare(self.tags)
         self.script = Script([])
         self.notes: dict = {}
+        #: The E-stop / Start / Reset sheet, on a scene that marks it through
+        #: `OperatorExam` (IP-12). The scene sets `operator.driven` in its
+        #: `step`; `tick` does the rest.
+        self.operator: OperatorExam | None = None
 
     # --- reading what the controller wrote ---
 
@@ -371,8 +375,13 @@ class PlantScene:
     def tick(self, dt: float) -> None:
         self.t += dt
         self.script.run(self.t)
+        operator = self.operator
+        if operator is not None:
+            operator.poll(self.t)       # the strike lands before the panel ticks
         self.panel.tick(dt, self.t)
         self.step(dt)
+        if operator is not None:
+            operator.ledger.step(self.t, dt if operator.driven else 0.0)
 
     def step(self, dt: float) -> None:            # pragma: no cover - overridden
         raise NotImplementedError
@@ -412,12 +421,15 @@ class Vfd:
         self.accel_rate = accel_rate
         self.actual = 0.0
         self.reference = 0.0
+        #: What the ramp is aiming at this tick, in percent: zero once `run`
+        #: drops. `driven` is the operator contract's reading of the drive.
+        self.target = 0.0
 
     def step(self, run: bool, reference: float, dt: float,
              faulted: bool = False) -> float:
         """One tick; returns the belt's surface speed in m/s."""
         self.reference = min(max(reference, 0.0), 100.0)
-        target = 0.0 if faulted or not run else self.reference
+        target = self.target = 0.0 if faulted or not run else self.reference
         step = self.accel_rate * dt
         self.actual += max(min(target - self.actual, step), -step)
         return self.speed
@@ -426,6 +438,13 @@ class Vfd:
     def speed(self) -> float:
         return (self.max_speed * self.actual / 100.0
                 if self.actual > VFD_DEAD_BAND else 0.0)
+
+    @property
+    def driven(self) -> bool:
+        """The drive is being told to turn the belt. A stopped drive still
+        coasts down its own ramp, as `VariableConveyor.cs` does -- a category
+        1 stop -- so the E-stop is marked on this, not on the belt's speed."""
+        return self.target > VFD_DEAD_BAND
 
 
 #: A shuffled, seeded feed, the same argument as `feed_pattern` makes for the
@@ -488,9 +507,23 @@ class TripLedger:
         #: to stop, and whether the belt was moving at the strike.
         self.trips: list[dict] = []
         self.started_without_a_press: list[float] = []
+        #: Every moment the plant began to move while nobody had started it:
+        #: before the first Start edge, or after a Stop edge with no Start
+        #: since, and never inside a trip, which has checks of its own. The
+        #: reading of "started without a press" for a plant that stops and
+        #: starts by itself while it runs -- a valve that closes at setpoint,
+        #: an axis dwelling at a station -- where "moving began with no Start
+        #: since it last stopped" would flag every normal cycle (IP-12).
+        self.began_unstarted: list[float] = []
         self._moving = False
         self._start_since_stop = False
-        self._edge = {"start": False, "reset": False}
+        self._operator_stopped = True
+        self._edge = {"start": False, "reset": False, "stop": False}
+
+    @property
+    def moving(self) -> bool:
+        """Whether the plant moved on the last tick."""
+        return self._moving
 
     def _rising(self, name: str) -> bool:
         now = bool(self.panel.tags.visible(f"{self.panel.prefix}.{name}"))
@@ -500,6 +533,7 @@ class TripLedger:
 
     def step(self, now: float, moved: float) -> None:
         start, reset = self._rising("start"), self._rising("reset")
+        stopped = self._rising("stop")
         healthy = not self._struck()
         moving = moved > 0.0
         if start:
@@ -511,7 +545,7 @@ class TripLedger:
                     "released_at": None, "reset_at": None, "cleared_at": None,
                     "stop_lag_s": None, "struck_travel_m": 0.0,
                     "latched_travel_m": 0.0, "latched_moved_at": None,
-                    "restarted_at": None}
+                    "restarted_at": None, "last_moved_after_s": None}
             self.trips.append(trip)
             self.phase = "struck"
         elif self.phase == "struck" and healthy:
@@ -528,12 +562,22 @@ class TripLedger:
             trip["struck_travel_m"] += moved
             if trip["stop_lag_s"] is None and not moving:
                 trip["stop_lag_s"] = round(now - trip["struck_at"], 3)
+            if moving:
+                trip["last_moved_after_s"] = round(now - trip["struck_at"], 3)
         elif self.phase in ("latched", "reset"):
             trip["latched_travel_m"] += moved
             if moving and trip["latched_moved_at"] is None:
                 trip["latched_moved_at"] = round(now, 2)
         elif self.phase == "cleared" and moving and trip["restarted_at"] is None:
             trip["restarted_at"] = round(now, 2)
+
+        in_trip = self.phase in ("struck", "latched", "reset")
+        if stopped:
+            self._operator_stopped = True
+        elif start and not in_trip:
+            self._operator_stopped = False
+        if moving and not self._moving and self._operator_stopped and not in_trip:
+            self.began_unstarted.append(round(now, 2))
 
         if moving and not self._moving and not self._start_since_stop:
             self.started_without_a_press.append(round(now, 2))
@@ -545,6 +589,124 @@ class TripLedger:
     def tripped_travel(self) -> float:
         """Metres of belt while any trip was struck or latched."""
         return sum(t["struck_travel_m"] + t["latched_travel_m"] for t in self.trips)
+
+
+# --- the operator contract, on any plant (IP-12) ---------------------------
+#
+# The sorting line's sheet (IP-35), timed from the strike: the mushroom in,
+# released, Start alone (must do nothing), Reset (must do nothing either), and
+# Start (must bring the plant back). Written once here, so the fifteen scenes
+# that put it after their own exam put the same sheet, and `scenes/_contract.py`
+# marks it the same way on all of them.
+
+#: How long the examiner waits, from reaching for the mushroom, for a moment
+#: the scene calls fair to strike -- the plant running and nothing in a state
+#: an E-stop would spoil for reasons that are not the program's.
+ESTOP_WAIT = 4.0
+ESTOP_RELEASE_AFTER = 2.0
+ESTOP_START_ALONE_AFTER = 3.0
+ESTOP_RESET_AFTER = 4.5
+ESTOP_RESTART_AFTER = 6.0
+#: How soon after the last Start the plant has to be moving again.
+ESTOP_RESTART_WITHIN = 1.0
+
+
+def operator_exam_ends_by(reach_at: float, wait: float = ESTOP_WAIT,
+                          restart_within: float = ESTOP_RESTART_WITHIN) -> float:
+    """The shortest window a sheet that reaches for the mushroom at
+    `reach_at` fits in, whatever the wait turns out to be -- plus a tenth of
+    a second, because a strike at the end of the wait lands on the first tick
+    past it, not on the deadline itself."""
+    return reach_at + wait + ESTOP_RESTART_AFTER + restart_within + 0.1
+
+
+class OperatorExam:
+    """The E-stop / Start / Reset sheet, put to any plant (IP-12).
+
+    The scene says what "stopped" means for it by setting `driven` every
+    `step` -- the belt turning, the pump being run, the heater on, the axis
+    driven -- and, if it needs one, a `ready` test for a moment that is fair
+    to strike in. `PlantScene.tick` polls the sheet before the panel and
+    ticks the `TripLedger` after the step, so the ledger measures seconds of
+    the plant being driven in each phase of the trip.
+
+    `driven` is always the plant obeying a command the program could have
+    dropped, never a motion the program cannot recall: a drive coasting down
+    its own ramp, a quick-stopping servo, a turntable finishing an index it
+    has no way to abandon. Where a scene has such a motion, its `ready` waits
+    for a moment it is not happening, and says so in its own file.
+    """
+
+    def __init__(self, scene: "PlantScene", reach_at: float, *, what: str,
+                 noun: str, ready=None, wait: float = ESTOP_WAIT,
+                 restart_within: float = ESTOP_RESTART_WITHIN,
+                 on_strike=None) -> None:
+        """`what` is the thing that stops, in words ("the belt", "the
+        pump"), and `noun` the word the check id ends in
+        (`estop.stopped_the_belt`)."""
+        self.scene = scene
+        self.panel = scene.panel
+        self.ledger = TripLedger(scene.panel)
+        self.reach_at = reach_at
+        self.what = what
+        self.noun = noun
+        self.wait = wait
+        self.restart_within = restart_within
+        self.ends_by = operator_exam_ends_by(reach_at, wait, restart_within)
+        self._ready = ready
+        self._on_strike = on_strike
+        #: Set by the scene every step: is the plant being driven this tick.
+        self.driven = False
+        #: What the examiner did and when. None until it happens.
+        self.sheet: dict = {"reached_for_the_mushroom_at": None, "struck_at": None,
+                            "waited_for_a_fair_moment": None,
+                            "released_at": None, "start_alone_at": None,
+                            "reset_at": None, "restart_at": None}
+        self._deadline: float | None = None
+        scene.script.at(reach_at, self._reach)
+
+    def _reach(self) -> None:
+        self.sheet["reached_for_the_mushroom_at"] = round(self.scene.t, 2)
+        self._deadline = self.scene.t + self.wait
+
+    _reach.__name__ = "reach for the mushroom"
+
+    def poll(self, now: float) -> None:
+        if self._deadline is None:
+            return
+        fair = self.ledger.moving and (self._ready is None or bool(self._ready()))
+        if not fair and now < self._deadline:
+            return
+        self._deadline = None
+        self.sheet["struck_at"] = round(now, 2)
+        self.sheet["waited_for_a_fair_moment"] = fair
+        if self._on_strike is not None:
+            self._on_strike()
+        self.panel.strike()()
+        script = self.scene.script
+        script.at(now + ESTOP_RELEASE_AFTER, self._note("released_at", self.panel.release()))
+        script.at(now + ESTOP_START_ALONE_AFTER,
+                  self._note("start_alone_at", self.panel.press("start")))
+        script.at(now + ESTOP_RESET_AFTER, self._note("reset_at", self.panel.press("reset")))
+        script.at(now + ESTOP_RESTART_AFTER,
+                  self._note("restart_at", self.panel.press("start")))
+
+    def _note(self, key: str, action):
+        def do() -> None:
+            action()
+            self.sheet[key] = round(self.scene.t, 2)
+        do.__name__ = action.__name__
+        return do
+
+    @property
+    def trip(self) -> dict | None:
+        return self.ledger.trips[0] if self.ledger.trips else None
+
+    def finished(self, window: float) -> bool:
+        """The sheet ran to its end, and the window lasted long enough after
+        the last Start to see whether the plant came back."""
+        restart = self.sheet["restart_at"]
+        return restart is not None and window >= restart + self.restart_within - 1e-6
 
 
 # --- tags the engine declares and no rubric reads -------------------------

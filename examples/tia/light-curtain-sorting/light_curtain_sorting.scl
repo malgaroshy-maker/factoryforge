@@ -46,7 +46,10 @@ VERSION : 0.1
 // DONE WHEN
 //   Cartons above your threshold go down the chute and the rest pass, and
 //   moving the pot moves the boundary with no other change. The two
-//   counters together equal what the curtain measured.
+//   counters together equal what the curtain measured. The mushroom
+//   (panel.estop, normally closed) stops the belt within 200 ms and its
+//   trip latches: releasing it restarts nothing, and neither does Start or
+//   Reset alone -- only Reset, then Start.
 //
 // Every signal is a member of the global DB "FF_IO" above: read and write
 // them as "FF_IO".<Name>, e.g. "FF_IO".BeltRotate. Its comments say which

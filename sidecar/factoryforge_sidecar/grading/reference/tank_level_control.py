@@ -9,7 +9,7 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "tank-level-control"
@@ -70,4 +70,4 @@ async def _tank_fixedsp(bus, stop):
 
 
 REFERENCES = {"good": _tank_good, "bangbang": _tank_bangbang,
-              "fixedsp": _tank_fixedsp}
+              "fixedsp": _tank_fixedsp, **contract_references(_tank_good)}

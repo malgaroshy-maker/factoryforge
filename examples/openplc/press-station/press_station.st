@@ -21,7 +21,10 @@
      hands.right both read true while hands.valid does not -- the ram must
      not move, because that is what a taped-down button looks like. Take
      your hands off mid-stroke (a single click holds for two seconds, less
-     than a stroke) and the ram comes back up.
+     than a stroke) and the ram comes back up. The mushroom (panel.estop,
+     normally closed) stops the ram's down-stroke in any mode within 200 ms
+     and its trip latches: releasing it restarts nothing, and neither does
+     Start or Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

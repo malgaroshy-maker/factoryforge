@@ -9,7 +9,7 @@ scene shares, `idle` and `forcer`, are in `_shared.py`.
 from __future__ import annotations
 
 from ..lockstep import run_scan
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "heat-treat-station"
@@ -123,4 +123,5 @@ async def _oven_ignorefault(bus, stop):
 
 
 REFERENCES = {"good": _oven_good, "ponly": _oven_ponly,
-              "thermostat": _oven_thermostat, "ignorefault": _oven_ignorefault}
+              "thermostat": _oven_thermostat, "ignorefault": _oven_ignorefault,
+              **contract_references(_oven_good)}

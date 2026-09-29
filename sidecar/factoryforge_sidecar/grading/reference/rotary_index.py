@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.rotary_index import RI_INDEX, RI_SPEED_FIRST
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "rotary-index"
@@ -31,7 +31,7 @@ async def _ri_body(bus, stop, *, arrive: str, back: str) -> None:
     reed drops, with the rod still out over the deck).
     """
     scanner = Scanner(bus)
-    state = {"phase": "home", "t": 0.0}
+    state = {"phase": "home", "t": 0.0, "held": False}
 
     async def body(dt: float) -> None:
         scanner.scan()
@@ -47,7 +47,18 @@ async def _ri_body(bus, stop, *, arrive: str, back: str) -> None:
             s["phase"], s["t"] = phase, 0.0
 
         phase = s["phase"]
-        if not scanner.running:
+        # An E-stop holds the cycle where it is, until Reset and then Start:
+        # nothing advances, nothing new is commanded, and the outfeed stops
+        # too (IP-12). A Stop, below, is as it always was: a cycle under way
+        # waits where it is with its outfeed running, and one between cycles
+        # goes home.
+        if scanner.tripped:
+            s["held"] = True
+        elif scanner.running:
+            s["held"] = False
+        if s["held"]:
+            pass
+        elif not scanner.running:
             if phase in ("home", "drop", "settle"):
                 go("home")
         elif phase == "home" and athome and retracted and not present:
@@ -67,11 +78,12 @@ async def _ri_body(bus, stop, *, arrive: str, back: str) -> None:
 
         phase = s["phase"]
         await bus.write_many({
-            "emitter.emit": phase == "drop",
+            "emitter.emit": phase == "drop" and not s["held"],
             "table.index": phase in ("index", "push", "return"),
             "pusher.extend": phase == "push",
             "pusher.retract": phase != "push",
-            "outfeed.rotate": scanner.running or phase not in ("home",),
+            "outfeed.rotate": not s["held"] and (scanner.running
+                                                 or phase not in ("home",)),
             "tower.green": scanner.running,
             "tower.yellow": not scanner.running,
             "tower.red": scanner.tripped,
@@ -98,4 +110,5 @@ async def _ri_notretracted(bus, stop):
     await _ri_body(bus, stop, arrive="atindex", back="notextended")
 
 
-REFERENCES = {"good": _ri_good, "timed": _ri_timed, "notretracted": _ri_notretracted}
+REFERENCES = {"good": _ri_good, "timed": _ri_timed, "notretracted": _ri_notretracted,
+              **contract_references(_ri_good)}

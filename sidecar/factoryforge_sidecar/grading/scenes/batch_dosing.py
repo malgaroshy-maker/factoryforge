@@ -10,8 +10,10 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script, declare_stack_light, fault_input, pot_start
+from ..plant import (OperatorExam, PlantScene, Script, declare_stack_light,
+                     fault_input, operator_exam_ends_by, pot_start)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "batch-dosing"
@@ -82,13 +84,32 @@ BD_REPAIRED_AFTER = 5.0
 BD_REPAIRED_AT = BD_FAULT_AT + BD_REPAIRED_AFTER
 #: The brief's "within two seconds": `pump.run` has to have dropped by then.
 BD_FAULT_NOTICED_WITHIN = 2.0
-#: How long the window watches a repaired pump that nobody restarted.
+#: How long the exam watches a repaired pump that nobody restarted.
 BD_WATCH_AFTER_REPAIR = 5.0
-#: The shortest window the whole exam fits in.
-BD_EXAM_ENDS_BY = BD_REPAIRED_AT + BD_WATCH_AFTER_REPAIR
+#: The end of that watch, and of the pump-fault test.
+BD_FAULT_ENDS = BD_REPAIRED_AT + BD_WATCH_AFTER_REPAIR
 #: Litres a repaired pump may still move before it counts as having restarted:
 #: none, give or take the float.
 BD_RESTART_TOLERANCE_L = 0.01
+
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the pump-fault test the examiner presses Reset and Start for a fourth
+# batch, as it began the other three, and puts the E-stop sheet to it
+# (`plant.OperatorExam`) while the pump is dosing. "Stopped" is the pump no
+# longer run: `pump.run` false, or no speed, so the drive is not being driven
+# -- a pump ramps down on its own once it is, as `DosingPump.cs` does, and the
+# litres of that ramp are the drive's. The batch is the E-stop's, like the
+# third is the fault's: marked on the contract alone, and its litres are
+# neither "outside a batch" nor a repaired pump restarting by itself.
+
+BD_ESTOP_BATCH_AT = BD_FAULT_ENDS + 0.5
+BD_ESTOP_AT = BD_ESTOP_BATCH_AT + 1.5
+#: The shortest window the whole exam fits in.
+BD_EXAM_ENDS_BY = operator_exam_ends_by(BD_ESTOP_AT)
+#: Batches that are the exam's and not the pot's, marked on something else.
+BD_NOT_DOSES = ("fault", "estop")
 
 
 class BatchDosingScene(PlantScene):
@@ -147,7 +168,10 @@ class BatchDosingScene(PlantScene):
             (BD_FAULT_BATCH_AT, self._begin("fault")),
             (BD_FAULT_AT, self._fail_the_pump),
             (BD_REPAIRED_AT, self._repair_the_pump),
+            (BD_ESTOP_BATCH_AT, self._begin("estop")),
         ])
+        self.operator = OperatorExam(self, BD_ESTOP_AT, noun="pump",
+                                     what="the pump")
 
     def _begin(self, name: str):
         def do() -> None:
@@ -201,13 +225,14 @@ class BatchDosingScene(PlantScene):
         commanded = min(max(self.num("pump.speed"), 0.0), 100.0)
         target = commanded if run else 0.0
         self.percent += max(min(target - self.percent, BD_RAMP * dt), -BD_RAMP * dt)
+        self.operator.driven = target > 0.0
         self.flow = self.rated * self.percent / 100.0
         self.delivered += self.flow / 60.0 * dt
         litres = self.flow / 60.0 * dt
         if self.pump_faulted:
             # The ramp down the tick the motor failed, and nothing after.
             self.fault["delivered_while_failed_L"] += litres
-        elif self.fault["repaired_at"] is not None:
+        elif self.fault["repaired_at"] is not None and self.t <= BD_FAULT_ENDS:
             self.fault["delivered_after_repair_L"] += litres
             if litres > 0.0 and self.fault["restarted_at"] is None:
                 self.fault["restarted_at"] = round(self.t, 2)
@@ -252,7 +277,7 @@ def grade_batch_dosing(watched: Watched, engine: GradedEngine, report: Report,
     target = sim.litres
     #: The batches marked on the number. The third, if the window reached it,
     #: is the pump fault's, and is marked on the fault alone.
-    batches = [b for b in sim.batches if b["name"] != "fault"]
+    batches = [b for b in sim.batches if b["name"] not in BD_NOT_DOSES]
     faulted = [b for b in sim.batches if b["name"] == "fault"]
     #: Litres after the batch was supposed to be over. A dose that overshoots
     #: by carrying on is a different mistake from one that overshoots by
@@ -300,6 +325,7 @@ def grade_batch_dosing(watched: Watched, engine: GradedEngine, report: Report,
 
     _batch_feedback(report, watched, sim, batches, target, tail)
     _pump_fault_feedback(report, fault)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _grade_pump_fault(sim: BatchDosingScene, report: Report, window: float,
@@ -313,9 +339,9 @@ def _grade_pump_fault(sim: BatchDosingScene, report: Report, window: float,
     fault = dict(sim.fault)
     failed, repaired = fault["failed_at"], fault["repaired_at"]
     watched_to = window
-    finished = repaired is not None and window >= BD_EXAM_ENDS_BY - 1e-6
+    finished = repaired is not None and window >= BD_FAULT_ENDS - 1e-6
     short = (f"the {window:g}s window ended before the examiner finished the "
-             f"pump-fault test, which needs {BD_EXAM_ENDS_BY:g}s")
+             f"pump-fault test, which needs {BD_FAULT_ENDS:g}s")
     dropped = fault["run_dropped_at"]
     lag = None if dropped is None or failed is None else round(dropped - failed, 2)
     report.evidence["pump_fault"] = {
@@ -449,6 +475,7 @@ def _summary_batch(evidence: dict, out) -> None:
         out(f"pump failed at {fault['failed_at']:g}s: pump.run "
             + ("never dropped" if noticed is None else f"dropped {noticed:.2f}s later")
             + f", {fault['delivered_after_repair_L']:.1f} L after the repair")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -460,13 +487,16 @@ RUBRIC = {
              "meter.total rather than on a clock -- this run re-rates the "
              "pump between the two batches. Then a third batch, and the pump "
              "fails mid-dose: drop pump.run within two seconds, and do not "
-             "dose again by yourself when the pump comes back."),
+             "dose again by yourself when the pump comes back. The mushroom "
+             "is normally closed, stops the pump within 200 ms and latches "
+             "-- only Reset, then Start, doses again."),
     "build": BatchDosingScene,
     "observe": None,
     "grade": grade_batch_dosing,
     "summary": _summary_batch,
     "duration": BD_EXAM_ENDS_BY,
-    "references": ("good", "timed", "noreset", "ignorefault"),
+    "references": ("good", "timed", "noreset", "ignorefault", "noestop",
+                   "startalone"),
     "tags": ("pump.run, pump.speed, meter.reset, tank.fill, tank.drain, "
              "flow_gauge.value, total_display.value, level_readout.value, "
              "panel.green, panel.red are yours to write; pump.flow, "

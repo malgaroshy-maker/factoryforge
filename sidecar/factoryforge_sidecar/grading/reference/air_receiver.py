@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.air_receiver import AR_BAND, AR_RANGE_MAX, AR_RANGE_MIN, AR_TRAVEL
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "air-receiver"
@@ -101,4 +101,5 @@ async def _ar_impatient(bus, stop):
 
 
 REFERENCES = {"good": _ar_good, "by32767": _ar_by32767,
-              "nodiscrepancy": _ar_nodiscrepancy, "impatient": _ar_impatient}
+              "nodiscrepancy": _ar_nodiscrepancy, "impatient": _ar_impatient,
+              **contract_references(_ar_good)}

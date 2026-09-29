@@ -55,7 +55,11 @@ the plants rather than the 3D engine, so nothing here can jam or tip; faults
 are injected and marked on five scenes -- the servo drive, the air receiver's
 valve, and since IP-12 the sorting conveyor's drive, the dosing pump and the
 oven's element -- while the other fault tags are declared and never raised;
-and the operator contract itself is marked on three scenes out of ten.
+and the operator contract itself -- the latching E-stop, Start that will not
+clear it, Reset that starts nothing -- is marked on every scene, all eighteen
+of which have a panel: the sorting line, the start / stop station and the
+guarded cell in code of their own, and the other fifteen through one shared
+sheet since IP-12 (`plant.OperatorExam`, `scenes/_contract.py`).
 
 Where things are (IP-18):
 

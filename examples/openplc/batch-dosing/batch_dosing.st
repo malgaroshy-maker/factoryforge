@@ -23,7 +23,10 @@
      meter.rate collapses: the flow loop knows within two seconds, and the
      level will not have moved a whole percent. Drop pump.run within those
      two seconds, and do not dose again by yourself when the pump comes
-     back: a dose that ended on a fault waits for Reset and Start.
+     back: a dose that ended on a fault waits for Reset and Start. The
+     mushroom (panel.estop, normally closed) stops the pump within 200 ms
+     and its trip latches: releasing it restarts nothing, and neither does
+     Start or Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

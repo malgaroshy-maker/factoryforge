@@ -10,10 +10,11 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (BELT_THICKNESS, CARTON_LENGTH, EngineFeed, Item, PlantScene,
-                     Script, Vfd, declare_stack_light, fault_input, pot_start,
-                     remover_catch)
+from ..plant import (BELT_THICKNESS, CARTON_LENGTH, EngineFeed, Item,
+                     OperatorExam, PlantScene, Script, Vfd, declare_stack_light,
+                     fault_input, operator_exam_ends_by, pot_start, remover_catch)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "accumulation-buffer"
@@ -92,6 +93,22 @@ AB_SPEED_THEN = AB_SPEED_FIRST * AB_SPEED_CHANGE
 AB_SPEED_CHANGES_AT = 40.0
 AB_POT_START = pot_start(_PLANT)
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# Once the releases have been marked -- over the old 80-second window, and
+# only there -- the E-stop sheet (`plant.OperatorExam`). "Stopped" is the
+# buffer's drive no longer driven and the outfeed off: a VFD coasts down its
+# own ramp once `run` drops, which is the drive's stop and not the program's
+# to hurry. The examiner strikes with the blade up and no release in
+# progress, so a release is never the E-stop's to cut short; a program that
+# stops the line holds its queue behind the blade, as the brief's buffer does.
+
+#: The releases, the belt's speed and the travel under the blade are marked up
+#: to here, where the window used to end.
+AB_HOLDS_END = 80.0
+AB_ESTOP_AT = AB_HOLDS_END + 0.5
+AB_EXAM_ENDS_BY = operator_exam_ends_by(AB_ESTOP_AT)
+
 
 class AccumulationScene(PlantScene):
     name = "accumulation-buffer"
@@ -148,6 +165,9 @@ class AccumulationScene(PlantScene):
             (1.0, self.panel.press("start")),
             (AB_SPEED_CHANGES_AT, self._change_the_drive),
         ])
+        self.operator = OperatorExam(
+            self, AB_ESTOP_AT, noun="belt", what="the buffer's drive",
+            ready=lambda: self._open is None and self.blade >= 0.999)
 
     def _change_the_drive(self) -> None:
         """Reach into the drive and change what 100 % means.
@@ -177,8 +197,11 @@ class AccumulationScene(PlantScene):
         # rather than stopping it dead.
         speed = self.drive.step(self.bit("buffer.run"), self.num("buffer.speed"), dt)
         self.tags.set("buffer.actual", self.drive.actual)
-        self.speed_samples[self.phase].append(speed)
+        marking = self.t <= AB_HOLDS_END
+        if marking:
+            self.speed_samples[self.phase].append(speed)
         outfeed = AB_OUTFEED_SPEED if self.bit("outfeed.rotate") else 0.0
+        self.operator.driven = self.drive.driven or outfeed > 0.0
 
         target = 1.0 if self.bit("stop.raise") else 0.0
         rate = dt / AB_BLADE_TIME
@@ -198,7 +221,7 @@ class AccumulationScene(PlantScene):
         self.tags.set("enc.count", int(self.pulses))
         self.tags.set("enc.rate", rate)
 
-        if up:
+        if up and marking:
             self.travel_while_held += speed * dt
 
         # Each carton rides the deck its centre is on: the buffer's drive up
@@ -233,7 +256,8 @@ class AccumulationScene(PlantScene):
             self._open["to"] = round(self.t, 2)
             self._open["pulses"] = round(self.pulses - self._open["pulses_at"], 1)
             self._open["seconds"] = round(self._open["to"] - self._open["from"], 2)
-            self.releases.append(self._open)
+            if marking:
+                self.releases.append(self._open)
             self._open = None
 
         self.tags.set("exit_eye.detect", self._eye(self.items, AB_EYE_POS))
@@ -370,6 +394,12 @@ def _accumulation_feedback(report, watched, sim, first, then, avg_first, avg_the
             f"time.")
 
 
+def _grade_and_mark(watched: Watched, engine: GradedEngine, report: Report,
+                    duration: float) -> None:
+    grade_accumulation(watched, engine, report, duration)
+    mark_contract(watched.inner.operator, report, watched.sim_time)
+
+
 def _summary_accumulation(evidence: dict, out) -> None:
     first, then = evidence["first_speed"], evidence["second_speed"]
     out(f"pot: a {evidence['pulse_window_on_the_pot']:.0f}-pulse release window "
@@ -378,6 +408,7 @@ def _summary_accumulation(evidence: dict, out) -> None:
         f"{first['mean_cartons']:.1f} cartons each")
     out(f"at {then['belt_m_per_s']:.2f} m/s: {then['releases']} release(s), "
         f"{then['mean_cartons']:.1f} cartons each")
+    summary_contract(evidence, out)
     out(f"{evidence['released_total']} cartons out, "
         f"{evidence['belt_travel_while_held_m']:.1f} m of belt ran under a raised blade")
 
@@ -389,13 +420,16 @@ RUBRIC = {
     "task": ("Let cartons pile up behind the blade stop on a belt that "
              "never stops, then release a batch. The pot is a release "
              "window in ENCODER PULSES, which is a distance -- and this "
-             "run changes the drive's top speed halfway through."),
+             "run changes the drive's top speed halfway through. The "
+             "mushroom is normally closed, stops the drive and the outfeed "
+             "within 200 ms and latches -- only Reset, then Start, restarts "
+             "them."),
     "build": AccumulationScene,
     "observe": None,
-    "grade": grade_accumulation,
+    "grade": _grade_and_mark,
     "summary": _summary_accumulation,
-    "duration": 80.0,
-    "references": ("good", "timed"),
+    "duration": AB_EXAM_ENDS_BY,
+    "references": ("good", "timed", "noestop", "startalone"),
     "tags": ("buffer.run, buffer.speed, outfeed.rotate, emitter.emit, "
              "stop.raise, enc.reset, count_display.value, panel.green, "
              "panel.red are yours to write; buffer.actual, enc.count, "

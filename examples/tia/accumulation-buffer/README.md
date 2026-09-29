@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Let cartons pile up behind the blade stop on a belt that never stops, then release a batch. Time the release by encoder pulses rather than by seconds: the pot is a release window in pulses, which is a distance.
 
-**Done when.** Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many.
+**Done when.** Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many. The mushroom (panel.estop, normally closed) stops the buffer's drive and the outfeed within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -95,7 +95,7 @@ names.
 | `exit_eye.detect` | PLC reads | `ExitEyeDetect` | Bool | DBX30.1 | TRUE while a carton is in the beam | yes |
 | `outfeed.fault` | PLC reads | `OutfeedFault` | Bool | DBX30.2 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX30.3 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX30.4 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX30.4 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX30.5 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX30.6 | Stop button, momentary: a short pulse per press | yes |
 | `stop.down` | PLC reads | `StopDown` | Bool | DBX30.7 | blade fully down | yes |

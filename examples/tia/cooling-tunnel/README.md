@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Hold the product at the temperature on the panel's pot. The heater can only push the temperature up and the room takes heat away slowly, so the fan is how it comes down fast: split one controller's output, heater above zero and fan below it, with a deadband between them. Never run both at once. fan.speed is a reference -- the fan ramps, and fan.airflow is what it is really delivering.
 
-**Done when.** The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses.
+**Done when.** The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses. The mushroom (panel.estop, normally closed) stops the heater and the fan within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -90,7 +90,7 @@ names.
 | `oven.attemp` | PLC reads | `OvenAttemp` | Bool | DBX26.1 | within +/-3 degC of the station's own 150 degC -- not the pot | yes |
 | `oven.fault` | PLC reads | `OvenFault` | Bool | DBX26.2 | element failed: TRUE = it takes your command and heats nothing | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX26.3 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX26.4 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX26.4 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX26.5 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX26.6 | Stop button, momentary: a short pulse per press | yes |
 

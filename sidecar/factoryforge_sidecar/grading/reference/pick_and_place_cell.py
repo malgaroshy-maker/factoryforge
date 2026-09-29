@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.pick_and_place_cell import PP_PLACE_AT
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "pick-and-place-cell"
@@ -35,7 +35,8 @@ async def _pp_body(bus, stop, *, on_feedback: bool) -> None:
     WAITS = {"topick": 1.6, "lower": 0.6, "grip": 0.35, "raise": 0.6,
              "toplace": 1.6, "release": 0.4}
     state = {"step": "topick", "left": 0.0, "feed": 0.0, "emit": False,
-             "codes": set()}
+             "codes": set(), "held": None,
+             "last": {"gantry.lower": False, "gantry.grip": False}}
 
     def arrived(where: float) -> bool:
         """Position feedback against the destination *this step* wants.
@@ -92,6 +93,18 @@ async def _pp_body(bus, stop, *, on_feedback: bool) -> None:
             "gantry.grip": False,
             **scanner.lamps(),
         }
+        # An E-stop holds the cell where it is until Reset and then Start
+        # (IP-12): the axis held at the position it had, the column and the
+        # cup left as they were -- a cup let go drops its carton -- and the
+        # sequence resumed from the same step. A Stop still sends it home.
+        if scanner.tripped and state["held"] is None:
+            state["held"] = {"gantry.target": scanner.num("gantry.position"),
+                             **state["last"]}
+        if state["held"] is not None and not running:
+            writes.update(state["held"])
+            await bus.write_many(writes)
+            return
+        state["held"] = None
         if not running:
             state["step"] = "topick"
             await bus.write_many(writes)
@@ -133,6 +146,8 @@ async def _pp_body(bus, stop, *, on_feedback: bool) -> None:
             if done(step, not holding, dt):
                 enter("topick")
 
+        state["last"] = {"gantry.lower": writes["gantry.lower"],
+                         "gantry.grip": writes["gantry.grip"]}
         await bus.write_many(writes)
 
     await run_scan(bus, stop, body)
@@ -150,4 +165,5 @@ async def _pp_timed(bus, stop):
     await _pp_body(bus, stop, on_feedback=False)
 
 
-REFERENCES = {"good": _pp_good, "timed": _pp_timed}
+REFERENCES = {"good": _pp_good, "timed": _pp_timed,
+              **contract_references(_pp_good)}

@@ -12,7 +12,7 @@ from ..lockstep import run_scan
 from ..plant import CARTON_LENGTH
 from ..scenes.roller_line_weighing import (RW_INFEED_SPEED, RW_METAL_EYE_POS,
                                            RW_WEIGH_FROM)
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "roller-line-weighing"
@@ -125,4 +125,4 @@ async def _rw_fastfeed(bus, stop):
 
 
 REFERENCES = {"good": _rw_good, "metalonly": _rw_metalonly,
-              "fastfeed": _rw_fastfeed}
+              "fastfeed": _rw_fastfeed, **contract_references(_rw_good)}

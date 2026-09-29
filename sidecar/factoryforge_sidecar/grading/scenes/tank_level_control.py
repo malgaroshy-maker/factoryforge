@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script, declare_stack_light, pot_start
+from ..plant import (OperatorExam, Script, declare_stack_light,
+                     operator_exam_ends_by, pot_start)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
 
@@ -42,6 +44,22 @@ TANK_POT_START = pot_start(_PLANT)
 TANK_FILL_RATE = _TANK.number("fill_rate")
 TANK_DRAIN_RATE = _TANK.number("drain_rate")
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# Once the second level has had its whole phase, the examiner turns the pot to
+# a level well above it, so the fill valve is open, and puts the E-stop sheet
+# (`plant.OperatorExam`). "Stopped" is both valves shut: nothing flows in or
+# out while the mushroom is in or its trip is latched. The two holds are marked
+# on the trace they always were; what follows them is no hold's.
+
+#: The second hold ends here, where the window used to.
+TANK_HOLDS_END = 65.0
+#: Where the examiner turns the pot for the E-stop test, and when it reaches
+#: for the mushroom.
+TANK_ESTOP_POT = 50.0
+TANK_ESTOP_AT = TANK_HOLDS_END + 1.0
+TANK_EXAM_ENDS_BY = operator_exam_ends_by(TANK_ESTOP_AT)
+
 
 class TankScene(Regulator):
     name = "tank-level-control"
@@ -65,8 +83,11 @@ class TankScene(Regulator):
         self.script = Script([
             (0.2, self._phase(high, until=30.0)),
             (1.0, self.panel.press("start")),
-            (30.0, self._phase(low, until=10_000.0)),
+            (30.0, self._phase(low, until=TANK_HOLDS_END)),
+            (TANK_HOLDS_END, self.panel.set_setpoint(TANK_ESTOP_POT)),
         ])
+        self.operator = OperatorExam(self, TANK_ESTOP_AT, noun="flow",
+                                     what="the flow through the valves")
 
     def measure(self) -> float:
         return self.level
@@ -78,6 +99,7 @@ class TankScene(Regulator):
         outflow = (TANK_DRAIN_RATE * drain / 100.0
                    * (max(self.level, 0.0) / 100.0) ** 0.5)
         self.level = min(max(self.level + (inflow - outflow) * dt, 0.0), 100.0)
+        self.operator.driven = fill > 0.0 or drain > 0.0
         self.tags.set("tank.level", self.level)
         self.record()
 
@@ -88,6 +110,12 @@ def grade_tank(watched, engine, report, duration) -> None:
     # while one swinging 3 % peak to peak is cycling a valve that has to last.
     grade_regulator(watched, engine, report, duration,
                     settled=3.0, ripple=3.0, overshoot=6.0, moved=40.0)
+    mark_contract(watched.inner.operator, report, watched.sim_time)
+
+
+def _summary_tank(evidence: dict, out) -> None:
+    _summary_regulator(evidence, out)
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -97,13 +125,15 @@ RUBRIC = {
     "task": ("Hold the tank at the level the pot asks for, with the fill "
              "and drain valves. Outflow follows Torricelli, so the process "
              "gain falls with level: this run asks for a high level and "
-             "then a low one."),
+             "then a low one. Then the E-stop: the mushroom is normally "
+             "closed, shuts both valves within 200 ms and latches -- only "
+             "Reset, then Start, opens them again."),
     "build": TankScene,
     "observe": None,
     "grade": grade_tank,
-    "summary": _summary_regulator,
-    "duration": 65.0,
-    "references": ("good", "bangbang", "fixedsp"),
+    "summary": _summary_tank,
+    "duration": TANK_EXAM_ENDS_BY,
+    "references": ("good", "bangbang", "fixedsp", "noestop", "startalone"),
     "tags": ("tank.fill, tank.drain, level_readout.value, panel.green, "
              "panel.red are yours to write; tank.level, tank.fault, "
              "panel.setpoint and the buttons are the plant's."),

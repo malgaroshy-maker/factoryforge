@@ -15,6 +15,10 @@
      same pulse window releases the same amount of product at any drive
      speed -- turn buffer.speed up and the release takes half as long and
      lets out the same number. A timer would have let out twice as many.
+     The mushroom (panel.estop, normally closed) stops the buffer's drive
+     and the outfeed within 200 ms and its trip latches: releasing it
+     restarts nothing, and neither does Start or Reset alone -- only Reset,
+     then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

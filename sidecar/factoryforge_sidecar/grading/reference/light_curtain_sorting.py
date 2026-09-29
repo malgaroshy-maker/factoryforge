@@ -12,7 +12,7 @@ from ..lockstep import run_scan
 from ..scenes.light_curtain_sorting import (LC_BELT_SPEED, LC_CATCH, LC_CURTAIN_POS,
                                             LC_DIVERTER_POS, LC_TRAVEL_TIME,
                                             lc_beam_ladder)
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "light-curtain-sorting"
@@ -110,4 +110,4 @@ async def _lc_everyother(bus, stop):
 
 
 REFERENCES = {"good": _lc_good, "fixed": _lc_fixed,
-              "everyother": _lc_everyother}
+              "everyother": _lc_everyother, **contract_references(_lc_good)}

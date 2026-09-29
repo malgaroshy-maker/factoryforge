@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** With the deck home, the rod back and deck_eye clear, drop a carton on the deck (emitter.emit), let it settle for the pot's seconds, and turn the deck a quarter (table.index). When table.atindex is made, sweep the carton onto the running outfeed with the cylinder -- two coils, two reeds -- and only once pusher.retracted is made turn the deck home again. The deck has no rollers: the only way on is the emitter and the only way off is the pusher.
 
-**Done when.** Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made.
+**Done when.** Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made. The mushroom (panel.estop, normally closed) stops the outfeed and sends neither the deck nor the rod anywhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -86,7 +86,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x2 | `PanelEstop` %IX100.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x2 | `PanelGreen` %QX100.2 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x3 | `PanelRed` %QX100.3 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x2 + 3x3 | `PanelSetpointHi` %IW102 + `PanelSetpointLo` %IW103 -> `PanelSetpoint` : REAL | the operator's pot, 0.5..3 s (starts at 1) | yes |
 | `panel.start` | PLC reads | bit | 1x4 | `PanelStart` %IX100.4 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x5 | `PanelStop` %IX100.5 | Stop button, momentary: a short pulse per press | yes |

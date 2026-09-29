@@ -89,7 +89,7 @@ share a machine, which HP-53 removed project-wide for exactly that reason.
 
 | flag | |
 |---|---|
-| `--duration` | seconds to watch once the controller connects (default: the scene's own, 60–96). **Shortening it can fail a correct program**: the exam's second phase starts at a fixed moment, and a window that ends before a plant has settled in it marks a ramp as a hold |
+| `--duration` | seconds to watch once the controller connects (default: the scene's own, 52–110 s). **Shortening it can fail a correct program**: the exam's second phase starts at a fixed moment, and a window that ends before a plant has settled in it marks a ramp as a hold |
 | `--wait` | seconds to wait for a controller before giving up (default 120) |
 | `--seed` | the feed pattern and the numbers the exam picks. Reported either way, so a mark is reproducible |
 | `--json PATH` | the whole run, machine-readable; `-` for stdout |
@@ -255,6 +255,10 @@ reads and the fake it shuts.
 | `servo-positioning` | where the carriage came to rest, and whether it moved between the drive's fault clearing and the operator's Reset | acknowledging every error the moment it can be — the run faults the drive mid-move, clears the fault, and presses Reset only three seconds later |
 | `mezzanine-lift` | for every carton, whether it came to rest on the lift's carriage, and the carriage's height when it left it | discharging a fixed time after calling level 1 — the run slows the hoist to 30 or 35 % of its rating |
 
+Every scene with an operator panel also marks the E-stop / Start / Reset
+contract, on what its plant was doing against the examiner's presses; see
+"The operator contract" below.
+
 Every scene also carries `controller.stayed_connected`,
 `integrity.no_forced_tags` and `integrity.no_input_writes`, and every scene has
 at least one check whose only job is to refuse a verdict about a plant that did
@@ -296,7 +300,7 @@ something physical that no tag reports:
   stands still whatever `conveyor.rotate` says (IP-12)
 * the **dosing pump fails** 4 s into a third batch and is repaired 5 s later
   (IP-12)
-* the **oven's element fails** at 65 s and heats nothing from then on (IP-12)
+* the **oven's element fails** at 80 s and heats nothing from then on (IP-12)
 
 None of those is visible as a value on the bus. The controller can only find
 out by measuring — the encoder counting slower, the flow meter reading less,
@@ -310,13 +314,14 @@ the next press on it can close it again (`Panel.PRESS`, which is
 `ButtonPanel.DefaultPressHold`, IP-34). Until IP-34 the examiner held 0.15 s,
 against a click the engine had since raised to 0.2 s (IP-31).
 
-**The operator contract, as belt travel.** Three scenes mark what the panel's buttons do to a belt: the start / stop
-station, the sorting line and the guarded cell (which marks it on its motor
-contactor instead). The first two share one ledger, `plant.TripLedger`, ticked
-with the metres the belt really moved. It splits a trip into the time the
-mushroom is in and the time after its release until a Reset edge and then a
-Start edge. It also records every time the belt began to move with no Start
-edge since it last stopped.
+**The operator contract.** Every graded scene has a `ButtonPanel`, and since
+IP-12 every one of them marks what its buttons do to the plant: eighteen of
+eighteen. The start / stop station and the sorting line mark it as belt
+travel, the guarded cell on its motor contactor, and the other fifteen
+through one shared sheet (below). All of them use one ledger,
+`plant.TripLedger`. It splits a trip into the time the mushroom is in and
+the time after its release until a Reset edge and then a Start edge, and it
+records every time the plant began to move with nobody having started it.
 
 The sorting line's examiner presses Start at 1 s. From 16 s it strikes the
 mushroom, releases it 2 s later, presses Start alone at 3 s, Reset at 4.5 s
@@ -342,6 +347,87 @@ than passing them unexamined. The start / stop station keeps its single
 `estop.stopped_the_belt` over both phases. Until IP-35 its trip ended on any
 Start after the strike, so a station that restarted on Start alone passed
 with 5 mm of belt, all of it the stop lag. It now fails with 1745 mm.
+
+**The same sheet on the other fifteen (IP-12).** `plant.OperatorExam` puts
+the sorting line's sheet to any plant: from a set moment the examiner waits,
+for up to 4 s, for the plant to be running and in a state the scene calls
+fair to strike in; strikes the mushroom; releases it 2 s later; presses Start
+alone at 3 s, Reset at 4.5 s and Start at 6 s. Each scene says what
+"stopped" means for it by telling the ledger, every tick, whether the plant
+is being driven, and the ledger counts seconds of that. The four checks are
+`scenes/_contract.py`'s and read the same on every scene:
+
+* `line.started_by_start`: the plant never began to move before the first
+  Start edge, or after a Stop edge with no Start since. Not "since it last
+  stopped", as on the two belt scenes: a valve that closes at setpoint or an
+  axis dwelling at a station stops and starts by itself while it runs.
+* `estop.stopped_the_<noun>`: nothing driven later than 200 ms after the
+  strike, on a plant that was running when it came.
+* `estop.latched_until_reset`: nothing driven between the release and Reset
+  followed by Start.
+* `estop.restarted_after_reset`: driven again within 1 s of that Start. A
+  plant that was already running again before it, which the latch check has
+  failed, is not failed a second time here.
+
+The sheet comes after each scene's own exam. Where a measurement ran to the
+end of the window -- a regulator's last hold, the buffer's releases, the
+press's strokes, the rotary index's pushes, the star-delta's starts, the
+tunnel's overlap, the repaired pump's watch -- it now stops where the old
+window ended, so the exam reads exactly what it read before. The carton
+lines (curtain, checkweigher, pick and place, pivot diverter, lift) go on
+marking every carton that reaches a lane, the sheet's included: a correct
+program sorts those too, and three rows of the table below count a few more
+than they did (the pick and place cell's `timed` drops 7 where it dropped 6;
+the pivot line's `timed` lets 4 tall cartons go where it let 3, and `late`
+hits 3 where it hit 2). Every window grew, by about 11 s:
+
+| scene | "stopped" means | sheet from | window |
+|---|---|---|---|
+| `tank-level-control` | both valves shut; the pot is turned to 50 % first, so the fill valve is open | 66 s | 65 → 77.1 s |
+| `heat-treat-station` | the heater's output at zero; between the second hold and the element failure, which moved from 65 s to 80 s | 65.5 s | 75 → 90 s |
+| `cooling-tunnel` | heater at zero and the fan not run (it spins down on its own ramp) | 80.5 s | 80 → 91.6 s |
+| `air-receiver` | the supply valve shut and the isolation valve not commanded open | 75.5 s | 75 → 86.6 s |
+| `batch-dosing` | the pump not run -- it ramps down on its own; a fourth batch, begun with Reset and Start at 96.5 s, is the E-stop's and marked on nothing else | 98 s | 96 → 109.1 s |
+| `accumulation-buffer` | the VFD's reference at zero (it coasts down its ramp) and the outfeed off; struck with the blade up and no release under way | 80.5 s | 80 → 91.6 s |
+| `light-curtain-sorting` | the belt; struck with no carton between the curtain and the plate's far catch | 65.5 s | 65 → 76.6 s |
+| `roller-line-weighing` | both decks | 70.5 s | 70 → 81.6 s |
+| `pivot-divert` | the belt; the blade finishes a swing on its own drive, and a carton on it slides on by belt travel | 75.5 s | 75 → 86.6 s |
+| `pick-and-place-cell` | the infeed's reference at zero, the pick station off, and the gantry's travel stopped; the column and the cup are left alone, so nothing is dropped | 75.5 s | 75 → 86.6 s |
+| `servo-positioning` | the drive not moving the carriage: disabled (it quick-stops on its own ramp) or holding | 40.5 s | 40 → 51.6 s |
+| `star-delta-start` | the main contacts not conducting; the examiner closes the breaker and presses Start a third time at 42.5 s | 43 s | 42 → 54.1 s |
+| `press-station` | no down-stroke, in any mode -- the ram going back up is the stop; the selector goes back to AUTO and Start is pressed at 46.5 s, and the strike lands on a down-stroke before the bottom switch | 47 s | 46 → 58.1 s |
+| `rotary-index` | the outfeed off and no new end sent to the deck or the rod; struck with both at rest | 60.5 s | 60 → 71.6 s |
+| `mezzanine-lift` | both belts and the carriage's deck off and no new level called; struck with the carriage standing at a level | 75.5 s | 75 → 86.6 s |
+
+Three honest limits. The turntable, the pneumatic rod and the lift's hoist
+cannot be stopped part way by any command the program has -- an index, a
+5/2 valve without a spring and a level call each run to their end -- so on
+those three scenes "stopped" is *no new motion sent*, not *no motion*, and
+the examiner strikes with nothing in flight. The light curtain's examiner
+found no clear moment inside its 4 s wait on 3 of seeds 1-12; the cartons
+committed to the plate at such a strike are the E-stop's, and are left out of
+`sort.followed_the_measurement`. That exclusion is a safeguard and not yet a
+finding: with it removed, `good` still passes on all of seeds 1-40. And two wrong answers about their own lesson
+cannot sit the sheet at all: `noreset`'s fourth batch is over before it
+starts, and `noack`'s axis never moves again, so each also fails
+`estop.stopped_the_*` ("had already stopped") and
+`estop.restarted_after_reset`.
+
+Each of the fifteen carries two more wrong answers, built from its own `good`
+by `reference/_shared.py` rather than written fifteen times: `noestop` never
+reads the mushroom, and `startalone` lets Start alone clear the trip. On every
+one of seeds 1-12, `good` passes all fifteen scenes, `noestop` fails
+`estop.stopped_the_*` and `estop.latched_until_reset` and nothing else, and
+`startalone` fails `estop.latched_until_reset` and nothing else. Three `good`
+references changed. The pick and place cell now holds the axis and the cup on
+a trip instead of treating it as a Stop, which sends the gantry home: put
+back, `good` fails `estop.stopped_the_cell` on 5 of seeds 1-12. The rotary
+index now also stops its outfeed when a trip lands mid-cycle, and the press's
+MANUAL obeys the mushroom; neither is reached by this exam, whose strikes land
+between cycles and in AUTO, so both are the reference being right rather than
+the rubric requiring it. None of it is reached on the 3-D engine, where nobody
+strikes the mushroom in `tools/try_scene.py` except on the sorting line and
+the start / stop station.
 
 **Faults, injected and marked (IP-12).** Three scenes break a part mid-run
 and mark what the program does about it. Each brief says what that is, and the
@@ -373,12 +459,15 @@ failure from a measurement; either is marked the same.
   checks are `fault.pump_stopped`, `pump.run` false within the brief's 2 s of
   the failure on a pump that was being run, and
   `fault.no_restart_after_repair`, no litre moved by the repaired pump before
-  the window ends at 96 s. The third batch is marked on the fault alone. Its
+  96 s, where the window used to end and the E-stop sheet's Reset and Start
+  now come. The third batch is marked on the fault alone. Its
   litres are not "outside a batch", and the first two are marked exactly as
   before.
 * **Heat treat station, the element.** The second setpoint's phase now ends
   at 65 s, where the old window ended, so the settling checks read the trace
-  they always read. The element fails at 65 s and the window runs to 75 s.
+  they always read. The E-stop sheet runs next (IP-12), and the element fails
+  at 80 s -- it failed at 65 s until the sheet took that time -- and the
+  window runs to 90 s.
   The checks are `fault.alarmed`, `alarm.beacon` lit within 5 s of the
   failure and still lit at the end, and `fault.no_false_alarm`, never lit
   while the element was healthy, so a beacon wired on cannot pass.
@@ -594,7 +683,7 @@ scene's own 60 s window. Neither is thirteen.
 | | `everyother` | diverts on a count, never reads the height |
 | `roller-line-weighing` | `metalonly` | gets exactly the cartons the two instruments disagree about wrong |
 | | `fastfeed` | two on the deck read as one peak |
-| `pick-and-place-cell` | `timed` | places 6 at 80 %/s; slowed to 32 %/s, it drops 6 cartons at 51.5 % of the rail |
+| `pick-and-place-cell` | `timed` | places 6 at 80 %/s; slowed to 32 %/s, it drops 7 cartons at 51.5 % of the rail |
 | `accumulation-buffer` | `timed` | 6.0 cartons a release becomes 3.0 when the drive slows down |
 | `heat-treat-station` | `ponly` | parks 10.0 °C short of 135 °C and 15.7 °C short of 200 °C |
 | | `thermostat` | mean error 2.1 °C and 2.0 °C, swinging 8.3 °C and 8.1 °C peak to peak |
@@ -619,9 +708,9 @@ scene's own 60 s window. Neither is thirteen.
 | | `ignoresmode` | carries on cycling with the selector at OFF: 650 mm of down-stroke |
 | `rotary-index` | `timed` | pushes 4 cartons off at 75 deg once the deck is slowed to 33 deg/s |
 | | `notretracted` | turns the deck home on "not extended": 382 deg of turning with the plate out over the deck |
-| `pivot-divert` | `timed` | holds the blade on a stopwatch set at the rated belt, and once the belt is slowed to 0.35 m/s lets 3 tall cartons go on to the far end |
+| `pivot-divert` | `timed` | holds the blade on a stopwatch set at the rated belt, and once the belt is slowed to 0.35 m/s lets 4 tall cartons go on to the far end |
 | | `unlatched` | wires the blade to the eye, so it is home again before the tall carton gets there |
-| | `late` | swings the blade out as the carton reaches the post, as a pusher is fired: every carton lands in its lane, and 2 of them because the blade hit them at 0.5 m/s |
+| | `late` | swings the blade out as the carton reaches the post, as a pusher is fired: every carton lands in its lane, and 3 of them because the blade hit them at 0.5 m/s |
 | | `everyother` | turns every second carton and never reads the tall eye: right on the engine's alternating emitter, wrong on the exam's shuffle |
 | `mezzanine-lift` | `timed` | discharges on a stopwatch set at the rated climb; once the hoist is slowed to 0.2625 m/s at 30 s it runs a carton off the carriage at 0.56 m, onto the mezzanine floor, and waits for the outfeed eye for ever |
 | | `nostop` | leaves the deck running after the carton is aboard: 1 carton runs across the carriage and off its far side before the lift has moved |
@@ -781,16 +870,18 @@ self-tests (`FaultInjectionSelfTest.cs`, `ControlPartsSelfTest.cs`,
 its version at `62dc800` is still the place to read how a check on a
 controller's response to each fault could be written.
 
-**The operator panel is graded on three scenes out of ten.** Every model has
-a panel and the grader presses its buttons, but only `start-stop-station`,
-`sorting-by-height` (since IP-35) and `guarded-cell` mark the operator
-contract itself — the latching trip, Start that will not clear it, the relay
-that starts nothing. On the other seven the panel is how the exam turns the pot and
-starts the line, and a program that ignored Stop entirely would still pass
-them. `tools/try_scene.py` puts the same sheet to the `good` reference on the
-3D engine for the two scenes whose exams mark it.
+**The operator panel is graded on every scene, and on the mushroom more
+than on Stop.** Since IP-12 all eighteen mark the operator contract -- the
+latching trip, Start that will not clear it, Reset that starts nothing (see
+"The operator contract" above). Stop is marked less evenly: the start / stop
+station, the star-delta starter and the air receiver press it, and on the
+others `line.started_by_start` only notices a plant that starts again after
+a Stop with no Start; a program that ignored Stop entirely would still pass a
+scene whose exam never presses it. `tools/try_scene.py` puts the E-stop sheet
+to the `good` reference on the 3D engine for the two scenes that marked it
+first; on the other fifteen the sheet is the grader's alone.
 
-**One window is a sample, not a proof.** The windows run 60–96 seconds, which
+**One window is a sample, not a proof.** The windows run 52–110 seconds, which
 is a dozen or two cartons or two settling steps. A program that misroutes one
 carton in five hundred will pass, and a program whose timing is marginal may
 pass one run and fail the next. Run it more than once with different seeds

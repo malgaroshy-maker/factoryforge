@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Checkweigh. Judge each carton on the peak weight it shows as it crosses the deck, and reject anything over the limit on the panel's pot. The inductive sensor sees metal only, and on this line the steel cartons are also the heavy ones — so two independent instruments should agree.
 
-**Done when.** The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded.
+**Done when.** The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded. The mushroom (panel.estop, normally closed) stops both decks within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -86,7 +86,7 @@ names.
 | `infeed.fault` | PLC reads | `InfeedFault` | Bool | DBX18.0 | drive fault: TRUE = faulted; a faulted drive does not turn |  |
 | `metal_check.detect` | PLC reads | `MetalCheckDetect` | Bool | DBX18.1 | TRUE while a METAL carton is in front of it; cardboard is invisible to it | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX18.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX18.3 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX18.3 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX18.4 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX18.5 | Stop button, momentary: a short pulse per press | yes |
 | `scale.fault` | PLC reads | `ScaleFault` | Bool | DBX18.6 | drive fault: TRUE = faulted; a faulted drive does not turn |  |

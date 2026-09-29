@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Shuttle the axis between station A at 100 mm and station B, the panel's pot, dwelling a second at each, from Start until Stop. The drive does nothing until axis.enable has been on long enough for axis.ready, and every move needs axis.velocity as well as axis.target. When the drive faults it stops itself and latches axis.error: hold your sequence, show it, and acknowledge -- a rising edge of axis.ack -- only when the operator presses Reset and axis.fault has gone.
 
-**Done when.** The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to.
+**Done when.** The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to. The mushroom (panel.estop, normally closed) stops the axis within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|

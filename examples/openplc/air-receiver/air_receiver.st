@@ -22,7 +22,10 @@
      receiver runs 16 % high. Seize the valve (valve.fault) and Start:
      valve.opened never comes, and only a timer on the feedback notices --
      but a check without one alarms on every healthy start, because for two
-     seconds neither limit switch is made.
+     seconds neither limit switch is made. The mushroom (panel.estop,
+     normally closed) shuts the supply and drops the isolation valve within
+     200 ms and its trip latches: releasing it restarts nothing, and
+     neither does Start or Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

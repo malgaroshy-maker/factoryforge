@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.batch_dosing import BD_RATED_FIRST
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "batch-dosing"
@@ -170,4 +170,5 @@ async def _bd_ignorefault(bus, stop):
 
 
 REFERENCES = {"good": _bd_good, "timed": _bd_timed,
-              "noreset": _bd_noreset, "ignorefault": _bd_ignorefault}
+              "noreset": _bd_noreset, "ignorefault": _bd_ignorefault,
+              **contract_references(_bd_good)}

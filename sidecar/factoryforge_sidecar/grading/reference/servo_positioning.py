@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.servo_positioning import SV_STATION_A, SV_WINDOW
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "servo-positioning"
@@ -89,4 +89,5 @@ async def _sv_noack(bus, stop):
     await _sv_body(bus, stop, ack="never")
 
 
-REFERENCES = {"good": _sv_good, "autoack": _sv_autoack, "noack": _sv_noack}
+REFERENCES = {"good": _sv_good, "autoack": _sv_autoack, "noack": _sv_noack,
+              **contract_references(_sv_good)}

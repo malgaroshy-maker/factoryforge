@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Checkweigh. Judge each carton on the peak weight it shows as it crosses the deck, and reject anything over the limit on the panel's pot. The inductive sensor sees metal only, and on this line the steel cartons are also the heavy ones — so two independent instruments should agree.
 
-**Done when.** The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded.
+**Done when.** The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded. The mushroom (panel.estop, normally closed) stops both decks within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -86,7 +86,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x2 | `PanelEstop` %IX100.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x2 | `PanelGreen` %QX100.2 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x3 | `PanelRed` %QX100.3 | red lamp on the panel | yes |
-| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x2 + 3x3 | `PanelSetpointHi` %IW102 + `PanelSetpointLo` %IW103 -> `PanelSetpoint` : REAL | the operator's pot, 0..6000 g (starts at 3000) | yes |
 | `panel.start` | PLC reads | bit | 1x4 | `PanelStart` %IX100.4 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x5 | `PanelStop` %IX100.5 | Stop button, momentary: a short pulse per press | yes |

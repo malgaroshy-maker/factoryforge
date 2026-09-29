@@ -15,7 +15,10 @@
      The cartons you flag over-limit are the same ones the inductive sensor
      flags as metal. Watch the spacing: two cartons on the deck at once
      read as one peak, so a real checkweigher line holds the feed while the
-     scale is loaded.
+     scale is loaded. The mushroom (panel.estop, normally closed) stops
+     both decks within 200 ms and its trip latches: releasing it restarts
+     nothing, and neither does Start or Reset alone -- only Reset, then
+     Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

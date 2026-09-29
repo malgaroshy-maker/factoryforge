@@ -6,6 +6,7 @@ scan, and the two controllers every scene shares. A helper and not a scene:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 
 from ..lockstep import run_scan
 
@@ -67,6 +68,49 @@ class Feed:
         return False
 
 
+#: Panel rules a wrapper below imposes on every `Scanner` its controller
+#: builds. A context variable rather than an argument, so a wrong answer about
+#: the panel is the scene's own `good`, unedited, with one rule changed: the
+#: `Scanner` is built in the controller's own task, which the wrapper runs in.
+_PANEL_RULES: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "panel_rules", default={})
+
+
+def _with_panel_rules(good, name: str, doc: str, **rules):
+    async def controller(bus, stop: asyncio.Event) -> None:
+        token = _PANEL_RULES.set(rules)
+        try:
+            await good(bus, stop)
+        finally:
+            _PANEL_RULES.reset(token)
+    controller.__name__ = f"{good.__name__}_{name}"
+    controller.__doc__ = doc
+    return controller
+
+
+def ignoring_the_mushroom(good):
+    """`good`, never reading `panel.estop` as a trip: the plant runs through
+    the strike and its latch. The wrong answer every scene that marks the
+    operator contract through `plant.OperatorExam` carries as `noestop`
+    (IP-12); it has to fail `estop.stopped_the_*` and
+    `estop.latched_until_reset`, and nothing else."""
+    return _with_panel_rules(
+        good, "noestop", ignoring_the_mushroom.__doc__, latch_estop=False)
+
+
+def start_alone(good):
+    """`good`, latching the trip but letting Start alone clear it once the
+    mushroom is out -- no Reset. Every such scene's `startalone` (IP-12); it
+    has to fail `estop.latched_until_reset`, and nothing else."""
+    return _with_panel_rules(
+        good, "startalone", start_alone.__doc__, start_clears_trip=True)
+
+
+def contract_references(good) -> dict:
+    """The two wrong answers about the panel, built from a scene's `good`."""
+    return {"noestop": ignoring_the_mushroom(good), "startalone": start_alone(good)}
+
+
 class Scanner:
     """A reference controller's scan loop, with the panel already solved.
 
@@ -91,10 +135,14 @@ class Scanner:
         the fault has gone, and then Reset and Start bring the line back
         (IP-12). A tag the scene does not have reads false, so a scene with
         no such fault -- or the 3D engine, where nobody raises it -- runs
-        exactly as it did without it."""
+        exactly as it did without it.
+
+        A controller wrapped by `ignoring_the_mushroom` or `start_alone`
+        (below) has these two overridden for every `Scanner` it builds."""
+        rules = _PANEL_RULES.get()
         self.bus = bus
-        self.latch_estop = latch_estop
-        self.start_clears_trip = start_clears_trip
+        self.latch_estop = rules.get("latch_estop", latch_estop)
+        self.start_clears_trip = rules.get("start_clears_trip", start_clears_trip)
         self.faults = tuple(faults)
         self.running = False
         self.tripped = False

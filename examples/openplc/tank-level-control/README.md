@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Hold the tank at the level the panel's pot asks for, using the fill and drain valves. Outflow follows Torricelli, so the process gain changes with level: a controller tuned at the top overshoots at the bottom.
 
-**Done when.** The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero.
+**Done when.** The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero. The mushroom (panel.estop, normally closed) shuts both valves within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -82,7 +82,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x0 | `PanelEstop` %IX100.0 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x0 | `PanelGreen` %QX100.0 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x1 | `PanelRed` %QX100.1 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x1 | `PanelReset` %IX100.1 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x1 | `PanelReset` %IX100.1 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x0 + 3x1 | `PanelSetpointHi` %IW100 + `PanelSetpointLo` %IW101 -> `PanelSetpoint` : REAL | the operator's pot, 0..100 % (starts at 70) | yes |
 | `panel.start` | PLC reads | bit | 1x2 | `PanelStart` %IX100.2 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x3 | `PanelStop` %IX100.3 | Stop button, momentary: a short pulse per press | yes |

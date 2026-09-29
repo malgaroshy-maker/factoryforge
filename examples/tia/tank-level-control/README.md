@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Hold the tank at the level the panel's pot asks for, using the fill and drain valves. Outflow follows Torricelli, so the process gain changes with level: a controller tuned at the top overshoots at the bottom.
 
-**Done when.** The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero.
+**Done when.** The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero. The mushroom (panel.estop, normally closed) shuts both valves within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -85,7 +85,7 @@ names.
 | `panel.setpoint` | PLC reads | `PanelSetpoint` | Real | DBD14 | the operator's pot, 0..100 % (starts at 70) | yes |
 | `tank.level` | PLC reads | `TankLevel` | Real | DBD18 | tank level, % of capacity | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX22.0 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX22.1 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX22.1 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX22.2 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX22.3 | Stop button, momentary: a short pulse per press | yes |
 | `tank.fault` | PLC reads | `TankFault` | Bool | DBX22.4 | valve fault: TRUE = a valve has seized and holds its opening, whatever you command |  |

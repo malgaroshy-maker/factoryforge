@@ -25,7 +25,11 @@
      before it has left the floor. The lift keeps its own gate: a carton
      that arrives while the carriage is away waits on the belt, whatever
      the program does. Seize the hoist (lift.fault) between floors and
-     neither level is made, and the gate stays shut.
+     neither level is made, and the gate stays shut. The mushroom
+     (panel.estop, normally closed) stops both belts and the carriage's
+     deck and calls the carriage nowhere new within 200 ms and its trip
+     latches: releasing it restarts nothing, and neither does Start or
+     Reset alone -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

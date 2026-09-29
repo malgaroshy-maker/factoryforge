@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Run the belt and emit a carton every panel.setpoint seconds. Two beams cross the belt at the same place: entry_eye, low, sees every carton, and tall_eye, high, sees only the tall ones. Every tall carton goes into the chute and every short one runs on to the end. Swing the blade across (gate.divert) as soon as tall_eye sees a tall carton, and hold it there until tall_count.count says the carton has arrived in the chute -- then home it for the short one behind. A turned carton slides along the blade, driven only by the belt under it: it is off the belt after about two metres of belt travel past the eyes, which at a slower belt takes longer.
 
-**Done when.** Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made.
+**Done when.** Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -88,7 +88,7 @@ names.
 | `gate.fault` | PLC reads | `GateFault` | Bool | DBX14.3 | drive fault: TRUE = seized; the blade stays where it is, at neither limit mid-swing | yes |
 | `gate.home` | PLC reads | `GateHome` | Bool | DBX14.4 | blade parked along the belt edge | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX14.5 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX14.6 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX14.6 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX14.7 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX15.0 | Stop button, momentary: a short pulse per press | yes |
 | `tall_eye.detect` | PLC reads | `TallEyeDetect` | Bool | DBX15.1 | TRUE while anything breaks the beam to the reflector | yes |

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.mezzanine_lift import ML_RATED_CLIMB
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "mezzanine-lift"
@@ -105,4 +105,5 @@ async def _ml_nostop(bus, stop):
     await _ml_body(bus, stop, arrive="atlevel", stop_deck=False)
 
 
-REFERENCES = {"good": _ml_good, "timed": _ml_timed, "nostop": _ml_nostop}
+REFERENCES = {"good": _ml_good, "timed": _ml_timed, "nostop": _ml_nostop,
+              **contract_references(_ml_good)}

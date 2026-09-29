@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Sort on a measurement rather than on two bits. The curtain reports how tall each carton is, in metres, so the threshold is yours to choose — put it on the panel's pot and you can change your mind without editing the program.
 
-**Done when.** Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured.
+**Done when.** Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -89,7 +89,7 @@ names.
 | `diverter.retracted` | PLC reads | `DiverterRetracted` | Bool | DBX18.3 | pusher fully back | yes |
 | `height_gauge.blocked` | PLC reads | `HeightGaugeBlocked` | Bool | DBX18.4 | light curtain: TRUE while any beam is blocked | yes |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX18.5 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX18.6 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX18.6 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX18.7 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX19.0 | Stop button, momentary: a short pulse per press | yes |
 

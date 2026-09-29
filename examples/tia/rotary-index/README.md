@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** With the deck home, the rod back and deck_eye clear, drop a carton on the deck (emitter.emit), let it settle for the pot's seconds, and turn the deck a quarter (table.index). When table.atindex is made, sweep the carton onto the running outfeed with the cylinder -- two coils, two reeds -- and only once pusher.retracted is made turn the deck home again. The deck has no rollers: the only way on is the emitter and the only way off is the pusher.
 
-**Done when.** Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made.
+**Done when.** Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made. The mushroom (panel.estop, normally closed) stops the outfeed and sends neither the deck nor the rod anywhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -90,7 +90,7 @@ names.
 | `deck_eye.detect` | PLC reads | `DeckEyeDetect` | Bool | DBX10.0 | TRUE while anything breaks the beam to the reflector | yes |
 | `outfeed.fault` | PLC reads | `OutfeedFault` | Bool | DBX10.1 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX10.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX10.3 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX10.3 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX10.4 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX10.5 | Stop button, momentary: a short pulse per press | yes |
 | `pusher.extended` | PLC reads | `PusherExtended` | Bool | DBX10.6 | reed switch at full stroke | yes |

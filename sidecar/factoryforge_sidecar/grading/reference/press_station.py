@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..lockstep import run_scan
 from ..scenes.press_station import PS_AUTO, PS_MAN
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "press-station"
@@ -57,7 +57,11 @@ async def _ps_body(bus, stop, *, permissive: str, obey_selector: bool) -> None:
             down = state["auto"] in ("down", "dwell")
         else:
             state["auto"] = "up"
-            if mode == PS_MAN:
+            if mode == PS_MAN and scanner.tripped:
+                # The mushroom stops MANUAL as well (IP-12), and the stroke it
+                # cut short does not resume: the hands come off and go on again.
+                state["man"], state["released"] = "up", False
+            elif mode == PS_MAN:
                 # Hold-to-run, one stroke per press: down while the hands are
                 # on and the bottom has not been reached; a new stroke only
                 # once the hands have come off.
@@ -101,4 +105,4 @@ async def _ps_ignoresmode(bus, stop):
 
 
 REFERENCES = {"good": _ps_good, "andhands": _ps_andhands,
-              "ignoresmode": _ps_ignoresmode}
+              "ignoresmode": _ps_ignoresmode, **contract_references(_ps_good)}

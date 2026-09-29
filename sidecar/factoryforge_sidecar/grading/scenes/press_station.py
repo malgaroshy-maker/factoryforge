@@ -12,9 +12,10 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (BELT_THICKNESS, PlantScene, Script, declare_stack_light,
-                     fault_input, pot_start)
+from ..plant import (BELT_THICKNESS, OperatorExam, PlantScene, Script,
+                     declare_stack_light, fault_input, operator_exam_ends_by, pot_start)
 from ..templates import TemplateError, template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "press-station"
@@ -136,6 +137,23 @@ PS_GRACE = 0.1
 #: Metres of down-stroke that count as "the ram moved".
 PS_MOVED = 0.01
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the mode exam the examiner turns the selector back to AUTO and presses
+# Start, and puts the E-stop sheet (`plant.OperatorExam`) to the automatic
+# cycle. "Stopped" is the ram no longer going DOWN: a press's E-stop takes the
+# tool away from the die, so the ram coming back up is the stop, not a
+# failure of it. The examiner strikes on a down-stroke, before the ram has
+# made the bottom-dead-centre switch, so the strike never cuts a dwell short.
+# Everything the mode exam marks is marked on what happened before
+# `PS_TESTS_END`, where the window used to end.
+
+PS_TESTS_END = 46.0
+PS_AUTO_AGAIN_AT = PS_TESTS_END
+PS_START_AGAIN_AT = PS_TESTS_END + 0.5
+PS_ESTOP_AT = PS_TESTS_END + 1.0
+PS_EXAM_ENDS_BY = operator_exam_ends_by(PS_ESTOP_AT)
+
 
 class Palm:
     """One palm button of `TwoHandControl.cs`: a click holds it `hold_time`;
@@ -196,7 +214,12 @@ class PressScene(PlantScene):
             (PS_TWO_HANDS_AT, self._press("left", "right")),
             (PS_TWO_HANDS_AT + 1.5, self._press("left", "right")),
             (PS_SHORT_AT, self._press("left", "right")),
+            (PS_AUTO_AGAIN_AT, self._turn(PS_AUTO)),
+            (PS_START_AGAIN_AT, self.panel.press("start")),
         ])
+        self.operator = OperatorExam(self, PS_ESTOP_AT, noun="ram",
+                                     what="the ram's down-stroke",
+                                     ready=lambda: not self.actuated)
 
     # --- the examiner's hand ---
 
@@ -255,7 +278,9 @@ class PressScene(PlantScene):
         self.tags.set("bdc.no", self.actuated)
         self.tags.set("bdc.nc", not self.actuated)
 
-        self._record(max(self.extension - was, 0.0), dt)
+        down = max(self.extension - was, 0.0)
+        self.operator.driven = down > 0.0
+        self._record(down, dt)
 
     def _record(self, down: float, dt: float) -> None:
         t = self.t
@@ -278,7 +303,7 @@ class PressScene(PlantScene):
                 self.unpermitted_at.append(round(t, 2))
         if PS_TIE_RIGHT <= t < PS_TIE_RIGHT + PS_HOLD:
             self.tie_down_travel += down
-        if PS_SHORT_AT <= t:
+        if PS_SHORT_AT <= t < PS_TESTS_END:
             short = self.short_press
             short.setdefault("deepest_m", 0.0)
             short["deepest_m"] = round(max(short["deepest_m"], self.extension), 3)
@@ -294,14 +319,14 @@ def grade_press(watched: Watched, engine: GradedEngine, report: Report,
                 duration: float) -> None:
     sim: PressScene = watched.inner
     pot = sim.panel.setpoint_value
-    auto = [s for s in sim.strokes if s["mode"] == "AUTO"]
+    auto = [s for s in sim.strokes if s["mode"] == "AUTO" and s["at"] < PS_TESTS_END]
     short_dwell = [s for s in auto if s["held_s"] < pot - 0.1]
     short = sim.short_press
 
     report.evidence.update({
         "pot_dwell_s": pot,
         "bdc_trips_at_m": PS_TRIP_AT,
-        "strokes": sim.strokes,
+        "strokes": [s for s in sim.strokes if s["at"] < PS_TESTS_END],
         "off_travel_m": round(sim.off_travel, 3),
         "unpermitted_travel_m": round(sim.unpermitted_travel, 3),
         "unpermitted_at": sim.unpermitted_at[:10],
@@ -336,6 +361,7 @@ def grade_press(watched: Watched, engine: GradedEngine, report: Report,
                "reached bottom dead centre")
 
     _press_feedback(report, sim, auto, short_dwell, pot)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _press_feedback(report, sim, auto, short_dwell, pot) -> None:
@@ -375,6 +401,7 @@ def _summary_press(evidence: dict, out) -> None:
         f"the tie-down {evidence['tie_down_travel_m'] * 1000:.0f} mm")
     out(f"two-hand press reached bottom dead centre: "
         f"{'yes' if evidence['two_hand_press_reached_bdc'] else 'no'}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -385,13 +412,15 @@ RUBRIC = {
              "Start, dwelling the pot's seconds at the limit switch. OFF: "
              "nothing moves. MANUAL: the ram goes down only while the two-hand "
              "relay's `valid` is made, and comes back when it drops or at the "
-             "bottom."),
+             "bottom. The mushroom is normally closed, stops the down-stroke "
+             "within 200 ms in any mode and latches -- only Reset, then Start, "
+             "cycles again."),
     "build": PressScene,
     "observe": None,
     "grade": grade_press,
     "summary": _summary_press,
-    "duration": 46.0,
-    "references": ("good", "andhands", "ignoresmode"),
+    "duration": PS_EXAM_ENDS_BY,
+    "references": ("good", "andhands", "ignoresmode", "noestop", "startalone"),
     "tags": ("ram.extend, ram.retract, tower.green/yellow/red, panel.green, "
              "panel.red are yours to write; ram.extended, ram.retracted, "
              "ram.fault, bdc.no, bdc.nc, hands.left, hands.right, hands.valid, "

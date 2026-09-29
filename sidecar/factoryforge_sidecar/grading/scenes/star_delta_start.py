@@ -12,8 +12,10 @@ import math
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import PlantScene, Script, declare_stack_light, pot_start
+from ..plant import (OperatorExam, PlantScene, Script, declare_stack_light,
+                     operator_exam_ends_by, pot_start)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "star-delta-start"
@@ -88,6 +90,23 @@ SD_RUNNING_SPEED = 90.0
 #: Stop has to open the main contactor within this, the scan it takes to see
 #: the press plus the contacts' own drop-out.
 SD_STOP_LIMIT = 0.3
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the two starts, the examiner closes the breaker if a start tripped it
+# (as it does before the second), presses Start a third time and puts the
+# E-stop sheet (`plant.OperatorExam`) to the running motor. "Stopped" is the
+# main contacts no longer conducting -- the motor de-energised; it coasts down
+# on its own inertia, which is the machine's and not the program's. The
+# starts, changeovers and stops are marked on the first `SD_TESTS_END`
+# seconds, exactly as before; the third start is the E-stop's.
+
+#: Where the window used to end.
+SD_TESTS_END = 42.0
+SD_BREAKER_AGAIN_AT = SD_TESTS_END + 0.2
+SD_START_AGAIN_AT = SD_TESTS_END + 0.5
+SD_ESTOP_AT = SD_TESTS_END + 1.0
+SD_EXAM_ENDS_BY = operator_exam_ends_by(SD_ESTOP_AT)
 
 
 class Contactor:
@@ -218,7 +237,10 @@ class StarDeltaScene(PlantScene):
             (19.0, self._close_the_breaker),
             (20.0, self._start("loaded")),
             (38.0, self._stop),
+            (SD_BREAKER_AGAIN_AT, self._close_the_breaker),
+            (SD_START_AGAIN_AT, self.panel.press("start")),
         ])
+        self.operator = OperatorExam(self, SD_ESTOP_AT, noun="motor", what="the motor")
 
     # --- the examiner ---
 
@@ -268,6 +290,7 @@ class StarDeltaScene(PlantScene):
         star_c = self.star.conducting_at(now)
         delta_c = self.delta.conducting_at(now)
         supplied = not self.breaker_tripped and main
+        self.operator.driven = supplied
         star = supplied and star_c and not delta_c
         delta_run = supplied and delta_c and not star_c
 
@@ -299,6 +322,8 @@ class StarDeltaScene(PlantScene):
         self.tags.set("motor.current", self.current)
 
     def _record(self, main: bool, delta: bool) -> None:
+        if self.t > SD_TESTS_END:
+            return
         speed = self.speed * 100.0
         if self.starts:
             start = self.starts[-1]
@@ -368,6 +393,7 @@ def grade_star_delta(watched: Watched, engine: GradedEngine, report: Report,
                f"{SD_STOP_LIMIT * 1000:.0f} ms")
 
     _star_delta_feedback(report, sim, pot, early)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _star_delta_feedback(report, sim, pot, early) -> None:
@@ -420,6 +446,7 @@ def _summary_star_delta(evidence: dict, out) -> None:
         out(f"changeover at {c['at']:g}s: {c['speed']:g} % speed, {c['peak_current']:g} A peak")
     shorts = evidence["shorts_at"]
     out(f"star-delta shorts: {shorts if shorts else 'none'}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -428,13 +455,16 @@ RUBRIC = {
     "title": "Star-delta starter",
     "task": ("Start the motor in star, change over to delta when it is up to "
              "the speed on the pot, and never let star and delta conduct "
-             "together. This run loads the machine between its two starts."),
+             "together. This run loads the machine between its two starts. "
+             "The mushroom is normally closed, opens the main contactor within "
+             "200 ms and latches -- only Reset, then Start, runs the motor "
+             "again."),
     "build": StarDeltaScene,
     "observe": None,
     "grade": grade_star_delta,
     "summary": _summary_star_delta,
-    "duration": 42.0,
-    "references": ("good", "samescan", "timed"),
+    "duration": SD_EXAM_ENDS_BY,
+    "references": ("good", "samescan", "timed", "noestop", "startalone"),
     "tags": ("motor.main, motor.star, motor.delta, current_gauge.value, "
              "tower.green/yellow/red, panel.green, panel.red are yours to "
              "write; motor.mainaux, motor.staraux, motor.deltaaux, "

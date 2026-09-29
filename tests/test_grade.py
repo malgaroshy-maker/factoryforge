@@ -52,6 +52,14 @@ DOSING_WINDOW = BD_EXAM_ENDS_BY
 OVEN_WINDOW = OVEN_EXAM_ENDS_BY
 
 
+def window(scene: str) -> float:
+    """A scene's own window. Every scene that marks the operator contract
+    through `plant.OperatorExam` puts the E-stop sheet after its exam (IP-12),
+    so a window shorter than the rubric's ends before the sheet does, and
+    fails the contract checks rather than passing them unexamined."""
+    return grade.RUBRICS[scene]["duration"]
+
+
 def run(*args) -> int:
     return grade.main([str(a) for a in args])
 
@@ -603,7 +611,8 @@ def test_a_station_that_never_stops_at_the_target_fails_the_batch(tmp_path):
 
 
 def test_the_tank_passes_a_controller_that_settles_at_both_ends(tmp_path):
-    code, report = graded(tmp_path, "tank-level-control", "good", 62)
+    code, report = graded(tmp_path, "tank-level-control", "good",
+                          window("tank-level-control"))
     assert code == 0 and report["verdict"] == "PASS"
     phases = report["evidence"]["phases"]
     assert len(phases) == 2 and phases[0]["setpoint"] != phases[1]["setpoint"]
@@ -616,14 +625,16 @@ def test_the_tank_passes_a_controller_that_settles_at_both_ends(tmp_path):
 
 
 def test_float_switches_fail_the_tank_on_settled_error(tmp_path):
-    code, report = graded(tmp_path, "tank-level-control", "bangbang", 62)
+    code, report = graded(tmp_path, "tank-level-control", "bangbang",
+                          window("tank-level-control"))
     assert code == 1 and report["verdict"] == "FAIL"
     assert "hold1.settled" in failed_ids(report)
 
 
 def test_a_setpoint_written_into_the_program_fails_when_the_pot_moves(tmp_path):
     """The check that separates 'reads panel.setpoint' from 'holds 70'."""
-    code, report = graded(tmp_path, "tank-level-control", "fixedsp", 62)
+    code, report = graded(tmp_path, "tank-level-control", "fixedsp",
+                          window("tank-level-control"))
     assert code == 1 and report["verdict"] == "FAIL"
     assert "hold2.settled" in failed_ids(report)
     assert any("written into the program" in line for line in report["feedback"])
@@ -658,7 +669,8 @@ def test_a_thermostat_reaches_the_oven_setpoint_and_still_fails(tmp_path):
 
 
 def test_the_light_curtain_passes_a_controller_that_sorts_on_the_number(tmp_path):
-    code, report = graded(tmp_path, "light-curtain-sorting", "good", 62, seed=5)
+    code, report = graded(tmp_path, "light-curtain-sorting", "good",
+                          window("light-curtain-sorting"), seed=5)
     assert code == 0 and report["verdict"] == "PASS"
     evidence = report["evidence"]
     assert evidence["misrouted"] == []
@@ -671,7 +683,8 @@ def test_the_light_curtain_passes_a_controller_that_sorts_on_the_number(tmp_path
 def test_a_threshold_written_into_the_program_fails_the_light_curtain(tmp_path):
     """The difference between this scene and sorting-by-height: there the rule
     is two bits of wiring, here it is a number that the run changes."""
-    code, report = graded(tmp_path, "light-curtain-sorting", "fixed", 62, seed=5)
+    code, report = graded(tmp_path, "light-curtain-sorting", "fixed",
+                          window("light-curtain-sorting"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "sort.followed_the_measurement" in failed_ids(report)
     wrong = report["evidence"]["misrouted"]
@@ -682,13 +695,15 @@ def test_a_threshold_written_into_the_program_fails_the_light_curtain(tmp_path):
 
 
 def test_diverting_every_second_carton_fails_the_light_curtain(tmp_path):
-    code, report = graded(tmp_path, "light-curtain-sorting", "everyother", 62, seed=5)
+    code, report = graded(tmp_path, "light-curtain-sorting", "everyother",
+                          window("light-curtain-sorting"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "sort.followed_the_measurement" in failed_ids(report)
 
 
 def test_the_roller_line_passes_a_controller_that_weighs_and_spaces(tmp_path):
-    code, report = graded(tmp_path, "roller-line-weighing", "good", 70, seed=5)
+    code, report = graded(tmp_path, "roller-line-weighing", "good",
+                          window("roller-line-weighing"), seed=5)
     assert code == 0 and report["verdict"] == "PASS"
     evidence = report["evidence"]
     assert evidence["shared_the_deck"] == 0
@@ -701,7 +716,8 @@ def test_the_roller_line_passes_a_controller_that_weighs_and_spaces(tmp_path):
 def test_rejecting_on_the_inductive_sensor_fails_when_the_limit_moves(tmp_path):
     """Metal and over-limit are the same cartons at 3000 g and different ones
     at 1500 g, because a tall cardboard carton weighs 2160 g."""
-    code, report = graded(tmp_path, "roller-line-weighing", "metalonly", 70, seed=5)
+    code, report = graded(tmp_path, "roller-line-weighing", "metalonly",
+                          window("roller-line-weighing"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "reject.matched_the_weight" in failed_ids(report)
     wrong = report["evidence"]["misjudged"]
@@ -710,13 +726,15 @@ def test_rejecting_on_the_inductive_sensor_fails_when_the_limit_moves(tmp_path):
 
 
 def test_feeding_faster_than_the_deck_fails_the_roller_line(tmp_path):
-    code, report = graded(tmp_path, "roller-line-weighing", "fastfeed", 70, seed=5)
+    code, report = graded(tmp_path, "roller-line-weighing", "fastfeed",
+                          window("roller-line-weighing"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert {"scale.singulated", "reject.matched_the_weight"} <= failed_ids(report)
 
 
 def test_the_buffer_passes_a_release_measured_in_encoder_pulses(tmp_path):
-    code, report = graded(tmp_path, "accumulation-buffer", "good", 78, seed=5)
+    code, report = graded(tmp_path, "accumulation-buffer", "good",
+                          window("accumulation-buffer"), seed=5)
     assert code == 0 and report["verdict"] == "PASS"
     evidence = report["evidence"]
     assert evidence["escaped_a_raised_blade"] == []
@@ -738,7 +756,8 @@ def test_a_release_timed_in_seconds_fails_when_the_drive_changes(tmp_path):
     """The whole scene. Same command, same blade, a drive whose top speed the
     run halved -- and half as much product out of a release timed on a
     clock."""
-    code, report = graded(tmp_path, "accumulation-buffer", "timed", 78, seed=5)
+    code, report = graded(tmp_path, "accumulation-buffer", "timed",
+                          window("accumulation-buffer"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "release.same_size_at_both_speeds" in failed_ids(report)
     evidence = report["evidence"]
@@ -865,7 +884,8 @@ def test_a_guard_locked_for_good_fails_on_access(tmp_path):
 
 
 def test_the_cell_passes_a_sequence_written_on_feedback(tmp_path):
-    code, report = graded(tmp_path, "pick-and-place-cell", "good", 72, seed=5)
+    code, report = graded(tmp_path, "pick-and-place-cell", "good",
+                          window("pick-and-place-cell"), seed=5)
     assert code == 0 and report["verdict"] == "PASS"
     evidence = report["evidence"]
     assert evidence["dropped"] == [] and evidence["empty_carries_at"] == []
@@ -882,7 +902,8 @@ def test_a_sequence_on_timers_drops_cartons_when_the_axis_slows(tmp_path):
     """Right at one travel speed, which is what makes it worth catching. The
     plant records where on the rail the vacuum was released, so a cycle that
     let go over the middle is a dropped carton and not a slow one."""
-    code, report = graded(tmp_path, "pick-and-place-cell", "timed", 72, seed=5)
+    code, report = graded(tmp_path, "pick-and-place-cell", "timed",
+                          window("pick-and-place-cell"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "cell.nothing_dropped" in failed_ids(report)
     dropped = report["evidence"]["dropped"]
@@ -896,7 +917,8 @@ def test_a_sequence_on_timers_drops_cartons_when_the_axis_slows(tmp_path):
 # --- the scenes IP-14 added --------------------------------------------------
 
 def test_the_star_delta_passes_a_changeover_on_speed_with_a_dead_time(tmp_path):
-    code, report = graded(tmp_path, "star-delta-start", "good", 42, seed=5)
+    code, report = graded(tmp_path, "star-delta-start", "good",
+                          window("star-delta-start"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: both starts really ran, and the exam really loaded the
@@ -910,7 +932,8 @@ def test_the_star_delta_passes_a_changeover_on_speed_with_a_dead_time(tmp_path):
 def test_star_and_delta_in_the_same_scan_trip_the_breaker(tmp_path):
     """The contacts open slower than they close: a changeover in one scan
     overlaps star and delta by 15 ms, which is a short across the supply."""
-    code, report = graded(tmp_path, "star-delta-start", "samescan", 42, seed=5)
+    code, report = graded(tmp_path, "star-delta-start", "samescan",
+                          window("star-delta-start"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "changeover.no_short" in failed_ids(report)
     assert report["evidence"]["shorts_at"]
@@ -920,7 +943,8 @@ def test_star_and_delta_in_the_same_scan_trip_the_breaker(tmp_path):
 def test_a_changeover_on_a_timer_comes_early_on_a_loaded_machine(tmp_path):
     """Right on the empty machine it was calibrated on; half way up the
     run-up once the exam loads the machine."""
-    code, report = graded(tmp_path, "star-delta-start", "timed", 42, seed=5)
+    code, report = graded(tmp_path, "star-delta-start", "timed",
+                          window("star-delta-start"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"changeover.at_speed"}
     first, second = report["evidence"]["changeovers"]
@@ -929,7 +953,8 @@ def test_a_changeover_on_a_timer_comes_early_on_a_loaded_machine(tmp_path):
 
 
 def test_the_servo_passes_a_shuttle_that_waits_for_the_operator(tmp_path):
-    code, report = graded(tmp_path, "servo-positioning", "good", 40, seed=5)
+    code, report = graded(tmp_path, "servo-positioning", "good",
+                          window("servo-positioning"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     fault = report["evidence"]["fault"]
     # Gotcha 16: the fault really was raised mid-move, and the axis really
@@ -939,7 +964,8 @@ def test_the_servo_passes_a_shuttle_that_waits_for_the_operator(tmp_path):
 
 
 def test_acknowledging_a_servo_error_by_itself_is_automatic_restart(tmp_path):
-    code, report = graded(tmp_path, "servo-positioning", "autoack", 40, seed=5)
+    code, report = graded(tmp_path, "servo-positioning", "autoack",
+                          window("servo-positioning"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"error.held_until_reset"}
     fault = report["evidence"]["fault"]
@@ -949,13 +975,19 @@ def test_acknowledging_a_servo_error_by_itself_is_automatic_restart(tmp_path):
 
 
 def test_a_servo_error_nobody_acknowledges_stops_the_axis_for_good(tmp_path):
-    code, report = graded(tmp_path, "servo-positioning", "noack", 40, seed=5)
+    code, report = graded(tmp_path, "servo-positioning", "noack",
+                          window("servo-positioning"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
-    assert failed_ids(report) == {"error.recovered"}
+    # The axis never moves again, so there is nothing for the mushroom to
+    # stop at the end of the run either (IP-12): the E-stop checks it cannot
+    # sit fail with it, and only those.
+    assert failed_ids(report) == {"error.recovered", "estop.stopped_the_axis",
+                                  "estop.restarted_after_reset"}
 
 
 def test_the_cooling_tunnel_passes_split_range_with_a_deadband(tmp_path):
-    code, report = graded(tmp_path, "cooling-tunnel", "good", 80, seed=5)
+    code, report = graded(tmp_path, "cooling-tunnel", "good",
+                          window("cooling-tunnel"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: both actuators really worked -- the heater held the hot
@@ -966,7 +998,8 @@ def test_the_cooling_tunnel_passes_split_range_with_a_deadband(tmp_path):
 
 
 def test_a_tunnel_that_never_runs_its_fan_is_late_to_every_drop(tmp_path):
-    code, report = graded(tmp_path, "cooling-tunnel", "heatonly", 80, seed=5)
+    code, report = graded(tmp_path, "cooling-tunnel", "heatonly",
+                          window("cooling-tunnel"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "cool.arrived_in_time" in failed_ids(report)
     assert "split.no_fighting" not in failed_ids(report)
@@ -977,13 +1010,15 @@ def test_a_tunnel_that_never_runs_its_fan_is_late_to_every_drop(tmp_path):
 def test_a_fan_that_never_stops_fights_the_heater(tmp_path):
     """Holds every setpoint and meets every recipe change -- the one thing it
     gets wrong is the one thing split range is about."""
-    code, report = graded(tmp_path, "cooling-tunnel", "fight", 80, seed=5)
+    code, report = graded(tmp_path, "cooling-tunnel", "fight",
+                          window("cooling-tunnel"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"split.no_fighting"}
 
 
 def test_the_air_receiver_passes_scaled_counts_and_a_proven_valve(tmp_path):
-    code, report = graded(tmp_path, "air-receiver", "good", 75, seed=5)
+    code, report = graded(tmp_path, "air-receiver", "good",
+                          window("air-receiver"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: the receiver really cycled through the band, the exam really
@@ -995,7 +1030,8 @@ def test_the_air_receiver_passes_scaled_counts_and_a_proven_valve(tmp_path):
 
 
 def test_scaling_by_32767_holds_the_receiver_high(tmp_path):
-    code, report = graded(tmp_path, "air-receiver", "by32767", 75, seed=5)
+    code, report = graded(tmp_path, "air-receiver", "by32767",
+                          window("air-receiver"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"receiver.held_the_band"}
     worst = report["evidence"]["worst_outside"]
@@ -1003,19 +1039,22 @@ def test_scaling_by_32767_holds_the_receiver_high(tmp_path):
 
 
 def test_a_valve_trusted_without_its_feedback_hides_a_seizure(tmp_path):
-    code, report = graded(tmp_path, "air-receiver", "nodiscrepancy", 75, seed=5)
+    code, report = graded(tmp_path, "air-receiver", "nodiscrepancy",
+                          window("air-receiver"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"valve.stuck_was_caught"}
 
 
 def test_a_discrepancy_check_with_no_timer_alarms_on_a_healthy_valve(tmp_path):
-    code, report = graded(tmp_path, "air-receiver", "impatient", 75, seed=5)
+    code, report = graded(tmp_path, "air-receiver", "impatient",
+                          window("air-receiver"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"valve.no_false_alarm"}
 
 
 def test_the_press_passes_a_program_that_obeys_its_selector_and_the_relay(tmp_path):
-    code, report = graded(tmp_path, "press-station", "good", 46, seed=5)
+    code, report = graded(tmp_path, "press-station", "good",
+                          window("press-station"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: the ram really cycled in AUTO and really stroked on two hands,
@@ -1030,7 +1069,8 @@ def test_the_press_passes_a_program_that_obeys_its_selector_and_the_relay(tmp_pa
 def test_left_and_right_is_not_the_two_hand_permissive(tmp_path):
     """The examiner ties one palm down and presses the other a second later:
     both bits true, `valid` false -- and a ram that moves on the AND."""
-    code, report = graded(tmp_path, "press-station", "andhands", 46, seed=5)
+    code, report = graded(tmp_path, "press-station", "andhands",
+                          window("press-station"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"mode.manual_needs_both_hands"}
     assert report["evidence"]["tie_down_travel_m"] > 0.1
@@ -1038,13 +1078,15 @@ def test_left_and_right_is_not_the_two_hand_permissive(tmp_path):
 
 
 def test_a_cycle_that_ignores_the_selector_fails_off_and_manual(tmp_path):
-    code, report = graded(tmp_path, "press-station", "ignoresmode", 46, seed=5)
+    code, report = graded(tmp_path, "press-station", "ignoresmode",
+                          window("press-station"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"mode.off_is_off", "mode.manual_needs_both_hands"}
 
 
 def test_the_rotary_index_passes_a_cycle_interlocked_on_its_switches(tmp_path):
-    code, report = graded(tmp_path, "rotary-index", "good", 60, seed=5)
+    code, report = graded(tmp_path, "rotary-index", "good",
+                          window("rotary-index"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: cartons really crossed the deck, on both deck speeds.
@@ -1053,7 +1095,8 @@ def test_the_rotary_index_passes_a_cycle_interlocked_on_its_switches(tmp_path):
 
 
 def test_a_push_timed_on_the_rated_index_meets_a_slowed_deck_half_round(tmp_path):
-    code, report = graded(tmp_path, "rotary-index", "timed", 60, seed=5)
+    code, report = graded(tmp_path, "rotary-index", "timed",
+                          window("rotary-index"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "index.turned_square" in failed_ids(report)
     skewed = report["evidence"]["skewed"]
@@ -1061,14 +1104,16 @@ def test_a_push_timed_on_the_rated_index_meets_a_slowed_deck_half_round(tmp_path
 
 
 def test_turning_the_deck_on_not_extended_turns_it_under_the_plate(tmp_path):
-    code, report = graded(tmp_path, "rotary-index", "notretracted", 60, seed=5)
+    code, report = graded(tmp_path, "rotary-index", "notretracted",
+                          window("rotary-index"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"index.plate_clear_while_turning"}
     assert any("`not extended` is" in line for line in report["feedback"])
 
 
 def test_the_pivot_diverter_passes_a_blade_held_until_the_chute_counts(tmp_path):
-    code, report = graded(tmp_path, "pivot-divert", "good", 75, seed=5)
+    code, report = graded(tmp_path, "pivot-divert", "good",
+                          window("pivot-divert"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: cartons really went both ways, on both belt speeds.
@@ -1078,7 +1123,8 @@ def test_the_pivot_diverter_passes_a_blade_held_until_the_chute_counts(tmp_path)
 
 
 def test_a_blade_held_on_a_stopwatch_lets_cartons_go_once_the_belt_slows(tmp_path):
-    code, report = graded(tmp_path, "pivot-divert", "timed", 75, seed=5)
+    code, report = graded(tmp_path, "pivot-divert", "timed",
+                          window("pivot-divert"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"divert.sorted"}
     misrouted = report["evidence"]["misrouted"]
@@ -1087,7 +1133,8 @@ def test_a_blade_held_on_a_stopwatch_lets_cartons_go_once_the_belt_slows(tmp_pat
 
 
 def test_a_blade_wired_to_the_eye_is_home_before_the_carton_arrives(tmp_path):
-    code, report = graded(tmp_path, "pivot-divert", "unlatched", 75, seed=5)
+    code, report = graded(tmp_path, "pivot-divert", "unlatched",
+                          window("pivot-divert"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert "divert.sorted" in failed_ids(report)
     misrouted = report["evidence"]["misrouted"]
@@ -1097,7 +1144,8 @@ def test_a_blade_wired_to_the_eye_is_home_before_the_carton_arrives(tmp_path):
 
 def test_a_blade_fired_like_a_pusher_hits_the_carton(tmp_path):
     """Every carton still lands in the right lane -- the lesson is how."""
-    code, report = graded(tmp_path, "pivot-divert", "late", 75, seed=5)
+    code, report = graded(tmp_path, "pivot-divert", "late",
+                          window("pivot-divert"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"divert.blade_ready"}
     assert report["evidence"]["struck"] and not report["evidence"]["misrouted"]
@@ -1106,14 +1154,16 @@ def test_a_blade_fired_like_a_pusher_hits_the_carton(tmp_path):
 def test_turning_every_second_carton_fails_the_shuffled_feed(tmp_path):
     """Perfect against the template's own emitter, which alternates: the
     reason the exam's feed is not the engine's (docs/GRADING.md)."""
-    code, report = graded(tmp_path, "pivot-divert", "everyother", 75, seed=5)
+    code, report = graded(tmp_path, "pivot-divert", "everyother",
+                          window("pivot-divert"), seed=5)
     assert code == 1 and failed_ids(report) == {"divert.sorted"}
     misrouted = report["evidence"]["misrouted"]
     assert any(m["tall"] for m in misrouted) and any(not m["tall"] for m in misrouted)
 
 
 def test_the_mezzanine_lift_passes_a_handshake_on_occupied_and_atlevel(tmp_path):
-    code, report = graded(tmp_path, "mezzanine-lift", "good", 75, seed=5)
+    code, report = graded(tmp_path, "mezzanine-lift", "good",
+                          window("mezzanine-lift"), seed=5)
     assert code == 0 and report["verdict"] == "PASS", failed_ids(report)
     evidence = report["evidence"]
     # Gotcha 16: cartons really rode up, on both hoist speeds, every one of
@@ -1126,7 +1176,8 @@ def test_the_mezzanine_lift_passes_a_handshake_on_occupied_and_atlevel(tmp_path)
 
 
 def test_a_discharge_timed_on_the_rated_climb_leaves_the_carriage_between_floors(tmp_path):
-    code, report = graded(tmp_path, "mezzanine-lift", "timed", 75, seed=5)
+    code, report = graded(tmp_path, "mezzanine-lift", "timed",
+                          window("mezzanine-lift"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"lift.discharged_at_level", "lift.delivered"}
     between = report["evidence"]["left_between_floors"]
@@ -1136,12 +1187,102 @@ def test_a_discharge_timed_on_the_rated_climb_leaves_the_carriage_between_floors
 
 
 def test_a_deck_left_running_carries_the_carton_off_the_far_side(tmp_path):
-    code, report = graded(tmp_path, "mezzanine-lift", "nostop", 75, seed=5)
+    code, report = graded(tmp_path, "mezzanine-lift", "nostop",
+                          window("mezzanine-lift"), seed=5)
     assert code == 1 and report["verdict"] == "FAIL"
     assert failed_ids(report) == {"lift.held_aboard", "lift.delivered"}
     ran = report["evidence"]["ran_through"]
     assert ran and all(r["left_height_m"] == 0.0 and r["lane"] == "floor" for r in ran)
     assert any("Stop lift.transfer on lift.occupied" in line for line in report["feedback"])
+
+
+# --- the operator contract on every panel scene (IP-12) ------------------
+#
+# Every scene whose plant builds a `plant.OperatorExam` puts the same E-stop
+# sheet after its exam: the mushroom mid-run, released, Start alone, Reset,
+# Start. Each carries two wrong answers built from its own `good`
+# (`reference/_shared.py`): `noestop`, which never reads the mushroom, and
+# `startalone`, which lets Start alone clear the trip. Each must fail on the
+# contract checks and on nothing else, and `good` must pass having really sat
+# the sheet (gotcha 16) -- struck while running, still while latched, running
+# again after Reset and Start.
+
+CONTRACT_SCENES = sorted(
+    scene for scene, rubric in grade.RUBRICS.items()
+    if getattr(rubric["build"](1), "operator", None) is not None)
+
+
+def test_the_contract_is_marked_on_every_scene_with_a_panel_but_three():
+    """Fifteen through `OperatorExam`; the sorting line, the start / stop
+    station and the guarded cell mark it with code of their own."""
+    assert len(CONTRACT_SCENES) == 15
+    assert not {"sorting-by-height", "start-stop-station",
+                "guarded-cell"} & set(CONTRACT_SCENES)
+    assert set(CONTRACT_SCENES) | {"sorting-by-height", "start-stop-station",
+                                   "guarded-cell"} == set(grade.RUBRICS)
+
+
+def _contract_ids(report: dict) -> tuple[str, set[str]]:
+    stopped = next(c["id"] for c in report["checks"]
+                   if c["id"].startswith("estop.stopped_the_"))
+    return stopped, {"line.started_by_start", stopped, "estop.latched_until_reset",
+                     "estop.restarted_after_reset"}
+
+
+@pytest.mark.parametrize("scene", CONTRACT_SCENES)
+def test_good_sits_the_whole_e_stop_sheet(tmp_path, scene):
+    code, report = graded(tmp_path, scene, "good", window(scene), seed=5)
+    assert code == 0, failed_ids(report)
+    contract = report["evidence"]["operator_contract"]
+    trip = contract["trip"]
+    assert trip["running_at_strike"]
+    assert 0.0 <= trip["last_driven_after_strike_s"] <= contract["allowed_s"]
+    assert trip["driven_while_latched_s"] == 0.0
+    assert trip["cleared_at"] >= contract["sheet"]["restart_at"]
+    assert trip["restarted_at"] - trip["cleared_at"] <= contract["restart_within_s"]
+    assert _contract_ids(report)[1] <= {c["id"] for c in report["checks"]}
+
+
+@pytest.mark.parametrize("scene", CONTRACT_SCENES)
+def test_a_program_that_never_reads_the_mushroom_fails_the_stop_and_the_latch(
+        tmp_path, scene):
+    code, report = graded(tmp_path, scene, "noestop", window(scene), seed=5)
+    stopped, _ = _contract_ids(report)
+    assert code == 1 and failed_ids(report) == {stopped, "estop.latched_until_reset"}
+    assert any("NORMALLY CLOSED" in line for line in report["feedback"])
+
+
+@pytest.mark.parametrize("scene", CONTRACT_SCENES)
+def test_a_program_that_restarts_on_start_alone_fails_the_latch_alone(
+        tmp_path, scene):
+    code, report = graded(tmp_path, scene, "startalone", window(scene), seed=5)
+    assert code == 1 and failed_ids(report) == {"estop.latched_until_reset"}
+    trip = report["evidence"]["operator_contract"]["trip"]
+    sheet = report["evidence"]["operator_contract"]["sheet"]
+    assert trip["latched_driven_at"] >= sheet["start_alone_at"]
+    assert any("on Start alone" in line for line in report["feedback"])
+
+
+def test_a_plant_driven_before_start_fails_on_the_start():
+    """`line.started_by_start` on a plant that stops and starts by itself
+    while it runs: an open valve before anybody pressed Start is caught, and
+    the same valve opening again after Start is not (gotcha 24)."""
+    from factoryforge_sidecar.grading.scenes import _contract
+    from factoryforge_sidecar.grading.scenes import tank_level_control as tank
+    sim = tank.TankScene(5)
+    sim.tags.set("tank.fill", 50.0)
+    for _ in range(50):                  # 0.5 s, before the Start at 1.0 s
+        sim.tick(0.01)
+    sim.tags.set("tank.fill", 0.0)
+    for _ in range(100):
+        sim.tick(0.01)
+    sim.tags.set("tank.fill", 50.0)      # after Start: its own business
+    sim.tick(0.01)
+    report = grade.Report("tank-level-control")
+    _contract.grade_contract(sim.operator, report, sim.t)
+    started = next(c for c in report.checks if c.id == "line.started_by_start")
+    assert not started.ok and "0.01" in started.detail
+    assert sim.operator.ledger.began_unstarted == [0.01]
 
 
 def test_nobody_connecting_is_an_error_rather_than_a_fail(tmp_path):

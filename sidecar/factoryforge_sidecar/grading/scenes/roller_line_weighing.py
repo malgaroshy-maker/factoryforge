@@ -10,9 +10,11 @@ from __future__ import annotations
 from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
-from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, PlantScene,
-                     Script, fault_input, pot_start, remover_catch, shuffled_cycle)
+from ..plant import (CARTON_LENGTH, SHORT_HEIGHT, TALL_HEIGHT, Item, OperatorExam,
+                     PlantScene, Script, fault_input, operator_exam_ends_by, pot_start,
+                     remover_catch, shuffled_cycle)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "roller-line-weighing"
@@ -75,6 +77,19 @@ RW_POT_START = pot_start(_PLANT)
 #: its mind up. Generous: a scan plus a network round trip.
 RW_VERDICT_WINDOW = 0.6
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the checkweighing exam, the E-stop sheet (`plant.OperatorExam`).
+# "Stopped" is both decks: the roller infeed and the scale's own belt. A carton
+# stopped on the scale is still weighed on its peak when it rolls off, so no
+# carton is the E-stop's to misjudge, and the examiner strikes whenever the
+# line is running.
+
+#: Where the window used to end.
+RW_TESTS_END = 70.0
+RW_ESTOP_AT = RW_TESTS_END + 0.5
+RW_EXAM_ENDS_BY = operator_exam_ends_by(RW_ESTOP_AT)
+
 
 class RollerWeighScene(PlantScene):
     name = "roller-line-weighing"
@@ -114,6 +129,8 @@ class RollerWeighScene(PlantScene):
             (1.0, self.panel.press("start")),
             (30.0, self.panel.set_setpoint(self.limits[1])),
         ])
+        self.operator = OperatorExam(self, RW_ESTOP_AT, noun="belts",
+                                     what="the line")
 
         self.items: list[Item] = []
         self.weighed: list[dict] = []
@@ -135,6 +152,7 @@ class RollerWeighScene(PlantScene):
 
         infeed = self.bit("infeed.rotate")
         deck = self.bit("scale.rotate")
+        self.operator.driven = infeed or deck
         for item in self.items:
             on_scale = RW_DECK_FROM <= item.position < RW_DECK_TO
             running = deck if on_scale else infeed
@@ -254,6 +272,7 @@ def grade_roller_weighing(watched: Watched, engine: GradedEngine, report: Report
 
     _roller_feedback(report, watched, sim, judged, alone, shared, wrong, split,
                      per_limit)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _roller_feedback(report, watched, sim, judged, alone, shared, wrong, split,
@@ -318,6 +337,7 @@ def _summary_roller(evidence: dict, out) -> None:
         out(f"  carton {entry['carton']:>3} {entry['grams']:>6} g against "
             f"{entry['limit']} g: {'flagged' if entry['flagged'] else 'passed'}"
             f"{', metal' if entry['metal'] else ''}")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -327,13 +347,15 @@ RUBRIC = {
     "task": ("Checkweigh. Judge each carton on the peak weight it shows "
              "crossing the deck and light panel.red for anything over the "
              "limit on the pot. Two cartons on the deck read as one peak, "
-             "so hold the feed while the scale is loaded."),
+             "so hold the feed while the scale is loaded. The mushroom is "
+             "normally closed, stops both decks within 200 ms and latches -- "
+             "only Reset, then Start, runs them again."),
     "build": RollerWeighScene,
     "observe": None,
     "grade": grade_roller_weighing,
     "summary": _summary_roller,
-    "duration": 70.0,
-    "references": ("good", "metalonly", "fastfeed"),
+    "duration": RW_EXAM_ENDS_BY,
+    "references": ("good", "metalonly", "fastfeed", "noestop", "startalone"),
     "tags": ("infeed.rotate, scale.rotate, emitter.emit, "
              "weight_readout.value, panel.green, panel.red are yours to "
              "write; scale.weight, metal_check.detect, outfeed.count, "

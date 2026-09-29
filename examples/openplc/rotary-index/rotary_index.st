@@ -20,7 +20,11 @@
      turn meets the carton half way round. Turn the deck home the moment
      pusher.extended drops and the rod is still out over it -- between its
      two reeds a cylinder is neither extended nor retracted. Seize the deck
-     (table.fault) mid-turn and neither limit switch is made.
+     (table.fault) mid-turn and neither limit switch is made. The mushroom
+     (panel.estop, normally closed) stops the outfeed and sends neither the
+     deck nor the rod anywhere new within 200 ms and its trip latches:
+     releasing it restarts nothing, and neither does Start or Reset alone
+     -- only Reset, then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

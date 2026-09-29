@@ -11,9 +11,10 @@ from factoryforge_sidecar.tags import Tag
 
 from ..core import GradedEngine, Report, Watched
 from ..plant import (BELT_SURFACE_Y, CARTON_LENGTH, SHORT_HEIGHT, WORK_PLANE_Y,
-                     EngineFeed, Item, PlantScene, Script, Vfd, declare_stack_light,
-                     fault_input, pot_start)
+                     EngineFeed, Item, OperatorExam, PlantScene, Script, Vfd,
+                     declare_stack_light, fault_input, operator_exam_ends_by, pot_start)
 from ..templates import template
+from ._contract import mark_contract, summary_contract
 
 
 SCENE = "pick-and-place-cell"
@@ -83,6 +84,21 @@ PP_TRAVEL_FIRST = _GANTRY.number("travel_speed")
 PP_SLOWDOWN = 0.4
 PP_TRAVEL_THEN = PP_TRAVEL_FIRST * PP_SLOWDOWN
 PP_TRAVEL_CHANGES_AT = 35.0
+
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# After the sequencing exam, the E-stop sheet (`plant.OperatorExam`).
+# "Stopped" is the infeed drive no longer driven (it coasts down its own
+# ramp), the pick station's belt off, and the gantry's travel stopped -- a
+# program stops the axis by holding its target where it is. The column's
+# stroke and the vacuum are not part of it: a column finishes the stroke it
+# was given, and a cup that lets go on an E-stop drops its carton, which
+# `cell.nothing_dropped` marks as it marks any other drop.
+
+#: Where the window used to end.
+PP_TESTS_END = 75.0
+PP_ESTOP_AT = PP_TESTS_END + 0.5
+PP_EXAM_ENDS_BY = operator_exam_ends_by(PP_ESTOP_AT)
 PP_POT_START = pot_start(_PLANT)
 
 #: Numbers `PickPlaceArm.cs` owns and no template sets: the cup's pick zone,
@@ -216,6 +232,8 @@ class PickPlaceScene(PlantScene):
             (1.0, self.panel.press("start")),
             (PP_TRAVEL_CHANGES_AT, self._slow_the_axis),
         ])
+        self._infeed_driven = False
+        self.operator = OperatorExam(self, PP_ESTOP_AT, noun="cell", what="the cell")
 
     def _slow_the_axis(self) -> None:
         """Turn the rail's travel speed down, mid-run.
@@ -259,6 +277,7 @@ class PickPlaceScene(PlantScene):
         self.tags.set("infeed.actual", self.drive.actual)
 
         station = self.bit("pickstation.rotate")
+        self._infeed_driven = self.drive.driven or station
         still: list[Item] = []
         for item in self.items:
             if item is not self.carried:
@@ -288,6 +307,7 @@ class PickPlaceScene(PlantScene):
             reach = PP_LOWER_SPEED * dt
             want = PP_STROKE if self.bit("gantry.lower") else 0.0
             self.extension += max(min(want - self.extension, reach), -reach)
+        self.operator.driven = self._infeed_driven or abs(self.position - was) > 1e-9
         #: The cup's own velocity along the rail, measured the way
         #: `TrackCupVelocity` does it: this tick's movement over this tick.
         velocity = (pp_rail_x(self.position) - pp_rail_x(was)) / dt if dt > 0 else 0.0
@@ -450,6 +470,7 @@ def grade_pick_place(watched: Watched, engine: GradedEngine, report: Report,
                f"{sim.empty_carries[:5]}s")
 
     _pick_place_feedback(report, watched, sim, fast, slow)
+    mark_contract(sim.operator, report, watched.sim_time)
 
 
 def _pick_place_feedback(report, watched, sim, fast, slow) -> None:
@@ -518,6 +539,7 @@ def _summary_pick_place(evidence: dict, out) -> None:
     for entry in evidence["dropped"][:8]:
         out(f"  carton {entry['carton']:>3} dropped at {entry['position']:.0f} % "
             f"of the rail, {entry['at']:.1f}s ({entry['phase']})")
+    summary_contract(evidence, out)
 
 
 #: What this scene marks, and what it says it marks. `grading.registry`
@@ -527,13 +549,16 @@ RUBRIC = {
     "task": ("Sequence three motions against feedback, not timers: ramp "
              "the infeed, index each carton, then travel, lower, grip, "
              "raise, travel, release onto the outfeed. This run slows the "
-             "rail down halfway through."),
+             "rail down halfway through. The mushroom is normally closed, "
+             "stops the infeed, the pick station and the gantry within 200 ms "
+             "without dropping what the cup holds, and latches -- only Reset, "
+             "then Start, carries on."),
     "build": PickPlaceScene,
     "observe": None,
     "grade": grade_pick_place,
     "summary": _summary_pick_place,
-    "duration": 75.0,
-    "references": ("good", "timed"),
+    "duration": PP_EXAM_ENDS_BY,
+    "references": ("good", "timed", "noestop", "startalone"),
     "tags": ("infeed.run, infeed.speed, pickstation.rotate, emitter.emit, "
              "scanner.enable, gantry.target, gantry.lower, gantry.grip, "
              "rate.value, alarm.beacon, alarm.horn, panel.green, panel.red "

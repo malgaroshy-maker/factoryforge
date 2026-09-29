@@ -12,7 +12,7 @@ from ..lockstep import run_scan
 from ..plant import CARTON_LENGTH
 from ..scenes.accumulation_buffer import (AB_BLADE_POS, AB_BLADE_THICKNESS, AB_PITCH,
                                           AB_START_POS)
-from ._shared import Scanner
+from ._shared import Scanner, contract_references
 
 
 SCENE = "accumulation-buffer"
@@ -112,4 +112,5 @@ async def _ab_timed(bus, stop):
     await _ab_body(bus, stop, by_pulses=False)
 
 
-REFERENCES = {"good": _ab_good, "timed": _ab_timed}
+REFERENCES = {"good": _ab_good, "timed": _ab_timed,
+              **contract_references(_ab_good)}

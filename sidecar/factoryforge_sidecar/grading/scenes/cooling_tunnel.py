@@ -11,8 +11,10 @@ import math
 
 from factoryforge_sidecar.tags import Tag
 
-from ..plant import Script, declare_stack_light, pot_start
+from ..plant import (OperatorExam, Script, declare_stack_light,
+                     operator_exam_ends_by, pot_start)
 from ..templates import TemplateError, template
+from ._contract import mark_contract, summary_contract
 from ._regulator import Regulator, _summary_regulator, grade_regulator
 
 
@@ -92,6 +94,21 @@ CT_ARRIVED = 3.0
 #: one second of both flat out. A deadband crossing costs a fraction of that.
 CT_FIGHT_LIMIT = 1.0
 
+# --- the operator contract (IP-12) ------------------------------------------
+#
+# Once the middle hold has had its phase, the E-stop sheet
+# (`plant.OperatorExam`). The plate is holding on a standing heater output, and
+# "stopped" is the heater at zero and the fan not run: neither actuator driven
+# while the mushroom is in or its trip is latched. A fan still spinning down on
+# its own ramp is not driven -- `fan.airflow` lags the command, as the brief
+# says. The holds, the arrival and the overlap are measured over the recipe
+# alone, up to `CT_HOLDS_END`, exactly as they were before the sheet existed.
+
+#: The middle hold ends here, where the window used to.
+CT_HOLDS_END = 80.0
+CT_ESTOP_AT = CT_HOLDS_END + 0.5
+CT_EXAM_ENDS_BY = operator_exam_ends_by(CT_ESTOP_AT)
+
 
 class CoolingTunnelScene(Regulator):
     name = "cooling-tunnel"
@@ -131,8 +148,10 @@ class CoolingTunnelScene(Regulator):
             (0.2, self._phase(self.first, until=CT_DROP_AT)),
             (1.0, self.panel.press("start")),
             (CT_DROP_AT, self._phase(self.low, until=CT_MID_AT)),
-            (CT_MID_AT, self._phase(self.mid, until=10_000.0)),
+            (CT_MID_AT, self._phase(self.mid, until=CT_HOLDS_END)),
         ])
+        self.operator = OperatorExam(self, CT_ESTOP_AT, noun="heater_and_fan",
+                                     what="the heater and the fan")
 
     def measure(self) -> float:
         return self.temperature
@@ -155,13 +174,15 @@ class CoolingTunnelScene(Regulator):
         self.temperature = max(self.temperature + (heat - loss) / max(CT_MASS, 0.01) * dt,
                                CT_AMBIENT)
 
+        self.operator.driven = power > 0.0 or target > 0.0
         both = min(power, self.airflow)
-        if both > 1.0:
+        recipe = self.t <= CT_HOLDS_END
+        if both > 1.0 and recipe:
             self.fight += both / 100.0 * dt
             self.fight_seconds += dt
-        if power > 1.0:
+        if power > 1.0 and recipe:
             self.heater_seconds += dt
-        if self.airflow > 1.0:
+        if self.airflow > 1.0 and recipe:
             self.fan_seconds += dt
         if (self.arrived_at is None and self.t >= CT_DROP_AT
                 and self.temperature <= self.low + CT_ARRIVED):
@@ -221,6 +242,13 @@ def grade_cooling_tunnel(watched, engine, report, duration) -> None:
             f"means one actuator at a time, with a deadband between them so the "
             f"handover does not chatter.")
 
+    mark_contract(sim.operator, report, watched.sim_time)
+
+
+def _summary_cooling_tunnel(evidence: dict, out) -> None:
+    _summary_regulator(evidence, out)
+    summary_contract(evidence, out)
+
 
 #: What this scene marks, and what it says it marks. `grading.registry`
 #: files it under `SCENE`.
@@ -228,13 +256,15 @@ RUBRIC = {
     "title": "Cooling tunnel",
     "task": ("Hold the product at the temperature on the pot with two "
              "actuators pulling opposite ways: a heater and a fan. The recipe "
-             "drops sharply and then climbs again. Never run both at once."),
+             "drops sharply and then climbs again. Never run both at once. "
+             "The mushroom is normally closed, stops both within 200 ms and "
+             "latches -- only Reset, then Start, brings them back."),
     "build": CoolingTunnelScene,
     "observe": None,
     "grade": grade_cooling_tunnel,
-    "summary": _summary_regulator,
-    "duration": 80.0,
-    "references": ("good", "heatonly", "fight"),
+    "summary": _summary_cooling_tunnel,
+    "duration": CT_EXAM_ENDS_BY,
+    "references": ("good", "heatonly", "fight", "noestop", "startalone"),
     "tags": ("oven.heater, fan.run, fan.speed, temp_gauge.value, "
              "tower.green/yellow/red, panel.green, panel.red are yours to "
              "write; oven.temperature, oven.attemp, oven.fault, fan.airflow, "

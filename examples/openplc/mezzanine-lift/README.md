@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Run both belts, and emit a carton only once the last one is aboard the lift, so one is on its way at a time. With the carriage at the floor and lift.ready made, run the carriage's deck (lift.transfer) to draw the carton aboard, and stop it the moment lift.occupied says the carton is on. Let it settle for the pot's seconds, then call the carriage to level 1 (lift.target := 1). Only when lift.atlevel is made with lift.level = 1, run the deck again to put the carton onto the outfeed; when out_eye sees it there, stop the deck and send the carriage back to level 0.
 
-**Done when.** Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut.
+**Done when.** Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut. The mushroom (panel.estop, normally closed) stops both belts and the carriage's deck and calls the carriage nowhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -97,7 +97,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x8 | `PanelEstop` %IX101.0 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x4 | `PanelGreen` %QX100.4 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x5 | `PanelRed` %QX100.5 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x9 | `PanelReset` %IX101.1 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x9 | `PanelReset` %IX101.1 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x6 + 3x7 | `PanelSetpointHi` %IW106 + `PanelSetpointLo` %IW107 -> `PanelSetpoint` : REAL | the operator's pot, 0.5..3 s (starts at 1) | yes |
 | `panel.start` | PLC reads | bit | 1x10 | `PanelStart` %IX101.2 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x11 | `PanelStop` %IX101.3 | Stop button, momentary: a short pulse per press | yes |

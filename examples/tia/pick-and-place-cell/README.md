@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Sequence three motions against feedback, not timers. Ramp the infeed drive, read each carton's code at the scanner, then travel · lower · grip · raise · travel · release to put it on the outfeed. The gantry reports whether the vacuum actually caught anything.
 
-**Done when.** Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave.
+**Done when.** Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave. The mushroom (panel.estop, normally closed) stops the infeed, the pick station and the gantry's travel, without letting go of what the cup holds, within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -103,7 +103,7 @@ names.
 | `gantry.raised` | PLC reads | `GantryRaised` | Bool | DBX34.5 | cup fully up | yes |
 | `infeed.fault` | PLC reads | `InfeedFault` | Bool | DBX34.6 | drive fault: TRUE = faulted; a faulted drive does not turn |  |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX34.7 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX35.0 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX35.0 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX35.1 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX35.2 | Stop button, momentary: a short pulse per press | yes |
 | `pickstation.fault` | PLC reads | `PickstationFault` | Bool | DBX35.3 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |

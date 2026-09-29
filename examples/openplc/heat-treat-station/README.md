@@ -5,7 +5,7 @@ hand; regenerate. The program's logic section is yours.*
 
 **The task.** Hold the plate at the temperature on the panel's pot. The plant is a first-order lag with a loss to ambient, so holding a temperature needs a standing output — and proportional control can only make one out of a standing error.
 
-**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy.
+**Done when.** With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy. The mushroom (panel.estop, normally closed) cuts the heater within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -87,7 +87,7 @@ addresses are decimal, as the sidecar prints them: `0x10` is coil ten.
 | `panel.estop` | PLC reads | bit | 1x2 | `PanelEstop` %IX100.2 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
 | `panel.green` | PLC writes | bit | 0x2 | `PanelGreen` %QX100.2 | green lamp on the panel |  |
 | `panel.red` | PLC writes | bit | 0x3 | `PanelRed` %QX100.3 | red lamp on the panel |  |
-| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | bit | 1x3 | `PanelReset` %IX100.3 | Reset button, momentary: a short pulse per press | yes |
 | `panel.setpoint` | PLC reads | float | 3x2 + 3x3 | `PanelSetpointHi` %IW102 + `PanelSetpointLo` %IW103 -> `PanelSetpoint` : REAL | the operator's pot, 20..280 C (starts at 180) | yes |
 | `panel.start` | PLC reads | bit | 1x4 | `PanelStart` %IX100.4 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | bit | 1x5 | `PanelStop` %IX100.5 | Stop button, momentary: a short pulse per press | yes |

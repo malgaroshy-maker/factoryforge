@@ -31,8 +31,8 @@
     "scene": "tank-level-control",
     "brief": {
       "task": "Hold the tank at the level the panel's pot asks for, using the fill and drain valves. Outflow follows Torricelli, so the process gain changes with level: a controller tuned at the top overshoots at the bottom.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · tank.fill · tank.drain · tank.level · level_readout.value",
-      "done": "The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.reset · panel.estop · tank.fill · tank.drain · tank.level · level_readout.value",
+      "done": "The level settles within a few percent of the setpoint and holds there, and it still settles after you move the pot to a different level. A seized valve (tank.fault) keeps its opening while your command reads zero. The mushroom (panel.estop, normally closed) shuts both valves within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -43,8 +43,8 @@
     "scene": "light-curtain-sorting",
     "brief": {
       "task": "Sort on a measurement rather than on two bits. The curtain reports how tall each carton is, in metres, so the threshold is yours to choose — put it on the panel's pot and you can change your mind without editing the program.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · belt.rotate · emitter.emit · height_gauge.height · height_gauge.blocked · diverter.extend · diverter.extended · diverter.retracted · tall_count.count · short_count.count",
-      "done": "Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.reset · panel.estop · belt.rotate · emitter.emit · height_gauge.height · height_gauge.blocked · diverter.extend · diverter.extended · diverter.retracted · tall_count.count · short_count.count",
+      "done": "Cartons above your threshold go down the chute and the rest pass, and moving the pot moves the boundary with no other change. The two counters together equal what the curtain measured. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -55,8 +55,8 @@
     "scene": "roller-line-weighing",
     "brief": {
       "task": "Checkweigh. Judge each carton on the peak weight it shows as it crosses the deck, and reject anything over the limit on the panel's pot. The inductive sensor sees metal only, and on this line the steel cartons are also the heavy ones — so two independent instruments should agree.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · infeed.rotate · scale.rotate · scale.weight · metal_check.detect · emitter.emit · outfeed.count · weight_readout.value · panel.red",
-      "done": "The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.reset · panel.estop · infeed.rotate · scale.rotate · scale.weight · metal_check.detect · emitter.emit · outfeed.count · weight_readout.value · panel.red",
+      "done": "The cartons you flag over-limit are the same ones the inductive sensor flags as metal. Watch the spacing: two cartons on the deck at once read as one peak, so a real checkweigher line holds the feed while the scale is loaded. The mushroom (panel.estop, normally closed) stops both decks within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -67,8 +67,8 @@
     "scene": "pick-and-place-cell",
     "brief": {
       "task": "Sequence three motions against feedback, not timers. Ramp the infeed drive, read each carton's code at the scanner, then travel · lower · grip · raise · travel · release to put it on the outfeed. The gantry reports whether the vacuum actually caught anything.",
-      "uses": "panel.start · panel.stop · panel.estop · infeed.run · infeed.speed · infeed.actual · scanner.enable · scanner.code · scanner.read · scanner.present · gantry.target · gantry.position · gantry.inposition · gantry.lower · gantry.lowered · gantry.raised · gantry.grip · gantry.holding · outfeed.count",
-      "done": "Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · infeed.run · infeed.speed · infeed.actual · scanner.enable · scanner.code · scanner.read · scanner.present · gantry.target · gantry.position · gantry.inposition · gantry.lower · gantry.lowered · gantry.raised · gantry.grip · gantry.holding · outfeed.count",
+      "done": "Every carton fed reaches the outfeed, and gantry.holding is true on every carry — a cycle that runs with holding false carried air. Careful with inposition: a target written this scan does not reach the machine until the next one, so on the scan that issues a move it still reports the place you are trying to leave. The mushroom (panel.estop, normally closed) stops the infeed, the pick station and the gantry's travel, without letting go of what the cup holds, within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -79,8 +79,8 @@
     "scene": "accumulation-buffer",
     "brief": {
       "task": "Let cartons pile up behind the blade stop on a belt that never stops, then release a batch. Time the release by encoder pulses rather than by seconds: the pot is a release window in pulses, which is a distance.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · buffer.run · buffer.speed · enc.count · enc.reset · stop.raise · stop.up · stop.down · exit_eye.detect · outfeed.rotate · released.count · count_display.value",
-      "done": "Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.reset · panel.estop · buffer.run · buffer.speed · enc.count · enc.reset · stop.raise · stop.up · stop.down · exit_eye.detect · outfeed.rotate · released.count · count_display.value",
+      "done": "Nothing gets past a raised blade while the belt keeps running, and the same pulse window releases the same amount of product at any drive speed — turn buffer.speed up and the release takes half as long and lets out the same number. A timer would have let out twice as many. The mushroom (panel.estop, normally closed) stops the buffer's drive and the outfeed within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -91,8 +91,8 @@
     "scene": "heat-treat-station",
     "brief": {
       "task": "Hold the plate at the temperature on the panel's pot. The plant is a first-order lag with a loss to ambient, so holding a temperature needs a standing output — and proportional control can only make one out of a standing error.",
-      "uses": "panel.setpoint · panel.start · panel.stop · panel.estop · oven.heater · oven.temperature · oven.attemp · temp_gauge.value · temp_readout.value · alarm.beacon · alarm.horn · oven.fault",
-      "done": "With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy."
+      "uses": "panel.setpoint · panel.start · panel.stop · panel.reset · panel.estop · oven.heater · oven.temperature · oven.attemp · temp_gauge.value · temp_readout.value · alarm.beacon · alarm.horn · oven.fault",
+      "done": "With proportional gain alone the plate parks visibly short of setpoint — measure that offset. Add integral action and it closes. Then fail the element (oven.fault) and watch oven.heater keep reading what you commanded while the temperature falls: the output tells you nothing, only the measurement does. Light alarm.beacon within five seconds of the failure and keep it lit — and never while the element is healthy. The mushroom (panel.estop, normally closed) cuts the heater within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -116,7 +116,7 @@
     "brief": {
       "task": "Dose the number of litres on the panel's pot into the tank, then transfer the batch out. Do it with two loops: an inner one that trims pump.speed until meter.rate is the dosing rate you want, and an outer one that watches meter.total and decides what that rate should be — full rate at first, tapering over the last few litres so the cut-off does not carry you past the number. Zero the totaliser before each batch, and remember its reset is a level, not an edge.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · pump.run · pump.speed · pump.flow · pump.fault · meter.rate · meter.total · meter.reset · tank.level · tank.drain · flow_gauge.value · total_display.value · level_readout.value · panel.green · panel.red",
-      "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent. Drop pump.run within those two seconds, and do not dose again by yourself when the pump comes back: a dose that ended on a fault waits for Reset and Start."
+      "done": "The batch lands within a litre or two of the pot, and the tank agrees: 20 L into a 200 L tank is 10 % of level, measured by an instrument that is not the meter. Then halve your dosing rate and run the same recipe — the same litres, in about twice the time. A batch timed in seconds would have delivered half. Finally fail the pump mid-dose (pump.fault) and watch pump.speed hold at whatever you commanded while meter.rate collapses: the flow loop knows within two seconds, and the level will not have moved a whole percent. Drop pump.run within those two seconds, and do not dose again by yourself when the pump comes back: a dose that ended on a fault waits for Reset and Start. The mushroom (panel.estop, normally closed) stops the pump within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -140,7 +140,7 @@
     "brief": {
       "task": "Start the motor in star -- main and star contactors -- change over to delta when motor.speed reaches the speed on the panel's pot, and drop everything on Stop. The changeover timing is yours: there is no timer in the starter. Star and delta closed together is a short circuit, and contacts close in 30 ms but take 45 ms to stop conducting, so wait for motor.staraux to fall before you energise delta.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · motor.main · motor.star · motor.delta · motor.mainaux · motor.staraux · motor.deltaaux · motor.breaker · motor.overload · motor.speed · motor.current · current_gauge.value · tower.green · tower.yellow · tower.red",
-      "done": "The motor runs up in star, changes over at the pot's speed with a modest current step, and runs on in delta, and motor.breaker never drops. Drop star and energise delta in the same scan and the breaker trips, and stays tripped until somebody closes it by hand at the starter. Then load the machine (the starter's Motor Load) and start again: the star run-up takes about twice as long, so a changeover timed in seconds comes half way up it and draws nearly the direct-on-line current. Only motor.speed knows when the motor is ready."
+      "done": "The motor runs up in star, changes over at the pot's speed with a modest current step, and runs on in delta, and motor.breaker never drops. Drop star and energise delta in the same scan and the breaker trips, and stays tripped until somebody closes it by hand at the starter. Then load the machine (the starter's Motor Load) and start again: the star run-up takes about twice as long, so a changeover timed in seconds comes half way up it and draws nearly the direct-on-line current. Only motor.speed knows when the motor is ready. The mushroom (panel.estop, normally closed) opens the main contactor within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -152,7 +152,7 @@
     "brief": {
       "task": "Shuttle the axis between station A at 100 mm and station B, the panel's pot, dwelling a second at each, from Start until Stop. The drive does nothing until axis.enable has been on long enough for axis.ready, and every move needs axis.velocity as well as axis.target. When the drive faults it stops itself and latches axis.error: hold your sequence, show it, and acknowledge -- a rising edge of axis.ack -- only when the operator presses Reset and axis.fault has gone.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · axis.enable · axis.ready · axis.target · axis.velocity · axis.position · axis.inposition · axis.error · axis.ack · axis.fault · position_display.value · tower.green · tower.yellow · tower.red",
-      "done": "The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to."
+      "done": "The carriage stops on A and on B in turn, and on the new B as soon as you turn the pot. Raise axis.fault mid-move and the carriage quick-stops; clear it, and nothing moves until somebody presses Reset -- a program that acknowledges on its own is automatic restart by another name. Careful with inposition: on the scan that writes a new target it still describes the old one, so arrive on axis.position against the station you are going to. The mushroom (panel.estop, normally closed) stops the axis within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -163,8 +163,8 @@
     "scene": "cooling-tunnel",
     "brief": {
       "task": "Hold the product at the temperature on the panel's pot. The heater can only push the temperature up and the room takes heat away slowly, so the fan is how it comes down fast: split one controller's output, heater above zero and fan below it, with a deadband between them. Never run both at once. fan.speed is a reference -- the fan ramps, and fan.airflow is what it is really delivering.",
-      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · oven.heater · oven.temperature · oven.attemp · oven.fault · fan.run · fan.speed · fan.airflow · fan.fault · temp_gauge.value · tower.green · tower.yellow · tower.red",
-      "done": "The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · oven.heater · oven.temperature · oven.attemp · oven.fault · fan.run · fan.speed · fan.airflow · fan.fault · temp_gauge.value · tower.green · tower.yellow · tower.red",
+      "done": "The product settles within a few degrees of the pot and holds there. Drop the pot 60 C and it comes down in seconds with the fan, not in a quarter of a minute on the room; raise it again and the heater takes back over with the fan stopped. A fan left running while the heater trims holds every setpoint and heats the air it blows away -- watch oven.heater and fan.airflow and they are never both up. Fail the fan (fan.fault) and fan.speed keeps reading your reference while the airflow collapses. The mushroom (panel.estop, normally closed) stops the heater and the fan within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -176,7 +176,7 @@
     "brief": {
       "task": "While the station runs, keep the receiver between the pot less 0.5 bar and the pot: open receiver.supply at the bottom of the band, close it at the top. receiver.pressure is the card's raw count -- 0 at 4 mA, 27648 at 20 mA, over 0..10 bar -- so scale it (NORM_X, then SCALE_X) and show bar on the gauge. Open the isolation valve while the station runs and prove it by valve.opened: it takes 2 s to travel, and if it has not arrived when that and a margin have run out, it has failed -- alarm, and stop.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · receiver.supply · receiver.pressure · receiver.wirebreak · valve.open · valve.opened · valve.closed · valve.fault · pressure_gauge.value · alarm.beacon · alarm.horn",
-      "done": "The needle on the receiver's own gauge and the one you drive agree, and the receiver cycles inside the band -- still after the plant draws harder (the receiver's Consumption) and after you move the pot. Divide by 32767 instead of 27648 and everything reads 16 % low and the receiver runs 16 % high. Seize the valve (valve.fault) and Start: valve.opened never comes, and only a timer on the feedback notices -- but a check without one alarms on every healthy start, because for two seconds neither limit switch is made."
+      "done": "The needle on the receiver's own gauge and the one you drive agree, and the receiver cycles inside the band -- still after the plant draws harder (the receiver's Consumption) and after you move the pot. Divide by 32767 instead of 27648 and everything reads 16 % low and the receiver runs 16 % high. Seize the valve (valve.fault) and Start: valve.opened never comes, and only a timer on the feedback notices -- but a check without one alarms on every healthy start, because for two seconds neither limit switch is made. The mushroom (panel.estop, normally closed) shuts the supply and drops the isolation valve within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -188,7 +188,7 @@
     "brief": {
       "task": "Run the press in the mode mode.position says (0 MAN, 1 OFF, 2 AUTO), read every scan. AUTO: from Start, stroke the ram down to the bottom-dead-centre switch bdc.no, hold it there for the pot's seconds, bring it back up, and repeat until Stop or the selector leaves AUTO. OFF: the ram goes up and stays up. MAN: the ram goes down only while the two-hand relay's hands.valid is made, and comes back up when it drops or at bdc.no; the next stroke needs both hands off first.",
       "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · mode.position · hands.left · hands.right · hands.valid · ram.extend · ram.retract · ram.extended · ram.retracted · bdc.no · bdc.nc · tower.green · tower.yellow · tower.red",
-      "done": "In AUTO the press cycles on its own; turn the selector to OFF mid-stroke and the ram goes straight back up, and does not come down again until AUTO and Start. In MAN a click on both palms together strokes it; click one, wait a second and click the other, and hands.left and hands.right both read true while hands.valid does not -- the ram must not move, because that is what a taped-down button looks like. Take your hands off mid-stroke (a single click holds for two seconds, less than a stroke) and the ram comes back up."
+      "done": "In AUTO the press cycles on its own; turn the selector to OFF mid-stroke and the ram goes straight back up, and does not come down again until AUTO and Start. In MAN a click on both palms together strokes it; click one, wait a second and click the other, and hands.left and hands.right both read true while hands.valid does not -- the ram must not move, because that is what a taped-down button looks like. Take your hands off mid-stroke (a single click holds for two seconds, less than a stroke) and the ram comes back up. The mushroom (panel.estop, normally closed) stops the ram's down-stroke in any mode within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -199,8 +199,8 @@
     "scene": "rotary-index",
     "brief": {
       "task": "With the deck home, the rod back and deck_eye clear, drop a carton on the deck (emitter.emit), let it settle for the pot's seconds, and turn the deck a quarter (table.index). When table.atindex is made, sweep the carton onto the running outfeed with the cylinder -- two coils, two reeds -- and only once pusher.retracted is made turn the deck home again. The deck has no rollers: the only way on is the emitter and the only way off is the pusher.",
-      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · emitter.emit · table.index · table.athome · table.atindex · table.fault · pusher.extend · pusher.retract · pusher.extended · pusher.retracted · deck_eye.detect · outfeed.rotate · done.count · tower.green · tower.yellow · tower.red",
-      "done": "Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · emitter.emit · table.index · table.athome · table.atindex · table.fault · pusher.extend · pusher.retract · pusher.extended · pusher.retracted · deck_eye.detect · outfeed.rotate · done.count · tower.green · tower.yellow · tower.red",
+      "done": "Every carton leaves the deck turned a quarter and done.count climbs one per cycle. Then slow the deck (the turntable's Index Speed) and nothing changes but the cycle time: a push timed on the rated quarter turn meets the carton half way round. Turn the deck home the moment pusher.extended drops and the rod is still out over it -- between its two reeds a cylinder is neither extended nor retracted. Seize the deck (table.fault) mid-turn and neither limit switch is made. The mushroom (panel.estop, normally closed) stops the outfeed and sends neither the deck nor the rod anywhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -211,8 +211,8 @@
     "scene": "pivot-divert",
     "brief": {
       "task": "Run the belt and emit a carton every panel.setpoint seconds. Two beams cross the belt at the same place: entry_eye, low, sees every carton, and tall_eye, high, sees only the tall ones. Every tall carton goes into the chute and every short one runs on to the end. Swing the blade across (gate.divert) as soon as tall_eye sees a tall carton, and hold it there until tall_count.count says the carton has arrived in the chute -- then home it for the short one behind. A turned carton slides along the blade, driven only by the belt under it: it is off the belt after about two metres of belt travel past the eyes, which at a slower belt takes longer.",
-      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · belt.rotate · belt.fault · emitter.emit · entry_eye.detect · tall_eye.detect · gate.divert · gate.diverted · gate.home · gate.fault · tall_count.count · short_count.count",
-      "done": "Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · belt.rotate · belt.fault · emitter.emit · entry_eye.detect · tall_eye.detect · gate.divert · gate.diverted · gate.home · gate.fault · tall_count.count · short_count.count",
+      "done": "Tall cartons slide along the blade into the chute and short ones pass the parked blade, with the belt running the whole time. Slow the belt (its Belt Speed slider) and nothing changes but the spacing: a blade homed on a timer set at the rated speed lets a tall carton go half way along it, and it rides on to the end. Drive gate.divert straight from tall_eye.detect and the blade is home again before the carton gets there. Swing the blade out only when the carton reaches it, as you would fire a pusher, and it still lands in the chute -- because the blade hit it. Seize the drive (gate.fault) mid-swing and neither gate.home nor gate.diverted is made. The mushroom (panel.estop, normally closed) stops the belt within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   },
   {
@@ -223,8 +223,8 @@
     "scene": "mezzanine-lift",
     "brief": {
       "task": "Run both belts, and emit a carton only once the last one is aboard the lift, so one is on its way at a time. With the carriage at the floor and lift.ready made, run the carriage's deck (lift.transfer) to draw the carton aboard, and stop it the moment lift.occupied says the carton is on. Let it settle for the pot's seconds, then call the carriage to level 1 (lift.target := 1). Only when lift.atlevel is made with lift.level = 1, run the deck again to put the carton onto the outfeed; when out_eye sees it there, stop the deck and send the carriage back to level 0.",
-      "uses": "panel.start · panel.stop · panel.estop · panel.setpoint · emitter.emit · infeed.rotate · gate_eye.detect · lift.target · lift.transfer · lift.level · lift.atlevel · lift.height · lift.occupied · lift.ready · lift.fault · outfeed.rotate · out_eye.detect · done.count · spill.count",
-      "done": "Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut."
+      "uses": "panel.start · panel.stop · panel.reset · panel.estop · panel.setpoint · emitter.emit · infeed.rotate · gate_eye.detect · lift.target · lift.transfer · lift.level · lift.atlevel · lift.height · lift.occupied · lift.ready · lift.fault · outfeed.rotate · out_eye.detect · done.count · spill.count",
+      "done": "Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut. The mushroom (panel.estop, normally closed) stops both belts and the carriage's deck and calls the carriage nowhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start."
     }
   }
 ]

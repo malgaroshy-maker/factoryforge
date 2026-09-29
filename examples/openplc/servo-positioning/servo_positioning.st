@@ -20,7 +20,10 @@
      program that acknowledges on its own is automatic restart by another
      name. Careful with inposition: on the scan that writes a new target it
      still describes the old one, so arrive on axis.position against the
-     station you are going to.
+     station you are going to. The mushroom (panel.estop, normally closed)
+     stops the axis within 200 ms and its trip latches: releasing it
+     restarts nothing, and neither does Start or Reset alone -- only Reset,
+     then Start.
 
    HOW IT IS WIRED
      FactoryForge is the Modbus slave; OpenPLC is the master and polls it.

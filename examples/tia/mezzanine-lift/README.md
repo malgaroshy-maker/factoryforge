@@ -5,7 +5,7 @@ hand; regenerate. The function block's body is yours.*
 
 **The task.** Run both belts, and emit a carton only once the last one is aboard the lift, so one is on its way at a time. With the carriage at the floor and lift.ready made, run the carriage's deck (lift.transfer) to draw the carton aboard, and stop it the moment lift.occupied says the carton is on. Let it settle for the pot's seconds, then call the carriage to level 1 (lift.target := 1). Only when lift.atlevel is made with lift.level = 1, run the deck again to put the carton onto the outfeed; when out_eye sees it there, stop the deck and send the carriage back to level 0.
 
-**Done when.** Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut.
+**Done when.** Every carton rides up and done.count climbs one per trip. Slow the hoist (the lift's Hoist Speed slider) and nothing changes but the trip time: a discharge timed on the rated climb runs the carton off a carriage still between floors, onto the mezzanine floor, and spill.count counts it. Leave the deck running after lift.occupied and the carton runs straight across the carriage and off the far side before it has left the floor. The lift keeps its own gate: a carton that arrives while the carriage is away waits on the belt, whatever the program does. Seize the hoist (lift.fault) between floors and neither level is made, and the gate stays shut. The mushroom (panel.estop, normally closed) stops both belts and the carriage's deck and calls the carriage nowhere new within 200 ms and its trip latches: releasing it restarts nothing, and neither does Start or Reset alone -- only Reset, then Start.
 
 | File | What it is |
 |---|---|
@@ -95,7 +95,7 @@ names.
 | `out_eye.detect` | PLC reads | `OutEyeDetect` | Bool | DBX26.6 | TRUE while anything breaks the beam to the reflector | yes |
 | `outfeed.fault` | PLC reads | `OutfeedFault` | Bool | DBX26.7 | drive fault: TRUE = faulted; a faulted drive does not turn, whatever it is told |  |
 | `panel.estop` | PLC reads | `PanelEstop` | Bool | DBX27.0 | E-stop, normally closed: TRUE = healthy, FALSE = pressed; stays pressed until pulled out | yes |
-| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX27.1 | Reset button, momentary: a short pulse per press |  |
+| `panel.reset` | PLC reads | `PanelReset` | Bool | DBX27.1 | Reset button, momentary: a short pulse per press | yes |
 | `panel.start` | PLC reads | `PanelStart` | Bool | DBX27.2 | Start button, momentary: a short pulse per press -- latch it | yes |
 | `panel.stop` | PLC reads | `PanelStop` | Bool | DBX27.3 | Stop button, momentary: a short pulse per press | yes |
 
