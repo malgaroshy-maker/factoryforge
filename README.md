@@ -21,7 +21,7 @@ Developed by Mahamed Algaroshy (محمد الجروشي)
 
 No accounts, no per-seat subscription fees, and 100% open for custom part & driver creation.
 
-![FactoryForge 3D Engine & Scene Editor Demo Video](docs/images/demo_video.gif)
+![A 25-second recording of the current build: the start screen, then the sorting line, pick-and-place, palletising and guarded cells running under their built-in demo controllers](docs/images/demo_video.gif)
 
 ```
 ┌────────────────────────────┐          ┌──────────────────────────┐
