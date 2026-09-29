@@ -31,6 +31,7 @@ console.higgsfield.ai.
 |---|---|---|---|
 | V12-06 logo concepts | 2026-09-29 | 4 | 1 |
 | Start-screen background | 2026-09-29 | 1 | 1 |
+| Trailer shots (Seedance 2.5, 720p, 3 x 6 s) | 2026-09-29 | 3 | 3 |
 
 ## Files
 
@@ -89,3 +90,23 @@ The banner and social preview set their text in Segoe UI.
 Not generated, and so not listed as generated: the template thumbnails in
 `engine/templates/thumbnails/` are frames of the real engine, rendered by
 `tools/make_thumbnails.py`.
+
+## Outside the repository
+
+### The trailer (`tools/make_trailer.py`)
+
+The trailer is not committed; it is attached to releases and posts. Its three
+generated shots were made on 2026-09-29 with Seedance 2.5, 720p, 6 s each,
+with generated audio. The middle of the film is real engine footage.
+
+| Shot | Model | Job id | Input |
+|---|---|---|---|
+| `1_intro` | `bytedance/seedance-2.5/image-to-video` | `9c62a258-a8d2-4975-b552-59529aad0263` | `menu/start_background.jpg` |
+| `2_why` | `bytedance/seedance-2.5/text-to-video` | `afdade6b-72e1-4425-9493-50d44cf1ccd9` | text only, 16:9 |
+| `3_outro` | `bytedance/seedance-2.5/image-to-video` | `20bdaea3-f836-4327-a120-75db28b3156c` | the logo on navy, as first and last frame |
+
+Prompts, each ending ", cinematic, smooth slow camera, navy with orange and teal accents, no text, no logos":
+
+- `1_intro`: Slow dolly-in over a stylised toy-like factory floor, cartons gliding along the conveyors, small orange warning lamps blinking, soft ambient hum of motors
+- `2_why`: Close-up of a student's hands typing on a laptop at night, the screen softly out of focus glowing orange and teal, shallow depth of field, quiet keyboard clicks
+- `3_outro`: The logo's conveyor belt starts moving, its rollers turn, the cardboard box slides a little and the gear rotates once, then everything settles still, a soft mechanical click
