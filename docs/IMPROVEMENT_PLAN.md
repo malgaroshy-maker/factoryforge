@@ -224,10 +224,15 @@ loudly.
 
 **IP-11 — Grade a program nobody on the project wrote**
 *Files:* `docs/GRADING.md`, `examples/graded/`.
-*Done when:* `Sorting.st` on OpenPLC and `Sorting.scl` on PLCSIM Advanced are
-each graded end to end through a real driver, and the JSON reports are
-committed as examples. `GRADING.md`'s "nobody has graded a real student's
-program" becomes a narrower, true sentence.
+*Done when:* (reworded 2026-09-29, at the user's call) **(a)** the guide's
+first-hour program is graded end to end on a real controller of each kind --
+OpenPLC and an S7-1500 on PLCSIM Advanced -- through a real driver, with the
+JSON reports committed as examples; and **(b)** a program written by a student,
+not by this project, is graded the same way, so `GRADING.md`'s "nobody has
+graded a real student's program" becomes a narrower, true sentence. The old
+wording named `examples/openplc/Sorting.st`, which targets the ten-tag demo line
+and cannot drive the nineteen-tag scene the grader marks. (a) is done; (b) is
+after v1.1.
 *Verify:* the committed reports. **Needs the user's PLCSIM: ask before
 connecting to it.**
 *Size:* M.
@@ -697,7 +702,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-08 | Ship the grader in the release | 2 | M | ● | **done** on Windows (9e8d0f8, 77991fb); Linux archive unverified until release.yml runs |
 | IP-09 | A no-licence first hour | 2 | M | ● | **done** 0078282; the WSL-to-Windows crossing was run as IP-39 |
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
-| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half also run 2026-09-29 (`29718f6`): the first-hour program in ST, PASS 15/15 at seeds 1-3, OpenPLC in WSL to the Windows sidecar. **Kept open.** The item's *Done when* names `Sorting.st`, and what was graded is the first-hour program: `Sorting.st` is written for the ten-tag map and the graded scene has nineteen tags, so it was not graded and would drive the wrong outputs. Missing: `Sorting.st` graded (or the *Done when* reworded to the first-hour program, which is what a student runs), the `GRADING.md` sentence narrowed, and a program a student wrote |
+| IP-11 | Grade a program nobody on the project wrote | 2 | M |  | open for (b), a student's program, after v1.1. (a) **done** 2026-09-29: the first-hour program PASS 15/15 at seeds 1-3 on an S7-1500 in PLCSIM (native driver, SCL) and on OpenPLC in WSL through the Windows sidecar (ST, 29718f6); also `Sorting.scl` FAIL 10/15 as the old brief's program should (`examples/graded/`) |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | **done** ae3c44e (faults on sorting, dosing, heat-treat), 3a6a494 (E-stop / Start / Reset on all 18 panel scenes) |
 | IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | **done** 2026-09-29: unchanged `Sorting.scl` v0.4 on an S7-1500 in PLCSIM Advanced, 300 s each, `demo`: native driver (Softbus) **48 tall / 48 short**, OPC UA client (TCP/IP, `opc.tcp://192.168.0.20:4840`) **48 tall / 48 short**, no misroutes either way. A shorter native run, 120 s, gave 18 / 20: one tall carton counted short at 81 s |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
