@@ -13,6 +13,16 @@ Linux archive has not been built with the grader in it**; it is unverified
 until `release.yml` next runs. The list in `check_release.py` is the count;
 this paragraph deliberately does not repeat it.*
 
+*On 2026-09-29 (IP-22) a local Windows build at d883a1a passed the whole gate
+against the exported binary: all 32 `SELF_TESTS` (including `controlparts`,
+`editorkeys` and `handlingparts`, which had never met a binary), the frozen
+sidecar's `grade --list` offering all 18 graded scenes (mezzanine-lift among
+them), `sorting-by-height` graded to PASS with `good` and to FAIL with `blind`,
+`demo`, all 7 drivers usable, and 356 relative links in the shipped pages
+resolving. No failures, so no fix was needed. **Linux is still unverified:**
+`release.yml` accepts `workflow_dispatch` (a dry run, no release is created),
+so a gate run on both platforms needs no tag.*
+
 Running FactoryForge from a checkout means installing Godot, the .NET 8 SDK and
 Python first — a real barrier for someone who wanted to learn ladder logic, not
 to install a game engine and a compiler. A release exists so that stops being

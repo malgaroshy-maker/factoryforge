@@ -695,7 +695,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-19 | The grader's plant is read from the template | 4 | M | ● | **done** 02be83a, 568aaa0; its findings are IP-29 |
 | IP-20 | Reference controllers pass on the 3D engine | 4 | L |  | **done** 061bb11, d79f09a; H 19/19 |
 | IP-21 | Split `SceneEditor.cs` | 4 | M |  | **done** f032379, fc7fe89 |
-| IP-22 | Every release self-test meets the binary | 5 | S | ● | open |
+| IP-22 | Every release self-test meets the binary | 5 | S | ● | Windows gate passed 2026-09-29 at d883a1a (32 self-tests + graded run); Linux awaits a CI gate run |
 | IP-23 | v1.1.0 | 5 | S |  | open |
 | IP-24 | Hand-over | 5 | S |  | open |
 | IP-25 | The graded plant starts when the controller connects | 2 | S | ● | **done** 184422a |
