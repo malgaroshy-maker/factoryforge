@@ -21,7 +21,7 @@ Developed by Mahamed Algaroshy (محمد الجروشي)
 
 No accounts, no per-seat subscription fees, and 100% open for custom part & driver creation.
 
-![A 25-second recording of the current build: the start screen, then the sorting line, pick-and-place, palletising and guarded cells running under their built-in demo controllers](docs/images/demo_video.gif)
+![A 28-second recording of the current build, each clip captioned with what its machine does: the start screen; the sorting line's pusher shoving a tall carton down the chute while a short one rides on; the pick-and-place gantry lowering, gripping and carrying a carton across; the palletising arm setting a carton into the pallet pattern; and the guarded cell, where opening the guard door stops the belt](docs/images/demo_video.gif)
 
 ```
 ┌────────────────────────────┐          ┌──────────────────────────┐

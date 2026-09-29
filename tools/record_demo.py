@@ -14,9 +14,15 @@ and the GIF.
 
 To change the film, edit STORYBOARD below. Each scene clip is a template
 (``--scene=``) run under its built-in demo controller (``--demo``, the same
-thing the start screen's "Watch it run" starts). ``skip`` drops the first
-seconds (the scene is still settling, nothing has reached the machine yet) and
-``take`` is how much is kept.
+thing the start screen's "Watch it run" starts), filmed with the engine's
+filming flags (``--film``: no panels; ``--camera=``; ``--at=`` to make things
+happen on the game clock, e.g. opening the guard door the way a person would;
+``--watch=`` to log the tags that make the action; see AGENTS.md). The clip is
+recorded for longer than it is shown and then cut around the action: the log's
+``[film] t=9.283 pusher.extend=true`` lines say when it happened, and the frames
+from ``before`` seconds ahead of that to ``after`` seconds behind it are kept,
+with the clip's caption drawn on. The start screen clip has no action and uses
+``skip``/``take``: seconds dropped, seconds kept.
 
 Needs Pillow, plus arabic-reshaper and python-bidi for the end card (Pillow's
 own Arabic shaping needs libraqm, which most wheels lack). Every recording is
@@ -30,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +55,7 @@ REC_SIZE = (1280, 720)      # what Godot renders
 GIF_SIZE = (1280, 720)      # what the GIF holds
 FPS = 12                    # recorded frames per game-second
 FRAME_MS = 80               # GIF frame time (12.5 fps; GIF times are 10 ms steps)
+CAPTION_PX = 28             # caption text height at 1280x720
 
 # kind "start": the start screen (no arguments), held still.
 # kind "scene": --scene=<template> --demo. skip/take are game-seconds.
@@ -58,11 +66,38 @@ STORYBOARD = [
     # seconds. box is (centre x, centre y, width) as fractions of the frame.
     {"kind": "start", "skip": 1.0, "take": 3.5, "res": (2560, 1440),
      "zoom": {"hold": 1.2, "over": 1.3, "box": (0.5, 0.82, 0.30)}},
-    {"kind": "scene", "template": None, "skip": 1.0, "take": 7.0,
-     "label": "sorting-by-height"},                    # None: --demo alone loads it
-    {"kind": "scene", "template": "pick_and_place_cell", "skip": 2.0, "take": 4.0},
-    {"kind": "scene", "template": "palletising_cell", "skip": 2.0, "take": 3.5},
-    {"kind": "scene", "template": "guarded_cell", "skip": 2.0, "take": 5.0},
+    # Each scene clip shows the KEY ACTION of its machine, and is cut around it: it is recorded
+    # for `record` game-seconds with --watch on the tags that make the action, then the log is
+    # searched for `cut.event` (a tag change, or "action ..." for an --at) and the frames from
+    # `before` seconds ahead of it to `after` seconds behind it are kept. Cutting on the log
+    # rather than on a guessed time means a change to a demo controller moves the clip with it.
+    #   camera  --camera=yaw,pitch,distance:tx,ty,tz  (degrees, degrees, metres : metres)
+    #   at      --at=SECONDS:ACTION, on the game clock
+    #   watch   tags whose changes are logged (and can be cut on)
+    {"kind": "scene", "template": None, "label": "sorting-by-height",        # None: --demo alone
+     "camera": "150,-28,2.0:2.4,0.35,0.1",
+     "watch": ["pusher.extend"], "record": 13.0,
+     "cut": {"event": "pusher.extend=true", "before": 3.0, "after": 3.0},
+     "caption": "Tall cartons are pushed down the chute; short ones ride on"},
+    {"kind": "scene", "template": "pick_and_place_cell",
+     "camera": "-20,-38,3.6:3.7,0.5,0.0",
+     "watch": ["gantry.grip", "gantry.lower"], "record": 12.0,
+     "cut": {"event": "gantry.grip=true", "before": 2.0, "after": 4.0},
+     "caption": "The gantry picks each carton and carries it across"},
+    {"kind": "scene", "template": "palletising_cell",
+     "camera": "-8,-30,2.7:-0.1,0.55,-0.6",
+     "watch": ["arm.grip", "pallet.count"], "record": 14.0,
+     "cut": {"event": "arm.grip=true", "before": 1.0, "after": 4.7},
+     "caption": "The arm stacks cartons in a pallet pattern"},
+    # The door is opened by --at with `operate`, the call a click on it ends in, so the
+    # solenoid lock, the guard switch, the relay and the contactor all react as they would to
+    # a person. Nothing is forced. The belt is stopped by the hardware chain, not by a script.
+    {"kind": "scene", "template": "guarded_cell",
+     "camera": "-24,-32,2.8:1.6,0.5,0.5",
+     "at": ["9.0:operate:guard_a"],
+     "watch": ["belt.rotate", "guard_a.closed", "tower.red"], "record": 13.0,
+     "cut": {"event": "action operate:guard_a", "before": 3.0, "after": 3.0},
+     "caption": "Opening the guard stops the machine"},
     {"kind": "card", "take": 2.5},
 ]
 
@@ -175,12 +210,19 @@ def run_godot(godot: str, args: list[str], log: Path) -> None:
         sys.exit(f"godot exited {r.returncode}; see {log}")
 
 
-def record(godot: str, clip: dict, out_dir: Path, log_dir: Path) -> list[Path]:
+def clip_length(clip: dict) -> float:
+    """Seconds of game time the recording has to cover."""
+    if "record" in clip:
+        return clip["record"]
+    return clip["skip"] + clip["take"]
+
+
+def record(godot: str, clip: dict, out_dir: Path, log_dir: Path) -> None:
     frames_dir = out_dir / clip["name"]
     if frames_dir.exists():
         shutil.rmtree(frames_dir)
     frames_dir.mkdir(parents=True)
-    total = int(round((clip["skip"] + clip["take"]) * FPS))
+    total = int(round(clip_length(clip) * FPS))
     args = ["--path", ".", "--resolution", "x".join(map(str, clip.get("res", REC_SIZE))),
             "--write-movie", str(frames_dir / "f.png"), "--fixed-fps", str(FPS),
             "--quit-after", str(total)]
@@ -189,13 +231,67 @@ def record(godot: str, clip: dict, out_dir: Path, log_dir: Path) -> list[Path]:
         if clip.get("template"):
             args.append(f"--scene=res://templates/{clip['template']}.json")
         args.append("--demo")
+        if clip.get("film", True):
+            args.append("--film")                       # panels off, the 3D view fills the frame
+        if clip.get("camera"):
+            args.append(f"--camera={clip['camera']}")
+        for action in clip.get("at", []):
+            args.append(f"--at={action}")
+        if clip.get("watch"):
+            args.append(f"--watch={','.join(clip['watch'])}")
     print(f"recording {clip['name']}: {total} frames ...", flush=True)
     run_godot(godot, args, log_dir / f"{clip['name']}.log")
     frames = sorted(frames_dir.glob("f*.png"))
     if len(frames) < total:
         sys.exit(f"{clip['name']}: expected {total} frames, got {len(frames)}")
-    skip = int(round(clip["skip"] * FPS))
-    return frames[skip:total]
+
+
+def event_time(log: Path, event: str, after: float = 0.0) -> float:
+    """Game time of the first ``[film] t=SECONDS <event>`` line at or after
+    ``after`` seconds. ``event`` is the rest of the line, exactly: a tag change
+    such as ``pusher.extend=true`` or an action such as ``action operate:guard_a``.
+    The engine prints these on the game clock (FilmDirector), which is also the
+    clock Movie Maker's frames are numbered on, so the time is a frame index
+    divided by FPS."""
+    pattern = re.compile(r"^\[film\] t=([0-9.]+) (.*?)\s*$")
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = pattern.match(line)
+        if m and m.group(2) == event and float(m.group(1)) >= after:
+            return float(m.group(1))
+    sys.exit(f"{log.name}: the event '{event}' never happened after {after} s; "
+             f"the film cannot be cut around it (see {log})")
+
+
+def select_frames(clip: dict, work: Path) -> tuple[list[Path], str]:
+    """The frames a clip keeps, and a line saying how they were cut."""
+    frames = sorted((work / clip["name"]).glob("f*.png"))
+    if "cut" not in clip:
+        skip = int(round(clip["skip"] * FPS))
+        keep = int(round(clip["take"] * FPS))
+        return frames[skip:skip + keep], f"{clip['skip']:.1f}-{clip['skip'] + clip['take']:.1f} s"
+    cut = clip["cut"]
+    t = event_time(work / f"{clip['name']}.log", cut["event"], cut.get("after_time", 0.0))
+    first = max(0, int(round((t - cut["before"]) * FPS)))
+    last = first + int(round((cut["before"] + cut["after"]) * FPS))
+    if last > len(frames):
+        sys.exit(f"{clip['name']}: '{cut['event']}' is at {t:.2f} s and the cut wants frames up to "
+                 f"{last / FPS:.2f} s, but only {len(frames) / FPS:.2f} s were recorded; raise 'record'")
+    return frames[first:last], f"'{cut['event']}' at {t:.2f} s, window {first / FPS:.2f}-{last / FPS:.2f} s"
+
+
+def caption_frame(im: Image.Image, text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
+    """A semi-transparent dark bar along the foot of the frame with the caption
+    centred in white. Composited on the RGB frame before quantizing, so the
+    palette is built from what will actually be shown."""
+    w, h = im.size
+    bar = 64
+    overlay = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+    d.rectangle([0, h - bar, w, h], fill=(10, 12, 16, 178))
+    box = d.textbbox((0, 0), text, font=font)
+    d.text(((w - (box[2] - box[0])) / 2 - box[0], h - bar / 2 - (box[3] - box[1]) / 2 - box[1]),
+           text, font=font, fill=(255, 255, 255, 255))
+    return Image.alpha_composite(im.convert("RGBA"), overlay).convert("RGB")
 
 
 def main() -> None:
@@ -226,6 +322,7 @@ def main() -> None:
         if not (ENGINE / ".godot").exists():
             run_godot(opts.godot, ["--headless", "--path", ".", "--import"], work / "import.log")
 
+    caption_font = find_font(["segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"], CAPTION_PX)
     segments: list[list[Image.Image]] = []
     for clip in clips:
         if clip["kind"] == "card":
@@ -233,15 +330,15 @@ def main() -> None:
             card.save(work / "card.png")
             segments.append([card] * int(round(clip["take"] * 1000 / FRAME_MS)))
             continue
-        if opts.reuse and (work / clip["name"]).exists():
-            frames = sorted((work / clip["name"]).glob("f*.png"))[int(round(clip["skip"] * FPS)):]
-        else:
-            frames = record(opts.godot, clip, work, work)
-        keep = int(round(clip["take"] * FPS))
+        if not (opts.reuse and (work / clip["name"]).exists()):
+            record(opts.godot, clip, work, work)
+        frames, how = select_frames(clip, work)
+        print(f"  {clip['name']}: {len(frames)} frames, cut {how}", flush=True)
         # A start screen does not move; frames are frames all the same.
         zoom = clip.get("zoom")
+        caption = clip.get("caption")
         segments.append([])
-        for n, f in enumerate(frames[:keep]):
+        for n, f in enumerate(frames):
             with Image.open(f) as im:
                 im = im.convert("RGB")
                 if zoom:
@@ -253,7 +350,10 @@ def main() -> None:
                     y0 = (0.5 + (cy - 0.5) * k) - w / 2
                     im = im.crop((round(x0 * im.width), round(y0 * im.height),
                                   round((x0 + w) * im.width), round((y0 + w) * im.height)))
-                segments[-1].append(im.resize(GIF_SIZE, Image.LANCZOS))
+                im = im.resize(GIF_SIZE, Image.LANCZOS)
+                if caption:
+                    im = caption_frame(im, caption, caption_font)
+                segments[-1].append(im)
 
     opts.out.parent.mkdir(parents=True, exist_ok=True)
     encode_gif(segments, opts.out, opts.palette, opts.dither)
