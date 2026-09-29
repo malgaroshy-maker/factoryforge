@@ -71,6 +71,24 @@ public partial class FilmSelfTest : Node
         _director.Watch("tower.red,guard_a.closed");
         Expect(_director.SetCamera("30,-20,4:1,1,1") is null, "a camera pose is accepted");
         AddChild(_director);
+
+        // --camera-to: checked on a director of its own, never added to the
+        // tree, so the camera the display half asserts on is left alone.
+        var mover = new FilmDirector();
+        Expect(mover.SetCameraMove("0,-30,6:0,0,0@1-3") is not null, "a move with no --camera to start from is refused");
+        mover.SetCamera("0,-20,4:0,0,0");
+        Expect(mover.SetCameraMove("0,-30,6:0,0,0") is not null, "a move with no time window is refused");
+        Expect(mover.SetCameraMove("0,-30,6:0,0,0@3-1") is not null, "a move that ends before it starts is refused");
+        Expect(mover.SetCameraMove("40,-30,6:2,0,0@1-3") is null, "a camera move is accepted");
+        if (mover.PoseAt(0.5) is { } before && mover.PoseAt(2.0) is { } mid && mover.PoseAt(9.0) is { } after)
+        {
+            Expect(before.Yaw == 0 && before.Distance == 4, $"before the move the camera is at the start pose, got yaw {before.Yaw}");
+            Expect(Mathf.Abs(mid.Yaw - 20) < 0.01f && Mathf.Abs(mid.Distance - 5) < 0.01f
+                   && Mathf.Abs(mid.Target.X - 1) < 0.01f, $"half way through, the camera is half way, got yaw {mid.Yaw}");
+            Expect(after.Yaw == 40 && after.Pitch == -30 && after.Target.X == 2, $"after the move it stays at the end pose, got yaw {after.Yaw}");
+        }
+        else Expect(false, "PoseAt returned nothing with a pose set");
+        mover.Free();
     }
 
     public override void _PhysicsProcess(double delta)

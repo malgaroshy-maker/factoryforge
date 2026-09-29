@@ -235,6 +235,8 @@ def record(godot: str, clip: dict, out_dir: Path, log_dir: Path) -> None:
             args.append("--film")                       # panels off, the 3D view fills the frame
         if clip.get("camera"):
             args.append(f"--camera={clip['camera']}")
+        if clip.get("camera_to"):                       # a glide from `camera`, POSE@START-END
+            args.append(f"--camera-to={clip['camera_to']}")
         for action in clip.get("at", []):
             args.append(f"--at={action}")
         if clip.get("watch"):

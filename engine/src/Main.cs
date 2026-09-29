@@ -68,6 +68,7 @@ public partial class Main : Node
     /// <summary>Filming options (tools/record_demo.py), all CLI-only and inert
     /// when absent. See <see cref="FilmDirector"/>.</summary>
     private bool _film;
+    private string? _cameraToSpec;
     private string? _cameraSpec;
     private readonly List<string> _atSpecs = new();
     private readonly List<string> _watchSpecs = new();
@@ -104,6 +105,8 @@ public partial class Main : Node
                 _film = true;
             else if (arg.StartsWith("--camera="))
                 _cameraSpec = arg.Substring("--camera=".Length);
+            else if (arg.StartsWith("--camera-to="))
+                _cameraToSpec = arg.Substring("--camera-to=".Length);
             else if (arg.StartsWith("--at="))
                 _atSpecs.Add(arg.Substring("--at=".Length));
             else if (arg.StartsWith("--watch="))
@@ -350,12 +353,18 @@ public partial class Main : Node
     /// </summary>
     private void AddFilmDirector(TagTable tags)
     {
-        if (!_film && _cameraSpec is null && _atSpecs.Count == 0 && _watchSpecs.Count == 0) return;
+        if (!_film && _cameraSpec is null && _cameraToSpec is null && _atSpecs.Count == 0 && _watchSpecs.Count == 0) return;
 
         var director = new FilmDirector { Name = "FilmDirector", Tags = tags, Editor = _editor, Film = _film };
         if (_cameraSpec is not null && director.SetCamera(_cameraSpec) is { } cameraProblem)
         {
             GD.PrintErr(cameraProblem);
+            GetTree().Quit(1);
+            return;
+        }
+        if (_cameraToSpec is not null && director.SetCameraMove(_cameraToSpec) is { } moveProblem)
+        {
+            GD.PrintErr(moveProblem);
             GetTree().Quit(1);
             return;
         }

@@ -12,7 +12,7 @@ namespace FactoryForge.Sim;
 /// The command line's stage manager, for filming a scene (tools/record_demo.py).
 ///
 /// Everything here is opt-in. <c>Main</c> only adds one when <c>--film</c>,
-/// <c>--camera=</c>, <c>--at=</c> or <c>--watch=</c> is on the command line, so
+/// <c>--camera=</c> (and <c>--camera-to=</c>), <c>--at=</c> or <c>--watch=</c> is on the command line, so
 /// a run without those flags is exactly the run it always was.
 ///
 /// <b>The clock is the game clock.</b> Time here is physics ticks divided by
@@ -116,14 +116,65 @@ public partial class FilmDirector : Node
     /// error message, or null.</summary>
     public string? SetCamera(string spec)
     {
+        var (pose, problem) = ParsePose(spec, "--camera");
+        if (problem is not null) return problem;
+        CameraPose = pose;
+        return null;
+    }
+
+    /// <summary>The pose <c>--camera-to=</c> moves to, and the game-time window
+    /// it moves in.</summary>
+    public ((float Yaw, float Pitch, float Distance, Vector3 Target) To, double Start, double End)? CameraMove { get; private set; }
+
+    /// <summary>
+    /// Parse <c>--camera-to=yaw,pitch,distance:tx,ty,tz@START-END</c>: glide
+    /// from the <c>--camera=</c> pose to this one between two game times, eased
+    /// in and out. A trailer opening on the real engine needs a camera that
+    /// moves, and a still pose cut by a digital zoom looks like exactly that.
+    /// Needs <c>--camera=</c>, which is where it starts. Returns an error
+    /// message, or null.
+    /// </summary>
+    public string? SetCameraMove(string spec)
+    {
+        int at = spec.LastIndexOf('@');
+        if (at < 0) return $"--camera-to={spec}: expected POSE@START-END";
+        var (pose, problem) = ParsePose(spec[..at], "--camera-to");
+        if (problem is not null) return problem;
+        var window = spec[(at + 1)..].Split('-');
+        if (window.Length != 2
+            || !double.TryParse(window[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double start)
+            || !double.TryParse(window[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double end)
+            || start < 0 || end <= start)
+            return $"--camera-to={spec}: expected @START-END in seconds, END after START";
+        if (CameraPose is null) return $"--camera-to={spec}: needs --camera= to say where it starts";
+        CameraMove = (pose, start, end);
+        return null;
+    }
+
+    /// <summary>Where the camera is at game time <paramref name="t"/>: the
+    /// <c>--camera=</c> pose before the move, the <c>--camera-to=</c> pose
+    /// after it, and a smoothstep between. Pure, so the headless self-test can
+    /// check the path without a camera.</summary>
+    public (float Yaw, float Pitch, float Distance, Vector3 Target)? PoseAt(double t)
+    {
+        if (CameraPose is not { } from) return null;
+        if (CameraMove is not { } move) return from;
+        float k = (float)Math.Clamp((t - move.Start) / (move.End - move.Start), 0, 1);
+        k = k * k * (3 - 2 * k);
+        var to = move.To;
+        return (Mathf.Lerp(from.Yaw, to.Yaw, k), Mathf.Lerp(from.Pitch, to.Pitch, k),
+                Mathf.Lerp(from.Distance, to.Distance, k), from.Target.Lerp(to.Target, k));
+    }
+
+    private static ((float, float, float, Vector3) Pose, string? Problem) ParsePose(string spec, string flag)
+    {
         var halves = spec.Split(':');
-        if (halves.Length != 2) return $"--camera={spec}: expected yaw,pitch,distance:tx,ty,tz";
+        if (halves.Length != 2) return (default, $"{flag}={spec}: expected yaw,pitch,distance:tx,ty,tz");
         var a = ParseFloats(halves[0]);
         var b = ParseFloats(halves[1]);
         if (a is not { Length: 3 } || b is not { Length: 3 })
-            return $"--camera={spec}: expected three numbers on each side of the colon";
-        CameraPose = (a[0], a[1], a[2], new Vector3(b[0], b[1], b[2]));
-        return null;
+            return (default, $"{flag}={spec}: expected three numbers on each side of the colon");
+        return ((a[0], a[1], a[2], new Vector3(b[0], b[1], b[2])), null);
     }
 
     private static float[]? ParseFloats(string csv)
@@ -156,6 +207,7 @@ public partial class FilmDirector : Node
         if (!_posed) { ApplyView(); _posed = true; }
 
         double t = GameTime;
+        if (CameraMove is not null) MoveCamera(t);
         // Half a tick of slack so an action at 2.0 s fires on the tick that
         // reads 2.000 rather than one later to floating point.
         double half = 0.5 / Engine.PhysicsTicksPerSecond;
@@ -253,6 +305,15 @@ public partial class FilmDirector : Node
             if (!cam.Current) cam.MakeCurrent();
         }
         if (Film) HidePanels();
+    }
+
+    /// <summary>One step of <c>--camera-to=</c>, on the physics tick so the
+    /// move is on the game clock that Movie Maker's frames are on.</summary>
+    private void MoveCamera(double t)
+    {
+        if (DisplayServer.GetName() == "headless") return;
+        if (PoseAt(t) is { } p && UiRoot?.GetNodeOrNull<OrbitCamera>("OrbitCamera") is { } cam)
+            cam.Place(p.Yaw, p.Pitch, p.Distance, p.Target);
     }
 
     /// <summary>Hide every panel. All of them are <see cref="Control"/>s

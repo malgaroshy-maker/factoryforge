@@ -144,7 +144,8 @@ cd sidecar && python -m factoryforge_sidecar connect --driver opcua-client \
 # places the orbit camera (degrees, degrees, metres : look-at point in world
 # metres; yaw 0 looks along -Z from +Z, positive yaw walks the camera toward
 # +X, negative pitch looks down) and pins it, so a scene load's own framing
-# cannot move it. --at=SECONDS:ACTION, repeatable, on the GAME clock (physics
+# cannot move it. --camera-to=POSE@START-END glides from that pose to a second
+# one between two game times, eased in and out (the trailer's opening). --at=SECONDS:ACTION, repeatable, on the GAME clock (physics
 # ticks since the scene loaded, the clock Movie Maker's frames are on):
 # force:TAG=VALUE, release:TAG, and operate:PART, which is a click on the part
 # (the call a Run-mode click ends in, so a guard door slides or refuses exactly

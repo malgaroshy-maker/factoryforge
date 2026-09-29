@@ -1,4 +1,4 @@
-"""Cut the FactoryForge trailer: generated bookends around real engine footage.
+"""Cut the FactoryForge trailer: real engine footage with two generated shots.
 
     python tools/make_trailer.py --seedance DIR --out trailer.mp4
     python tools/make_trailer.py --seedance DIR --reuse CLIPS --out trailer.mp4
@@ -6,14 +6,15 @@
 The middle of the film is the engine itself, recorded with the same machinery
 as the README's GIF (tools/record_demo.py: Movie Maker on the game clock, the
 filming flags, clips cut on the logged event that makes the action) but at
-30 fps and encoded as H.264 rather than a GIF. Only the intro, the "why" shot
-and the logo outro are generated (Seedance 2.5; provenance in
-engine/assets/ASSETS.md), so nothing in the trailer shows the product doing
-something it does not do.
+30 fps and encoded as H.264 rather than a GIF. It opens on the real sorting
+line with the camera gliding in (--camera-to). Only the PLC shot and the logo
+outro are generated (Seedance 2.5; provenance in engine/assets/ASSETS.md), and
+neither shows a machine at work: a generated factory opened the first cut, and
+its cartons merged, changed size and passed through the pusher, which is the
+one thing a trailer for a simulator of how machines behave cannot show.
 
-DIR holds the three generated clips: 1_intro.mp4, 2_why.mp4, 3_outro.mp4.
-Their sound is the only audio; the engine clips carry the intro's ambience,
-quietly, underneath. Needs Pillow and a recent ffmpeg, on PATH or in FFMPEG_DIR.
+DIR holds the generated clips: 2_plc.mp4 and 3_outro.mp4. Their sound is the
+only audio; the engine clips carry the PLC shot's hum, quietly, underneath. Needs Pillow and a recent ffmpeg, on PATH or in FFMPEG_DIR.
 """
 from __future__ import annotations
 
@@ -44,16 +45,21 @@ ORANGE = (255, 138, 20)
 TEAL = (22, 190, 190)
 FADE = 0.35                 # seconds of fade at each cut
 
+# The opening: the real sorting line, the camera gliding from a wide view down
+# to the pusher as it fires, with the title over it. `title` is centred text,
+# (lines, first second, last second) as in BOOKENDS below.
+OPENING = {"kind": "scene", "template": None, "label": "opening",
+           "camera": "-70,-38,3.6:1.8,0.4,0.1", "camera_to": "-25,-35,2.3:2.55,0.3,0.25@3.8-9.0",
+           "watch": ["pusher.extend"], "record": 12.0,
+           "cut": {"event": "pusher.extend=true", "before": 5.8, "after": 1.4},
+           "title": ([("Learn PLC programming", 64, (255, 255, 255)), ("in a 3D factory", 40, ORANGE)], 0.6, 4.6)}
+
 # Real footage. Same fields as record_demo.STORYBOARD; `sub` is a second,
-# smaller caption line.
+# smaller caption line. The sorting line is the opening, so it is not here.
 REAL = [
     {"kind": "start", "skip": 1.5, "take": 3.5,
      "caption": "Pick a scene. Each one comes with a task.",
      "sub": "19 scenes, from a start/stop station to a guarded robot cell"},
-    {"kind": "scene", "template": None, "label": "sorting-by-height",
-     "camera": "-25,-35,2.1:2.55,0.3,0.25", "watch": ["pusher.extend"], "record": 13.0,
-     "cut": {"event": "pusher.extend=true", "before": 2.2, "after": 2.8},
-     "caption": "Sort cartons by height", "sub": "Two sensors, one pusher, your logic"},
     {"kind": "scene", "template": "pick_and_place_cell",
      "camera": "-20,-38,3.6:3.7,0.5,0.0", "watch": ["gantry.grip", "gantry.lower"], "record": 12.0,
      "cut": {"event": "gantry.grip=true", "before": 1.5, "after": 3.5},
@@ -73,12 +79,12 @@ REAL = [
 
 # Text over the generated shots: (clip, lines, first second, last second).
 BOOKENDS = {
-    "1_intro": ([("Learn PLC programming", 64, (255, 255, 255)), ("in a 3D factory", 40, ORANGE)], 1.0, 5.4),
-    "2_why": ([("No licence. No hardware.", 56, (255, 255, 255)), ("Free and open source.", 40, TEAL)], 0.8, 5.4),
+    "2_plc": ([("Write the program. Watch it run.", 54, (255, 255, 255)),
+               ("Real PLCs: S7-1500 · OpenPLC · Modbus · OPC UA", 28, TEAL)], 1.0, 8.6),
     "3_outro": ([("FactoryForge", 50, (255, 255, 255)),
                  ("github.com/malgaroshy-maker/factoryforge", 26, (170, 200, 235))], 1.5, 6.0),
 }
-ORDER = ["1_intro", "2_why", "REAL", "3_outro"]
+ORDER = ["OPENING", "2_plc", "REAL", "3_outro"]
 
 
 def ff(*args: str) -> None:
@@ -118,7 +124,10 @@ def text_overlay(lines, path: Path) -> None:
     heights = [f.getbbox("Ag")[3] for f in fonts]
     total = sum(heights) + 14 * (len(lines) - 1)
     outro = path.stem.startswith("3_")
-    y = SIZE[1] * 0.80 - total / 2 if outro else SIZE[1] / 2 - total / 2
+    # The outro sits under its logo; the opening's title sits high, off the
+    # line the camera is gliding down to; the rest are centred.
+    centre = 0.80 if outro else 0.22 if path.stem.endswith("_title") else 0.5
+    y = SIZE[1] * centre - total / 2
     # A soft band behind the text so it reads over any frame.
     d.rounded_rectangle((SIZE[0] * 0.14, y - 26, SIZE[0] * 0.86, y + total + 26), radius=18,
                         fill=(*NAVY, 0 if outro else 150))
@@ -149,17 +158,30 @@ def norm(src: Path, dst: Path, overlay: Path | None = None, t0: float = 0, t1: f
 
 
 def real_segment(clip: dict, work: Path, ambience: Path, dst: Path) -> None:
-    """Captioned frames -> H.264, with the intro's ambience looped quietly under it."""
+    """Captioned frames -> H.264, with the generated shot's hum looped quietly
+    under it. A clip with a `title` gets centred title text instead of a
+    lower-third caption."""
     frames, how = rd.select_frames(clip, work)
     print(f"  {clip['name']}: {len(frames)} frames, cut {how}")
     out = work / f"{clip['name']}_cap"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir()
     n = len(frames)
+    title = None
+    if "title" in clip:
+        lines, t0, t1 = clip["title"]
+        text_overlay(lines, work / f"{clip['name']}_title.png")
+        title = Image.open(work / f"{clip['name']}_title.png")
     for i, f in enumerate(frames):
         with Image.open(f) as im:
             im = im.convert("RGB").resize(SIZE, Image.LANCZOS)
         t = i / FPS
+        if title is not None:
+            a = min(1.0, max(0.0, (t - t0) / 0.5), max(0.0, (t1 - t) / 0.5))
+            ov = title.copy()
+            ov.putalpha(ov.getchannel("A").point(lambda v: int(v * a)))
+            Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB").save(out / f"c{i:05d}.png")
+            continue
         alpha = min(1.0, max(0.0, (t - 0.3) / 0.4), max(0.0, (n / FPS - 0.3 - t) / 0.4))
         lower_third(im, clip["caption"], clip.get("sub"), alpha).save(out / f"c{i:05d}.png")
     dur = n / FPS
@@ -174,7 +196,7 @@ def real_segment(clip: dict, work: Path, ambience: Path, dst: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--seedance", type=Path, required=True, help="folder with the three generated clips")
+    ap.add_argument("--seedance", type=Path, required=True, help="folder with 2_plc.mp4 and 3_outro.mp4")
     ap.add_argument("--reuse", type=Path, help="folder of engine recordings from an earlier run")
     ap.add_argument("--godot", default=rd.DEFAULT_GODOT)
     ap.add_argument("--out", type=Path, required=True)
@@ -190,8 +212,17 @@ def main() -> None:
         if subprocess.run(["dotnet", "build", "-v", "q", "--nologo"], cwd=rd.ENGINE).returncode != 0:
             sys.exit("dotnet build failed (gotcha 14: a stale binary would be filmed)")
 
+    ambience = opts.seedance / "2_plc.mp4"
     segments = []
     for key in ORDER:
+        if key == "OPENING":
+            clip = dict(OPENING, name="00_opening")
+            if not (work / clip["name"]).exists():
+                rd.record(opts.godot, clip, work, work)
+            dst = seg_dir / "real_00_opening.mp4"
+            real_segment(clip, work, ambience, dst)
+            segments.append(dst)
+            continue
         if key != "REAL":
             lines, t0, t1 = BOOKENDS[key]
             text_overlay(lines, work / f"{key}_text.png")
@@ -200,11 +231,11 @@ def main() -> None:
             segments.append(dst)
             continue
         for i, step in enumerate(REAL):
-            clip = dict(step, name=f"{i:02d}_{step.get('label') or step.get('template') or step['kind']}")
+            clip = dict(step, name=f"{i + 1:02d}_{step.get('label') or step.get('template') or step['kind']}")
             if not (work / clip["name"]).exists():
                 rd.record(opts.godot, clip, work, work)
             dst = seg_dir / f"real_{clip['name']}.mp4"
-            real_segment(clip, work, opts.seedance / "1_intro.mp4", dst)
+            real_segment(clip, work, ambience, dst)
             segments.append(dst)
 
     listing = work / "concat.txt"
