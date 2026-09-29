@@ -472,8 +472,10 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
     The frozen sidecar is a PyInstaller one-file program: a bootloader parent
     and a child process that does the work. Killing only the parent from a
     script (`taskkill` on the one PID, `Stop-Process`) orphans the child, which
-    keeps the Modbus port bound. Kill the whole tree (for example
-    `taskkill /T /F`). Ctrl+C in the console, which is what the guide tells
+    keeps the Modbus port bound. Stop the children first: find them with
+    `Get-CimInstance Win32_Process -Filter "ParentProcessId=<pid>"` and stop
+    each before the parent (what the 2026-09-29 run did, leaving no sidecar
+    process behind). Ctrl+C in the console, which is what the guide tells
     students to press, is not affected.
 
 ---
