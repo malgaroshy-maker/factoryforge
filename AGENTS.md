@@ -503,11 +503,16 @@ either without noticing. Keep it that way: if you add a tag to one, add it to
 
 ## Current state
 
-**v1.0.0 is published.** `release.yml` built it from the `v1.0.0` tag on
-2026-09-21 and attached `FactoryForge-windows.zip` and `FactoryForge-linux.zip`
-to the GitHub release, after the release gate had passed against both exported
-binaries (run 35566288909). Everything since the tag is on `master` and
-unreleased; `git log v1.0.0..master` is the list.
+**v1.1.0 is published** (2026-09-29, release run 36600410859): both zips
+built from the `v1.1.0` tag, every release self-test passed against both
+exported binaries, and the GitHub release carries them with the author credit
+(Mahamed Algaroshy, محمد الجروشي) in its notes. It is the v1.1 plan
+(`docs/IMPROVEMENT_PLAN.md`) shipped: the grader in the release, the
+no-licence OpenPLC first hour proven across WSL, starters for every graded
+scene, the operator contract and injected faults marked on every panel scene,
+and the second level. v1.0.0 (2026-09-21) is the release before it.
+Everything since the tag is on `master` and unreleased; `git log
+v1.1.0..master` is the list.
 
 **Working end to end:**
 
