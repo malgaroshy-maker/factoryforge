@@ -341,7 +341,7 @@ V12-12, 13, 18 and 20 run whenever their decision or person arrives.
 | V12-14 | A website | C | M | ● | open |
 | V12-15 | README, topics and release notes | C | S |  | open |
 | V12-16 | Re-record the demo | C | S | ● | open |
-| V12-17 | Commit every `.uid` | D | S | ● | open |
+| V12-17 | Commit every `.uid` | D | S | ● | done (2026-09-29, test plan A7) |
 | V12-18 | A belt-fed turntable scene | D | M |  | open |
 | V12-19 | Size and speed as a gate | D | S | ● | open |
 | V12-20 | A student's program | D | — |  | open (needs a student) |

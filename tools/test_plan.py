@@ -440,6 +440,30 @@ def section_a() -> None:
     record("A6", "no type in engine/src is referenced nowhere outside its own file",
            *dead_types())
 
+    record("A7", "every script under engine/ has its .uid committed, and no .uid is orphaned",
+           *missing_uids())
+
+
+def missing_uids() -> tuple[bool, str]:
+    """A7's findings. Godot 4.4+ writes a `.uid` beside every script the first
+    time the editor or a run sees it, and resolves `uid://` references through
+    it. One left uncommitted is regenerated with a different id on the next
+    checkout, so a scene or resource pointing at the old id breaks on a machine
+    that is not this one. Forty of them sat untracked through the v1.1.0
+    release before anyone counted (V12-17)."""
+    def ls(*args: str) -> set[str]:
+        out = subprocess.run(["git", "ls-files", *args, "--", "engine"], cwd=ROOT,
+                             capture_output=True, text=True, check=True).stdout
+        return {line for line in out.splitlines() if line}
+    tracked = ls()
+    present = ls("--cached", "--others", "--exclude-standard")
+    scripts = {p for p in present if p.endswith((".cs", ".gd", ".gdshader"))}
+    missing = sorted(p for p in scripts if p + ".uid" not in tracked)
+    orphans = sorted(p for p in tracked if p.endswith(".uid") and p[:-4] not in present)
+    problems = [f"no tracked .uid: {p}" for p in missing] + [f"orphaned: {p}" for p in orphans]
+    detail = "; ".join(problems[:4]) + (f" (+{len(problems) - 4} more)" if len(problems) > 4 else "")
+    return not problems, detail
+
 
 # --- B. python suite --------------------------------------------------------
 
