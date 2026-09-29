@@ -49,7 +49,7 @@ No accounts, no per-seat subscription fees, and 100% open for custom part & driv
 
 * The first-hour program graded **PASS 15/15** at three seeds on OpenPLC running in WSL2 and polling the sidecar across the Windows boundary, and **15/15** at three seeds on an S7-1500 in PLCSIM Advanced through the native driver. The reports are in [examples/graded/](examples/graded/README.md), along with the run that failed: the original `Sorting.scl`, which sorts perfectly and fails the exam because it predates the operator panel.
 * The unchanged `Sorting.scl` v0.4 sorted **48 tall / 48 short** in a 300-second run over the PLCSIM native driver and again over OPC UA, with no misroutes ([IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md), IP-13).
-* **No real student's program has been graded yet.** What has been graded is programs this project wrote. The Linux archive has been built and gated but has not had a graded run of its own.
+* **No real student's program has been graded yet.** What has been graded is programs this project wrote. Both release archives passed the release gate, which includes the frozen grader marking a built-in controller PASS and a wrong one FAIL; no real controller has been graded from the Linux archive.
 
 ---
 
