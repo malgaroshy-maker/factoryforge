@@ -1,0 +1,322 @@
+{
+  "tool": "factoryforge-grade",
+  "format": 1,
+  "scene": "sorting-by-height",
+  "student": "the first-hour program (GETTING_STARTED steps 7-8) on OpenPLC in WSL, sidecar on Windows",
+  "started": "2026-09-29T13:22:47+00:00",
+  "duration_s": 60.0,
+  "verdict": "PASS",
+  "exit_code": 0,
+  "headline": "every check met",
+  "checks": [
+    {
+      "id": "controller.stayed_connected",
+      "ok": true,
+      "detail": "1 session(s), 0 of them dropped before the end"
+    },
+    {
+      "id": "integrity.no_forced_tags",
+      "ok": true,
+      "detail": "no tag was forced"
+    },
+    {
+      "id": "integrity.no_input_writes",
+      "ok": true,
+      "detail": "no writes aimed at simulator-owned tags"
+    },
+    {
+      "id": "line.ran",
+      "ok": true,
+      "detail": "13 cartons reached a lane (at least 8 needed in the 60s window)"
+    },
+    {
+      "id": "line.both_lanes",
+      "ok": true,
+      "detail": "chute 7, far end 6 (at least 3 each)"
+    },
+    {
+      "id": "sort.tall_diverted",
+      "ok": true,
+      "detail": "no tall carton ran off the far end"
+    },
+    {
+      "id": "sort.short_passed",
+      "ok": true,
+      "detail": "no short carton was diverted"
+    },
+    {
+      "id": "line.conservation",
+      "ok": true,
+      "detail": "15 fed = 13 sorted + 2 still on the belt"
+    },
+    {
+      "id": "line.started_by_start",
+      "ok": true,
+      "detail": "the belt never started without somebody pressing Start"
+    },
+    {
+      "id": "estop.stopped_the_belt",
+      "ok": true,
+      "detail": "the belt moved 55 mm after the mushroom was struck (at most 100 mm, which is 200 ms of belt)"
+    },
+    {
+      "id": "estop.latched_until_reset",
+      "ok": true,
+      "detail": "the belt stayed still from the release until Reset and then Start"
+    },
+    {
+      "id": "estop.restarted_after_reset",
+      "ok": true,
+      "detail": "the belt was running again 0.11s after Start at 22.8s (within 1s)"
+    },
+    {
+      "id": "fault.no_feed_while_faulted",
+      "ok": true,
+      "detail": "no carton was fed onto the belt while its drive was faulted, from 32s to 35.01s"
+    },
+    {
+      "id": "fault.latched_until_reset",
+      "ok": true,
+      "detail": "the belt stayed still from the fault clearing at 35.01s until Reset and then Start"
+    },
+    {
+      "id": "fault.restarted_after_reset",
+      "ok": true,
+      "detail": "the belt was running again 0.06s after Start at 38.01s (within 1s)"
+    }
+  ],
+  "feedback": [
+    "Sorting was clean: 7 tall down the chute, 6 short past the end, none misrouted."
+  ],
+  "evidence": {
+    "seed": 1,
+    "window": {
+      "opened_on": "controller ready",
+      "controller_connected_at": 6.279,
+      "controller_described_at": 6.279,
+      "controller_ready_at": 6.987,
+      "driver": "modbus-tcp",
+      "ready_wait": 30.0,
+      "opened_at": 6.987,
+      "plant_seconds_before": 0.0
+    },
+    "sessions": [
+      {
+        "connected_at": 6.279,
+        "described_at": 6.279,
+        "ready_at": 6.987,
+        "disconnected_at": 67.006,
+        "controller": [
+          {
+            "at": 6.34,
+            "ready": false,
+            "driver": "modbus-tcp",
+            "message": "Modbus TCP server listening on 172.28.80.1:5502; no master has polled yet"
+          },
+          {
+            "at": 6.987,
+            "ready": true,
+            "driver": "modbus-tcp",
+            "message": "a Modbus master reached 172.28.80.1:5502"
+          }
+        ]
+      }
+    ],
+    "forces": [],
+    "input_write_attempts": [],
+    "forced_tags": {},
+    "ticks": 6001,
+    "sim_seconds": 60.01,
+    "emitted": 15,
+    "sorted": 13,
+    "still_on_belt": 2,
+    "chute": {
+      "total": 7,
+      "tall": 7,
+      "short": 0
+    },
+    "far_end": {
+      "total": 6,
+      "short": 6,
+      "tall": 0
+    },
+    "misrouted": [],
+    "crowded_on_the_faulted_belt": [],
+    "cartons": [
+      {
+        "carton": 1,
+        "height": "short",
+        "lane": "far-end",
+        "at": 8.59
+      },
+      {
+        "carton": 2,
+        "height": "tall",
+        "lane": "chute",
+        "at": 10.63
+      },
+      {
+        "carton": 3,
+        "height": "short",
+        "lane": "far-end",
+        "at": 14.68
+      },
+      {
+        "carton": 4,
+        "height": "tall",
+        "lane": "chute",
+        "at": 16.79
+      },
+      {
+        "carton": 5,
+        "height": "tall",
+        "lane": "chute",
+        "at": 25.8
+      },
+      {
+        "carton": 6,
+        "height": "short",
+        "lane": "far-end",
+        "at": 30.39
+      },
+      {
+        "carton": 7,
+        "height": "short",
+        "lane": "far-end",
+        "at": 39.49
+      },
+      {
+        "carton": 8,
+        "height": "tall",
+        "lane": "chute",
+        "at": 41.67
+      },
+      {
+        "carton": 9,
+        "height": "tall",
+        "lane": "chute",
+        "at": 44.68
+      },
+      {
+        "carton": 10,
+        "height": "short",
+        "lane": "far-end",
+        "at": 48.58
+      },
+      {
+        "carton": 11,
+        "height": "tall",
+        "lane": "chute",
+        "at": 50.73
+      },
+      {
+        "carton": 12,
+        "height": "short",
+        "lane": "far-end",
+        "at": 54.68
+      },
+      {
+        "carton": 13,
+        "height": "tall",
+        "lane": "chute",
+        "at": 56.78
+      }
+    ],
+    "pusher": {
+      "fired": 7,
+      "mean_delay_after_beam_s": 0.976,
+      "delays_s": [
+        0.91,
+        0.98,
+        0.97,
+        1.02,
+        1.01,
+        0.97,
+        0.97
+      ],
+      "required_window_s": [
+        0.6,
+        1.2
+      ],
+      "held_out_fraction": 0.174
+    },
+    "belt_running_fraction": 0.782,
+    "emit_pulses": 15,
+    "panel": {
+      "presses": [
+        [
+          0.99,
+          "start"
+        ],
+        [
+          19.79,
+          "start"
+        ],
+        [
+          21.29,
+          "reset"
+        ],
+        [
+          22.79,
+          "start"
+        ],
+        [
+          36.5,
+          "reset"
+        ],
+        [
+          38.0,
+          "start"
+        ]
+      ],
+      "exam": {
+        "reached_for_the_mushroom_at": 16.01,
+        "struck_at": 16.8,
+        "waited_for_a_clear_plate": true,
+        "start_alone_at": 19.8,
+        "reset_at": 21.3,
+        "restart_at": 22.8
+      },
+      "trip": {
+        "struck_at": 16.8,
+        "moving_at_strike": true,
+        "released_at": 18.8,
+        "reset_at": 21.3,
+        "cleared_at": 22.8,
+        "stop_lag_s": 0.11,
+        "struck_travel_m": 0.055,
+        "latched_travel_m": 0.0,
+        "latched_moved_at": null,
+        "restarted_at": 22.91,
+        "last_moved_after_s": 0.1
+      },
+      "allowed_m": 0.1,
+      "started_without_a_press_at": []
+    },
+    "drive_fault": {
+      "exam": {
+        "reached_for_the_drive_at": 32.0,
+        "faulted_at": 32.0,
+        "waited_for_a_clear_plate": true,
+        "cleared_at": 35.01,
+        "reset_at": 36.51,
+        "restart_at": 38.01
+      },
+      "trip": {
+        "struck_at": 32.0,
+        "moving_at_strike": true,
+        "released_at": 35.01,
+        "reset_at": 36.51,
+        "cleared_at": 38.01,
+        "stop_lag_s": 0.0,
+        "struck_travel_m": 0.0,
+        "latched_travel_m": 0.0,
+        "latched_moved_at": null,
+        "restarted_at": 38.07,
+        "last_moved_after_s": null
+      },
+      "fed_while_faulted": [],
+      "reaction_allowed_s": 0.2
+    }
+  }
+}
