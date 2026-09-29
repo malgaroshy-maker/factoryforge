@@ -53,6 +53,8 @@ first; the guide's step 9 already restarts OpenPLC for the same reason.
 - **A program written by a student.** Both programs were written by this
   project, from its own briefs. This is the grader meeting a real CPU's scan,
   not the grader meeting a real student.
-- **OPC UA.** The instance was in Softbus mode, which nothing on the network
-  can reach. IP-13's OPC UA half is still open.
+- **OPC UA grading.** These were graded through the native driver, with
+  the instance in Softbus mode. The same `Sorting.scl` was later run over OPC
+  UA (IP-13: 48 tall / 48 short in 300 s, as over the native driver), but not
+  graded that way.
 - **OpenPLC.** IP-11's OpenPLC half is still open.

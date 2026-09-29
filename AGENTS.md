@@ -30,7 +30,7 @@ parts, and €278/year. See [`docs/PRD.md`](docs/PRD.md) for the full rationale.
 
 | What | Detail |
 |---|---|
-| **S7-PLCSIM Advanced** | V6.0 Upd1. On 2026-09-29: instance `test` in PLCSIM (Softbus) mode, so only the native driver reaches it; the project sets 192.168.0.20. The PLCSIM virtual adapter ("Ethernet 2") is 192.168.0.100/24, so a TCP/IP-mode instance belongs on 192.168.0.x -- the old `192.168.1.20` is the Wi-Fi's subnet and was unreachable |
+| **S7-PLCSIM Advanced** | V6.0 Upd1, instance `test`, **TCP/IP Single Adapter, communication with `<Local>`** (the PLCSIM virtual adapter, "Ethernet 2", 192.168.0.100/24). The CPU is `192.168.0.20`, OPC UA at `opc.tcp://192.168.0.20:4840`, S7 on 102. Until 2026-09-29 this said 192.168.1.20: that is the Wi-Fi's subnet and nothing reached it. Softbus ("PLCSIM") mode works for TIA and the native driver only, and a Multiple Adapter instance on `<Default>` fails with "Interface mapping is invalid or missing" |
 | CPU | 1511-1 PN, FW V2.9, TIA Portal V19 |
 | PLC program | TIA project `D:\projects\Tia portal mcp\projects\FactoryForge_Sorting` (built through TiaCommander + Openness on 2026-09-29): the 19-member `FF_IO` + FB `SortingByHeight` (the first-hour program, `examples/graded/first_hour_sorting_by_height.scl`). The `Sorting.scl` v0.4 build is archived as `D:\projects\Tia portal mcp\archives\FactoryForge_Sorting_scl_v04_*.zap19` |
 | Node ids | `ns=3;s="FF_IO"."ConveyorRotate"` etc. — quotes are part of the identifier |
@@ -102,7 +102,7 @@ cd engine && dotnet build
 # 3D engine; `demo` starts its own Python scene on the bus port, so against a
 # live engine it either fails to bind or drives a scene you cannot see.
 cd sidecar && python -m factoryforge_sidecar connect --driver opcua-client \
-    --mapping <exported io_mapping.json> -o url opc.tcp://192.168.1.20:4840
+    --mapping <exported io_mapping.json> -o url opc.tcp://192.168.0.20:4840
 
 # Engine self-tests. All exit non-zero on failure.
 # Headless: panel tags — momentary pulse width, maintained E-stop, cap picking.
@@ -157,13 +157,13 @@ python tools/drive_engine.py
 # Drive the Python stub from the real PLC
 cd sidecar && python -m factoryforge_sidecar demo --driver opcua-client \
     --mapping ../examples/opcua_mapping.json \
-    -o url opc.tcp://192.168.1.20:4840 --duration 60
+    -o url opc.tcp://192.168.0.20:4840 --duration 60
 
 # Expose the scene as an OPC UA server (for Node-RED / SCADA / Ignition)
 cd sidecar && python -m factoryforge_sidecar demo --driver opcua-server
 
 # Discover NodeIds on any OPC UA server
-cd sidecar && python -m factoryforge_sidecar browse opc.tcp://192.168.1.20:4840
+cd sidecar && python -m factoryforge_sidecar browse opc.tcp://192.168.0.20:4840
 ```
 
 ---

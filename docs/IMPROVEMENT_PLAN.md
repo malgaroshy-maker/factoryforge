@@ -655,11 +655,9 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 
 - **IP-39** — allow the sidecar through the Windows firewall once, then
   follow the first-hour guide from WSL exactly.
-- **IP-11, IP-13** — the Siemens/native halves were done on 2026-09-29
-  with the user's permission (TIA project `FactoryForge_Sorting`, instance
-  `test`, Softbus). Left: IP-13's OPC UA half (the instance in TCP/IP mode on
-  the PLCSIM virtual adapter's subnet, 192.168.0.x), IP-11's OpenPLC half, and
-  a program a student wrote.
+- **IP-11** — the Siemens half was done on 2026-09-29 with the user's
+  permission (TIA project `FactoryForge_Sorting`, PLCSIM instance `test`).
+  Left: IP-11's OpenPLC half, and a program a student wrote. IP-13 is done.
 
 ### Left, no one else needed
 
@@ -689,7 +687,7 @@ real OpenPLC runtime and found gotcha 25 (`AGENTS.md`).
 | IP-10 | A starter program for every graded scene | 2 | L |  | **done** (see git log for gen_starters) |
 | IP-11 | Grade a program nobody on the project wrote | 2 | M |  | partly done 2026-09-29: Siemens half -- `Sorting.scl` FAIL 10/15 (panel and fault checks only), the first-hour program in SCL PASS 15/15 at seeds 1-3, on PLCSIM through the native driver (`examples/graded/`); OpenPLC half open; no student-written program yet |
 | IP-12 | Mark the operator contract and the fault | 2 | L |  | **done** ae3c44e (faults on sorting, dosing, heat-treat), 3a6a494 (E-stop / Start / Reset on all 18 panel scenes) |
-| IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | partly done 2026-09-29: native half -- unchanged `Sorting.scl` v0.4 on PLCSIM (Softbus), `demo --driver plcsim-advanced`: 48 tall / 48 short in 300 s, and 18 / 20 in 120 s (one tall carton counted short at 81 s); OPC UA half open (needs the instance in TCP/IP mode) |
+| IP-13 | The same TIA program over both drivers (HP-46) | 2 | M |  | **done** 2026-09-29: unchanged `Sorting.scl` v0.4 on an S7-1500 in PLCSIM Advanced, 300 s each, `demo`: native driver (Softbus) **48 tall / 48 short**, OPC UA client (TCP/IP, `opc.tcp://192.168.0.20:4840`) **48 tall / 48 short**, no misroutes either way. A shorter native run, 120 s, gave 18 / 20: one tall carton counted short at 81 s |
 | IP-14 | Three scenes for the seven parts with none | 3 | L | ● | **done** 1c3f031..bac0b06: six scenes, 10 of 11 parts; PivotDiverter is IP-32 |
 | IP-15 | A second level, so the lift has somewhere to go | 3 | L |  | **done** ba6a72a, 728d65c |
 | IP-16 | Raw analog, the way a PLC sees it | 3 | M |  | **done** ca39193, ffe1aba (inputs; outputs are IP-28) |

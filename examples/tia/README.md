@@ -7,6 +7,11 @@ S7-1500 sorts boxes by height in the FactoryForge simulation, over OPC UA.
 Only Advanced provides a virtual Ethernet adapter, and without it nothing
 outside TIA Portal can reach the CPU.
 
+**Verified on both drivers.** On 2026-09-29 this folder's unchanged
+`Sorting.scl` v0.4 ran for 300 s on an S7-1500 (1511-1 PN, FW 2.9) in PLCSIM
+Advanced V6.0 Upd1, once through `--driver plcsim-advanced` and once through
+`--driver opcua-client`: 48 tall / 48 short both times, none misrouted.
+
 **Restart the CPU before every graded run.** A PLC keeps its program state
 when the grader disconnects, so a line the last run left started is already
 running when the next exam begins, and fails `line.started_by_start` at 0.01 s.
