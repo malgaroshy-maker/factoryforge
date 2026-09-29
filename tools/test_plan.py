@@ -446,6 +446,21 @@ def section_a() -> None:
     record("A8", "every file under engine/assets/ is on record in ASSETS.md",
            *unrecorded_assets())
 
+    record("A9", "every template in the manifest has a start-screen thumbnail, and no stray one",
+           *thumbnail_gaps())
+
+
+def thumbnail_gaps() -> tuple[bool, str]:
+    """A9's findings. A template added without running
+    tools/make_thumbnails.py gets a blank card on the start screen, and one
+    removed leaves its picture shipping in every release (V12-07)."""
+    templates = ROOT / "engine" / "templates"
+    ids = {e["id"] for e in json.loads((templates / "manifest.json").read_text(encoding="utf-8"))}
+    have = {p.stem for p in (templates / "thumbnails").glob("*.jpg")}
+    problems = [f"no thumbnail: {i}" for i in sorted(ids - have)] + \
+               [f"stray thumbnail: {i}" for i in sorted(have - ids)]
+    return not problems, "; ".join(problems[:5])
+
 
 def unrecorded_assets() -> tuple[bool, str]:
     """A8's findings. v1.2 brings generated art, and its ground rules say every
@@ -463,7 +478,14 @@ def unrecorded_assets() -> tuple[bool, str]:
         p.relative_to(assets).as_posix() for p in assets.rglob("*")
         if p.is_file() and p != record_file and p.suffix not in (".import", ".uid")
         and f"`{p.relative_to(assets).as_posix()}`" not in text)
-    return not unlisted, ", ".join(unlisted[:6])
+    # On record but never committed is the same as missing on every other
+    # clone: the logo's first commit lost it to the repo-wide *.png ignore.
+    out = subprocess.run(["git", "ls-files", "--others", "--ignored", "--exclude-standard",
+                          "--", "engine/assets"], cwd=ROOT, capture_output=True, text=True).stdout
+    # *.import is ignored repo-wide on purpose: Godot regenerates it on import.
+    ignored = sorted(line for line in out.splitlines() if line and not line.endswith(".import"))
+    problems = [f"not on record: {p}" for p in unlisted] + [f"ignored by git: {p}" for p in ignored]
+    return not problems, ", ".join(problems[:6])
 
 
 def missing_uids() -> tuple[bool, str]:

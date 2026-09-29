@@ -33,9 +33,14 @@ dist/
 # Without this line it would match *.png, never get committed, and every
 # clone but this one would export with a missing icon -- the exact shape of
 # bug FF-30 already found once with a different ignored file.
+#
+# engine/assets/ is shipped art (the logo, the splash; ASSETS.md records each
+# file). The first commit of the logo matched *.png and left it out, and the
+# splash with it (V12-06); test_plan A8 now fails on an ignored asset.
 *.png
 !docs/images/**/*.png
 !engine/icon.png
+!engine/assets/**/*.png
 *.log
 scratch/
 

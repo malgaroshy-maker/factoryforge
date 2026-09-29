@@ -172,7 +172,8 @@ repository setting the user does in GitHub's UI.
 *Size:* S. *Credits:* ≈ **3–5**.
 
 **V12-07 — Template thumbnails from the real engine** · gate
-*Files:* `tools/record_thumbnails.py` (new), the start screen, `engine/assets/thumbnails/`.
+*Files:* `tools/make_thumbnails.py` (new), the start screen, `engine/templates/thumbnails/`
+(not under `engine/assets/`, which is for generated files).
 *Done when:* every start-screen card shows a picture of its scene, rendered by
 the engine with the filming flags (`--film --camera`), not generated — a card
 must show the scene the student will get. Re-rendering is one command.
@@ -331,7 +332,7 @@ V12-12, 13, 18 and 20 run whenever their decision or person arrives.
 | V12-04 | Set dressing from generated 3D models | A | L |  | open |
 | V12-05 | Better housings for static parts | A | L |  | open (stretch) |
 | V12-06 | A logo and a real icon | B | S | ● | done (2026-09-29, concept 1 of 4; uploading `docs/images/social_preview.png` in GitHub's settings is the user's) |
-| V12-07 | Template thumbnails from the real engine | B | M | ● | open |
+| V12-07 | Template thumbnails from the real engine | B | M | ● | done (2026-09-29, `tools/make_thumbnails.py`; the start screen is now a full-screen menu over a generated background, with a card per template) |
 | V12-08 | A theme and a font | B | M | ● | open |
 | V12-09 | An Arabic interface | B | L | ● | open |
 | V12-10 | A first-run welcome | B | S |  | open |

@@ -30,6 +30,7 @@ console.higgsfield.ai.
 | Batch | Date | Jobs | Kept |
 |---|---|---|---|
 | V12-06 logo concepts | 2026-09-29 | 4 | 1 |
+| Start-screen background | 2026-09-29 | 1 | 1 |
 
 ## Files
 
@@ -52,8 +53,11 @@ console.higgsfield.ai.
   anvil, FF monogram, ladder-logic contact), chosen by the author for
   readability at 32 px.
 
-Derived from it by `tools/make_branding.py` (outside this folder, listed so
-their origin is on record):
+Derived from it by `tools/make_branding.py`:
+
+- `branding/splash.png` (320 px, the boot splash on `project.godot`'s navy)
+
+and, outside this folder (listed so their origin is on record):
 
 - `engine/icon.png` (256 px, window and Linux icon)
 - `engine/icon.ico` (16–256 px, Windows executable icon)
@@ -61,3 +65,27 @@ their origin is on record):
 - `docs/images/social_preview.png` (1280×640, GitHub social preview)
 
 The banner and social preview set their text in Segoe UI.
+
+### `menu/start_background.jpg`
+
+- **Model:** `marketing-studio/image/flare`
+- **Date:** 2026-09-29
+- **Job id:** `2f8576e9-bb49-4293-bd00-c1b59972a4a0`
+- **Arguments:** `aspect_ratio: "16:9"`
+- **Prompt:** Soft stylised 3D render of a small factory floor seen from a
+  high three-quarter angle, conveyors, a pusher, a chute and stacked cartons,
+  simple clean shapes and matte materials like a toy model, gentle ambient
+  light, the left third empty floor, dark navy base colour with orange and teal
+  accents, calm, uncluttered, no people, no text, no logos, wide 16:9
+  background for an application menu
+- **Edits:** scaled from 2688×1520 to 1920×1080 (`tools/make_branding.py
+  --menu-raw`). The start screen darkens it with a gradient at run time; the
+  file itself is unaltered.
+- **Picked from:** the only one generated. It was concept B of three proposed.
+  The author chose it over a photoreal hall, which would have made the
+  engine's own simple 3D look plainer by comparison, and over an abstract
+  blueprint.
+
+Not generated, and so not listed as generated: the template thumbnails in
+`engine/templates/thumbnails/` are frames of the real engine, rendered by
+`tools/make_thumbnails.py`.

@@ -2,6 +2,7 @@
 
     python tools/make_branding.py                      # derivatives from the master
     python tools/make_branding.py --from-raw <png>     # re-cut the master first
+    python tools/make_branding.py --menu-raw <png>     # re-cut the start-screen background
 
 The master is engine/assets/branding/logo_1024.png: the picked Higgsfield
 concept with its rounded square re-masked, because the generated image sits on
@@ -12,6 +13,10 @@ derived from it, so a new logo means replacing one file and running this:
     engine/icon.ico                   16-256 px, the Windows executable's icon
     docs/images/banner.png            the README header
     docs/images/social_preview.png    1280x640, GitHub's social preview
+    engine/assets/branding/splash.png the boot splash, on project.godot's navy
+
+The start screen's background (engine/assets/menu/start_background.jpg) is a
+second generated image, only resized: --menu-raw.
 
 Needs Pillow. The text uses Segoe UI, so the banner is built on Windows.
 """
@@ -24,6 +29,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "engine" / "assets" / "branding" / "logo_1024.png"
+MENU_BACKGROUND = ROOT / "engine" / "assets" / "menu" / "start_background.jpg"
 NAVY = (4, 25, 72)            # the generated square's own background
 ORANGE = (255, 138, 20)
 TEAL = (22, 190, 190)
@@ -93,19 +99,26 @@ def lockup(w: int, h: int, logo_px: int, title_px: int, tag_px: int, credit: boo
 def derivatives() -> None:
     master = Image.open(MASTER)
     master.resize((256, 256), Image.LANCZOS).save(ROOT / "engine" / "icon.png", optimize=True)
+    master.resize((320, 320), Image.LANCZOS).save(MASTER.with_name("splash.png"), optimize=True)
     master.save(ROOT / "engine" / "icon.ico",
                 sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     images = ROOT / "docs" / "images"
     lockup(1280, 320, 224, 104, 34, credit=False).save(images / "banner.png", optimize=True)
     lockup(1280, 640, 400, 120, 36, credit=True).save(images / "social_preview.png", optimize=True)
-    for p in ("engine/icon.png", "engine/icon.ico", "docs/images/banner.png", "docs/images/social_preview.png"):
+    for p in ("engine/assets/branding/splash.png", "engine/icon.png", "engine/icon.ico", "docs/images/banner.png", "docs/images/social_preview.png"):
         print(p, (ROOT / p).stat().st_size, "bytes")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from-raw", type=Path, help="re-cut the master from a generated image first")
+    ap.add_argument("--menu-raw", type=Path, help="re-cut the start-screen background from a generated image")
     args = ap.parse_args()
     if args.from_raw:
         cut_master(args.from_raw)
+    if args.menu_raw:
+        MENU_BACKGROUND.parent.mkdir(parents=True, exist_ok=True)
+        Image.open(args.menu_raw).convert("RGB").resize((1920, 1080), Image.LANCZOS).save(
+            MENU_BACKGROUND, quality=88, optimize=True)
+        print("menu", MENU_BACKGROUND.relative_to(ROOT), MENU_BACKGROUND.stat().st_size, "bytes")
     derivatives()
