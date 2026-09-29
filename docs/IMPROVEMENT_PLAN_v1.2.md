@@ -91,14 +91,18 @@ textures were also tiled 2×2 to expose seams.
 
 | Job | Use | Runner-up | Avoid, and why |
 |---|---|---|---|
-| Seamless textures | `xai/grok-imagine-image-2.0` — realistic, even, tiles with almost no seam | `alibaba/qwen-image-3/text-to-image` plus a seam-blend pass (corner vignette) | Ideogram (paints the repeats into the image), Recraft (reads as galvanised metal) |
-| Logo / icon | `xai/grok-imagine-image-2.0` — clearest box-on-conveyor-in-a-gear, reads small | `recraft/v4.1/pro/text-to-image` — cleanest vector look | `z-image/turbo` (wrote text into a "no text" icon) |
-| Printed text (carton labels, signs) | `recraft/v4.1/text-to-image` — every line right, flat print, 14 s | Grok, Qwen (also exact) | `z-image/turbo` (garbled barcode text, sideways arrows) |
-| Hero / site / README art | `xai/grok-imagine-image-2.0` — the only one that drew the pusher, chute and gantry asked for | `recraft/v4.1/text-to-image` | — |
+| Seamless textures | `marketing-studio/image/flare` — realistic speckled concrete, tiles cleaner than Grok, 48 s | `xai/grok-imagine-image-2.0`; `marketing-studio/image` (most seamless, but bland) | Ideogram (paints the repeats into the image), Recraft (reads as galvanised metal) |
+| Logo / icon | `marketing-studio/image/flare` — the most polished gear-box-conveyor mark, two-tone | `marketing-studio/image`, Grok | `z-image/turbo` (wrote text into a "no text" icon) |
+| Flat printed decals (labels on 3D cartons) | `recraft/v4.1/text-to-image` — every line right, flat print, 14 s | `marketing-studio/image/sunburst` (exact, richer design) | `z-image/turbo` (garbled barcode text, sideways arrows) |
+| Hero / site / README art | `marketing-studio/image/flare` — detailed, believable, shows the gantry and chute, 33 s | `marketing-studio/image/sunburst`, Grok | — |
 
-Grok is the slowest (70–96 s a job) and best at three of the four. The API does
-not report a job's price; read it from the console's usage page. Qwen and
-Z-Image were intermittently "temporarily unavailable" (not charged).
+Ten models were compared on the same four prompts: Recraft V4.1 and V4.1 Pro,
+Ideogram 4.0, Qwen Image 3, Z-Image Turbo, Grok Imagine 2.0, and Marketing
+Studio Image in its base, Flare and Sunburst variants. Marketing Studio Flare
+won three of the four and is among the fastest (33–48 s; the base variant took
+94–196 s, Grok 70–96 s). The API does not report a job's price; read it from
+the console's usage page. Qwen and Z-Image were intermittently "temporarily
+unavailable" (not charged).
 
 ---
 
