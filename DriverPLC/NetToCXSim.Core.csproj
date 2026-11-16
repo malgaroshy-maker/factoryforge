@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net472;netstandard2.0</TargetFrameworks>
+    <RootNamespace>NetToCXSim.Core</RootNamespace>
+    <AssemblyName>NetToCXSim.Core</AssemblyName>
+    <Description>Core communication library for Omron CX-Simulator PLC memory access and FINS TCP/UDP server</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

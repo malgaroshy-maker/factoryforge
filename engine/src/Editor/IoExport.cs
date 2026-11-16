@@ -114,6 +114,66 @@ public static class IoExport
         return map;
     }
 
+    /// <summary>
+    /// Suggested Omron PLC addresses for Omron CX-Simulator
+    /// (Inputs: CIO 0.00.., Outputs: CIO 100.00.., Registers: D0..).
+    /// </summary>
+    public static Dictionary<string, string> SuggestOmronAddresses(TagTable tags)
+    {
+        var map = new Dictionary<string, string>();
+        int inWord = 0;
+        int inBit = 0;
+        int outWord = 100;
+        int outBit = 0;
+        int dWord = 0;
+
+        foreach (var tag in tags)
+        {
+            if (tag.Kind == TagKind.Input)
+            {
+                // Input dari sudut pandang PLC (Sensor, tombol operator)
+                // Standar Omron CP1/CPM: 12 input per channel (0.00 s/d 0.11, lalu lanjut ke 1.00 s/d 1.11)
+                if (tag.Type == TagType.Bit)
+                {
+                    map[tag.Id] = $"{inWord}.{inBit:D2}";
+                    inBit++;
+                    if (inBit > 11)
+                    {
+                        inBit = 0;
+                        inWord++;
+                    }
+                }
+                else
+                {
+                    map[tag.Id] = $"D{dWord}";
+                    dWord += 2;
+                }
+            }
+            else
+            {
+                // Output dari sudut pandang PLC (Motor, aktuator, lampu)
+                // Standar Omron CP1/CPM: 8 output per channel (100.00 s/d 100.07, lalu lanjut ke 101.00 s/d 101.07)
+                if (tag.Type == TagType.Bit)
+                {
+                    map[tag.Id] = $"{outWord}.{outBit:D2}";
+                    outBit++;
+                    if (outBit > 7)
+                    {
+                        outBit = 0;
+                        outWord++;
+                    }
+                }
+                else
+                {
+                    map[tag.Id] = $"D{dWord}";
+                    dWord += 2;
+                }
+            }
+        }
+
+        return map;
+    }
+
     private static string Write(string path, string contents)
     {
         using var file = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Write);

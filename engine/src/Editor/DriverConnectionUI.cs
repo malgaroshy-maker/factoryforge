@@ -17,12 +17,21 @@ public partial class DriverConnectionUI : Control
     /// <summary>Process id of the sidecar started from this dialog, so it can be
     /// stopped and is not left holding a PLC session when the window closes.</summary>
     private int _sidecarPid;
+    private Label _ipLabel = null!;
     private LineEdit _ipInput = null!;
+    private Label _portLabel = null!;
     private LineEdit _portInput = null!;
+    private Label _instanceLabel = null!;
     private LineEdit _instanceInput = null!;
+    private Label _dbLabel = null!;
     private LineEdit _dbInput = null!;
+    private Label _modbusHostLabel = null!;
     private LineEdit _modbusHostInput = null!;
+    private Label _modbusPortLabel = null!;
     private LineEdit _modbusPortInput = null!;
+    private Label _bindNote = null!;
+    private PanelContainer _omronInfoCard = null!;
+    private Label _omronStatusLabel = null!;
     private Label _statusLabel = null!;
 
     /// <summary>Set by Main so the empty-state offer (UX-33) can name and run
@@ -175,7 +184,8 @@ public partial class DriverConnectionUI : Control
         _driverDropdown.AddItem("OPC UA Client (S7-1500 / Codesys / Beckhoff)", 3);
         _driverDropdown.AddItem("OPC UA Server (Node-RED / Ignition SCADA)", 4);
         _driverDropdown.AddItem("Modbus TCP Server (OpenPLC / SCADA)", 5);
-        _driverDropdown.AddItem("Standalone Simulation (Internal Mock)", 6);
+        _driverDropdown.AddItem("Omron CX Simulator by Ismail Lowkey", 6);
+        _driverDropdown.AddItem("Standalone Simulation (Internal Mock)", 7);
         _driverDropdown.ItemSelected += OnDriverSelected;
         mainBox.AddChild(_driverDropdown);
 
@@ -185,7 +195,8 @@ public partial class DriverConnectionUI : Control
         var grid = new GridContainer { Columns = 2 };
         mainBox.AddChild(grid);
 
-        grid.AddChild(new Label { Text = "PLC IP Address / Host:" });
+        _ipLabel = new Label { Text = "PLC IP Address / Host:" };
+        grid.AddChild(_ipLabel);
         _ipInput = new LineEdit
         {
             Text = IpAddress,
@@ -194,11 +205,13 @@ public partial class DriverConnectionUI : Control
         };
         grid.AddChild(_ipInput);
 
-        grid.AddChild(new Label { Text = "PLC Port / OPC UA URL:" });
+        _portLabel = new Label { Text = "PLC Port / OPC UA URL:" };
+        grid.AddChild(_portLabel);
         _portInput = new LineEdit { Text = PortOrUrl, CustomMinimumSize = new Vector2(400, 32) };
         grid.AddChild(_portInput);
 
-        grid.AddChild(new Label { Text = "PLCSIM Instance Name:" });
+        _instanceLabel = new Label { Text = "PLCSIM Instance Name:" };
+        grid.AddChild(_instanceLabel);
         _instanceInput = new LineEdit
         {
             Text = InstanceName,
@@ -207,11 +220,13 @@ public partial class DriverConnectionUI : Control
         };
         grid.AddChild(_instanceInput);
 
-        grid.AddChild(new Label { Text = "S7 DB Number:" });
+        _dbLabel = new Label { Text = "S7 DB Number:" };
+        grid.AddChild(_dbLabel);
         _dbInput = new LineEdit { Text = DbNumber.ToString(), CustomMinimumSize = new Vector2(400, 32) };
         grid.AddChild(_dbInput);
 
-        grid.AddChild(new Label { Text = "Modbus Server Bind Host:" });
+        _modbusHostLabel = new Label { Text = "Modbus Server Bind Host:" };
+        grid.AddChild(_modbusHostLabel);
         _modbusHostInput = new LineEdit
         {
             Text = ModbusHost,
@@ -220,7 +235,8 @@ public partial class DriverConnectionUI : Control
         };
         grid.AddChild(_modbusHostInput);
 
-        grid.AddChild(new Label { Text = "Modbus Server Port:" });
+        _modbusPortLabel = new Label { Text = "Modbus Server Port:" };
+        grid.AddChild(_modbusPortLabel);
         _modbusPortInput = new LineEdit
         {
             Text = ModbusPort.ToString(),
@@ -229,18 +245,57 @@ public partial class DriverConnectionUI : Control
         };
         grid.AddChild(_modbusPortInput);
 
-        // What binding wider costs, said where the choice is made rather than
-        // only in the sidecar's log after the fact.
-        var bindNote = new Label
+        _bindNote = new Label
         {
             Text = "127.0.0.1 serves this PC only. 0.0.0.0 or this PC's address lets other "
                  + "machines (OpenPLC in WSL) connect — Modbus has no password, and Windows "
                  + "may ask about the firewall.",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
         };
-        bindNote.AddThemeFontSizeOverride("font_size", 11);
-        bindNote.AddThemeColorOverride("font_color", new Color(0.80f, 0.80f, 0.85f));
-        mainBox.AddChild(bindNote);
+        _bindNote.AddThemeFontSizeOverride("font_size", 11);
+        _bindNote.AddThemeColorOverride("font_color", new Color(0.80f, 0.80f, 0.85f));
+        mainBox.AddChild(_bindNote);
+
+        // Panel informasi khusus Omron CX-Simulator (Direct Local Memory Injection)
+        _omronInfoCard = new PanelContainer();
+        var omronMargin = new MarginContainer();
+        omronMargin.AddThemeConstantOverride("margin_top", 10);
+        omronMargin.AddThemeConstantOverride("margin_bottom", 10);
+        omronMargin.AddThemeConstantOverride("margin_left", 14);
+        omronMargin.AddThemeConstantOverride("margin_right", 14);
+        _omronInfoCard.AddChild(omronMargin);
+
+        var omronBox = new VBoxContainer();
+        omronMargin.AddChild(omronBox);
+
+        var omronHeader = new Label
+        {
+            Text = "⚡ Direct Local Memory Injection (NetToCXSim.Core by Ismail Lowkey)",
+        };
+        omronHeader.AddThemeFontSizeOverride("font_size", 13);
+        omronHeader.AddThemeColorOverride("font_color", new Color(0.35f, 0.90f, 1.0f));
+        omronBox.AddChild(omronHeader);
+
+        var omronDesc = new Label
+        {
+            Text = "Driver ini membaca dan menulis langsung ke proses memori lokal simulator Omron (CxCpuMain.exe / CxCpuMainCS2.exe) dengan zero network latency. Tidak membutuhkan konfigurasi IP Address, Port, maupun koneksi jaringan.",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        omronDesc.AddThemeFontSizeOverride("font_size", 11);
+        omronDesc.AddThemeColorOverride("font_color", new Color(0.85f, 0.85f, 0.90f));
+        omronBox.AddChild(omronDesc);
+
+        _omronStatusLabel = new Label
+        {
+            Text = "Status: Memeriksa proses CX-Simulator...",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _omronStatusLabel.AddThemeFontSizeOverride("font_size", 11);
+        omronBox.AddChild(_omronStatusLabel);
+
+        mainBox.AddChild(_omronInfoCard);
+
+        UpdateFormVisibility();
 
         mainBox.AddChild(new HSeparator());
 
@@ -303,6 +358,10 @@ public partial class DriverConnectionUI : Control
     public void ToggleVisibility()
     {
         Visible = !Visible;
+        if (Visible)
+        {
+            UpdateFormVisibility();
+        }
     }
 
     private void OnDriverSelected(long index)
@@ -313,15 +372,37 @@ public partial class DriverConnectionUI : Control
             return;
         }
 
-        SelectedDriver = index switch
+        // Pemilihan driver secara eksplisit menggunakan if-else terstruktur
+        if (index == 1)
         {
-            1 => "plcsim-advanced",
-            2 => "s7-snap7",
-            3 => "opcua-client",
-            4 => "opcua-server",
-            5 => "modbus-tcp",
-            _ => "mock"
-        };
+            SelectedDriver = "plcsim-advanced";
+        }
+        else if (index == 2)
+        {
+            SelectedDriver = "s7-snap7";
+        }
+        else if (index == 3)
+        {
+            SelectedDriver = "opcua-client";
+        }
+        else if (index == 4)
+        {
+            SelectedDriver = "opcua-server";
+        }
+        else if (index == 5)
+        {
+            SelectedDriver = "modbus-tcp";
+        }
+        else if (index == 6)
+        {
+            SelectedDriver = "omron-cxsim";
+        }
+        else
+        {
+            SelectedDriver = "mock";
+        }
+
+        UpdateFormVisibility();
     }
 
     /// <summary>
@@ -350,19 +431,47 @@ public partial class DriverConnectionUI : Control
 
         try
         {
-            if (!string.IsNullOrEmpty(targetIp) && await ProbePortAsync(targetIp, 4840))
+            // Periksa terlebih dahulu apakah proses simulator Omron CX-Simulator sedang aktif
+            bool isOmronSimRunning = false;
+            try
             {
-                (driver, dropdownIndex, found) = ("opcua-client", 3, true);
+                if (System.Diagnostics.Process.GetProcessesByName("CxCpuMain").Length > 0 ||
+                    System.Diagnostics.Process.GetProcessesByName("CxCpuMainCS2").Length > 0)
+                {
+                    isOmronSimRunning = true;
+                }
+            }
+            catch
+            {
+                isOmronSimRunning = false;
+            }
+
+            if (isOmronSimRunning)
+            {
+                driver = "omron-cxsim";
+                dropdownIndex = 6;
+                found = true;
+                message = "✅ Auto-Detected: Active Omron CX-Simulator process (Omron CX Simulator by Ismail Lowkey)";
+            }
+            else if (!string.IsNullOrEmpty(targetIp) && await ProbePortAsync(targetIp, 4840))
+            {
+                driver = "opcua-client";
+                dropdownIndex = 3;
+                found = true;
                 message = $"✅ Auto-Detected: Active OPC UA Server at {targetIp}:4840";
             }
             else if (!string.IsNullOrEmpty(targetIp) && await ProbePortAsync(targetIp, 102))
             {
-                (driver, dropdownIndex, found) = ("s7-snap7", 2, true);
+                driver = "s7-snap7";
+                dropdownIndex = 2;
+                found = true;
                 message = $"✅ Auto-Detected: Active Siemens S7 CPU at {targetIp}:102";
             }
             else if (!string.IsNullOrEmpty(targetIp) && await ProbePortAsync(targetIp, 502))
             {
-                (driver, dropdownIndex, found) = ("modbus-tcp", 5, true);
+                driver = "modbus-tcp";
+                dropdownIndex = 5;
+                found = true;
                 message = $"✅ Auto-Detected: Active Modbus TCP Server at {targetIp}:502";
             }
             else
@@ -397,6 +506,7 @@ public partial class DriverConnectionUI : Control
             _statusLabel.Text = message;
             _statusLabel.AddThemeColorOverride("font_color",
                 found ? new Color(0.3f, 1.0f, 0.4f) : new Color(0.98f, 0.80f, 0.35f));
+            UpdateFormVisibility();
         }).CallDeferred();
     }
 
@@ -413,6 +523,158 @@ public partial class DriverConnectionUI : Control
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Menyesuaikan tampilan form parameter secara dinamis sesuai driver yang dipilih.
+    /// Driver Omron CX-Simulator (NetToCXSim.Core) mengakses memori proses lokal secara langsung,
+    /// sehingga menyembunyikan input IP, Port, Instance Name, DB Number, dan Modbus setting.
+    /// </summary>
+    private void UpdateFormVisibility()
+    {
+        if (SelectedDriver == "omron-cxsim")
+        {
+            // Omron CX-Simulator: Direct Memory Injection (Tanpa konfigurasi jaringan)
+            _ipLabel.Visible = false;
+            _ipInput.Visible = false;
+            _portLabel.Visible = false;
+            _portInput.Visible = false;
+            _instanceLabel.Visible = false;
+            _instanceInput.Visible = false;
+            _dbLabel.Visible = false;
+            _dbInput.Visible = false;
+            _modbusHostLabel.Visible = false;
+            _modbusHostInput.Visible = false;
+            _modbusPortLabel.Visible = false;
+            _modbusPortInput.Visible = false;
+            _bindNote.Visible = false;
+
+            _omronInfoCard.Visible = true;
+            UpdateOmronProcessStatus();
+        }
+        else if (SelectedDriver == "plcsim-advanced")
+        {
+            // Siemens PLCSIM Advanced: Direct Shared Memory API
+            _ipLabel.Visible = false;
+            _ipInput.Visible = false;
+            _portLabel.Visible = false;
+            _portInput.Visible = false;
+            _instanceLabel.Visible = true;
+            _instanceInput.Visible = true;
+            _dbLabel.Visible = false;
+            _dbInput.Visible = false;
+            _modbusHostLabel.Visible = false;
+            _modbusHostInput.Visible = false;
+            _modbusPortLabel.Visible = false;
+            _modbusPortInput.Visible = false;
+            _bindNote.Visible = false;
+
+            _omronInfoCard.Visible = false;
+        }
+        else if (SelectedDriver == "s7-snap7")
+        {
+            // Siemens S7 ISO-on-TCP: Butuh IP dan DB number
+            _ipLabel.Visible = true;
+            _ipInput.Visible = true;
+            _portLabel.Visible = false;
+            _portInput.Visible = false;
+            _instanceLabel.Visible = false;
+            _instanceInput.Visible = false;
+            _dbLabel.Visible = true;
+            _dbInput.Visible = true;
+            _modbusHostLabel.Visible = false;
+            _modbusHostInput.Visible = false;
+            _modbusPortLabel.Visible = false;
+            _modbusPortInput.Visible = false;
+            _bindNote.Visible = false;
+
+            _omronInfoCard.Visible = false;
+        }
+        else if (SelectedDriver == "opcua-client")
+        {
+            // OPC UA Client: Butuh IP dan Port/URL
+            _ipLabel.Visible = true;
+            _ipInput.Visible = true;
+            _portLabel.Visible = true;
+            _portInput.Visible = true;
+            _instanceLabel.Visible = false;
+            _instanceInput.Visible = false;
+            _dbLabel.Visible = false;
+            _dbInput.Visible = false;
+            _modbusHostLabel.Visible = false;
+            _modbusHostInput.Visible = false;
+            _modbusPortLabel.Visible = false;
+            _modbusPortInput.Visible = false;
+            _bindNote.Visible = false;
+
+            _omronInfoCard.Visible = false;
+        }
+        else if (SelectedDriver == "modbus-tcp")
+        {
+            // Modbus TCP Server: Butuh Host dan Port bind
+            _ipLabel.Visible = false;
+            _ipInput.Visible = false;
+            _portLabel.Visible = false;
+            _portInput.Visible = false;
+            _instanceLabel.Visible = false;
+            _instanceInput.Visible = false;
+            _dbLabel.Visible = false;
+            _dbInput.Visible = false;
+            _modbusHostLabel.Visible = true;
+            _modbusHostInput.Visible = true;
+            _modbusPortLabel.Visible = true;
+            _modbusPortInput.Visible = true;
+            _bindNote.Visible = true;
+
+            _omronInfoCard.Visible = false;
+        }
+        else
+        {
+            // Standalone / Mock / OPC UA Server
+            _ipLabel.Visible = false;
+            _ipInput.Visible = false;
+            _portLabel.Visible = false;
+            _portInput.Visible = false;
+            _instanceLabel.Visible = false;
+            _instanceInput.Visible = false;
+            _dbLabel.Visible = false;
+            _dbInput.Visible = false;
+            _modbusHostLabel.Visible = false;
+            _modbusHostInput.Visible = false;
+            _modbusPortLabel.Visible = false;
+            _modbusPortInput.Visible = false;
+            _bindNote.Visible = false;
+
+            _omronInfoCard.Visible = false;
+        }
+    }
+
+    private void UpdateOmronProcessStatus()
+    {
+        bool isRunning = false;
+        try
+        {
+            if (System.Diagnostics.Process.GetProcessesByName("CxCpuMain").Length > 0 ||
+                System.Diagnostics.Process.GetProcessesByName("CxCpuMainCS2").Length > 0)
+            {
+                isRunning = true;
+            }
+        }
+        catch
+        {
+            isRunning = false;
+        }
+
+        if (isRunning)
+        {
+            _omronStatusLabel.Text = "Status: ✅ Proses CX-Simulator terdeteksi aktif di sistem (CxCpuMain / CxCpuMainCS2). Siap terhubung!";
+            _omronStatusLabel.AddThemeColorOverride("font_color", new Color(0.3f, 1.0f, 0.4f));
+        }
+        else
+        {
+            _omronStatusLabel.Text = "Status: ℹ️ CX-Simulator belum berjalan. Silakan jalankan CX-Programmer/CX-Simulator, lalu klik 'Apply & Connect'.";
+            _omronStatusLabel.AddThemeColorOverride("font_color", new Color(0.95f, 0.85f, 0.4f));
         }
     }
 
@@ -463,6 +725,11 @@ public partial class DriverConnectionUI : Control
             case "opcua-server":
                 // Also a server, with no bind option in this dialog.
                 break;
+
+            case "omron-cxsim":
+                // Omron CX-Simulator driver by Ismail Lowkey
+                // Direct live memory access into CxCpuMain / CxCpuMainCS2
+                break;
         }
 
         // The F4 wiring panel writes one mapping file, and every *client*
@@ -480,9 +747,20 @@ public partial class DriverConnectionUI : Control
     /// <summary>Whether <see cref="BuildSidecarArguments"/> will actually pass
     /// the F4 wiring file for the currently selected driver — used to tell the
     /// operator plainly rather than let them assume it always does.</summary>
-    private bool WillUseMappingFile() =>
-        SelectedDriver is "opcua-client" or "s7-snap7" or "plcsim-advanced"
-        && Godot.FileAccess.FileExists(DriverWiringUI.MappingPath);
+    private bool WillUseMappingFile()
+    {
+        bool isSupportedDriver = SelectedDriver == "opcua-client" ||
+                                 SelectedDriver == "s7-snap7" ||
+                                 SelectedDriver == "plcsim-advanced" ||
+                                 SelectedDriver == "omron-cxsim";
+
+        if (isSupportedDriver && Godot.FileAccess.FileExists(DriverWiringUI.MappingPath))
+        {
+            return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Check a Modbus bind the user typed and take it only if both halves are
@@ -521,9 +799,38 @@ public partial class DriverConnectionUI : Control
     /// <summary>Read the form, start the sidecar, and report what happened.</summary>
     public void ApplyConnectionSettings()
     {
-        // Validated before anything is assigned or saved: refusing means
-        // nothing changes, not "the other fields took and the sidecar started
-        // on last time's bind".
+        // Pastikan SelectedDriver sinkron secara mutlak dengan item yang dipilih pada dropdown
+        int selectedIndex = _driverDropdown.Selected;
+        if (selectedIndex == 1)
+        {
+            SelectedDriver = "plcsim-advanced";
+        }
+        else if (selectedIndex == 2)
+        {
+            SelectedDriver = "s7-snap7";
+        }
+        else if (selectedIndex == 3)
+        {
+            SelectedDriver = "opcua-client";
+        }
+        else if (selectedIndex == 4)
+        {
+            SelectedDriver = "opcua-server";
+        }
+        else if (selectedIndex == 5)
+        {
+            SelectedDriver = "modbus-tcp";
+        }
+        else if (selectedIndex == 6)
+        {
+            SelectedDriver = "omron-cxsim";
+        }
+        else if (selectedIndex == 7)
+        {
+            SelectedDriver = "mock";
+        }
+
+        // Validasi input Modbus hanya jika driver Modbus yang dipilih
         if (SelectedDriver == "modbus-tcp"
             && !TryApplyModbusBind(_modbusHostInput.Text, _modbusPortInput.Text, out string bindError))
         {
@@ -595,13 +902,25 @@ public partial class DriverConnectionUI : Control
 
         _sidecarPid = pid;
         _statusLabel.AddThemeColorOverride("font_color", new Color(0.3f, 1.0f, 0.4f));
-        // Naming the wiring file (or its absence) here is the difference
-        // between "connected" and "connected to the addresses you actually
-        // meant" — F4 silently not reaching three of the four drivers was
-        // FF-05, and this is the line that would have caught it immediately.
-        string wiring = SelectedDriver == "modbus-tcp"
-            ? $"serving {ModbusHost}:{ModbusPort}"
-            : WillUseMappingFile() ? "using F4 wiring" : "no wiring file — driver defaults";
+
+        string wiring;
+        if (SelectedDriver == "omron-cxsim")
+        {
+            wiring = "direct memory injection (NetToCXSim.Core by Ismail Lowkey)";
+        }
+        else if (SelectedDriver == "modbus-tcp")
+        {
+            wiring = $"serving {ModbusHost}:{ModbusPort}";
+        }
+        else if (WillUseMappingFile())
+        {
+            wiring = "using F4 wiring";
+        }
+        else
+        {
+            wiring = "no wiring file — driver defaults";
+        }
+
         _statusLabel.Text = $"Sidecar running (pid {pid}) — driver '{SelectedDriver}', {wiring}";
         Visible = false;
     }

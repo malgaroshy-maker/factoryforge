@@ -50,7 +50,7 @@ def usable() -> dict[str, bool]:
     driver that is present, listed, and dead. `tools/packaging/check_release.py`
     asks this before letting a release out.
     """
-    from . import mqtt, plcsim_advanced, s7_snap7
+    from . import mqtt, omron_cxsim, plcsim_advanced, s7_snap7
 
     needs = {
         "s7-snap7": s7_snap7.HAS_SNAP7,
@@ -58,6 +58,7 @@ def usable() -> dict[str, bool]:
         "opcua-client": "opcua-client" in _REGISTRY,
         "opcua-server": "opcua-server" in _REGISTRY,
         "mqtt": mqtt.HAS_PAHO,
+        "omron-cxsim": omron_cxsim.HAS_OMRON_ENGINE,
     }
     return {name: needs.get(name, True) for name in available()}
 
@@ -235,7 +236,7 @@ class Driver(abc.ABC):
 
 
 # Importing the modules is what runs their @register decorators.
-from . import mock, modbus_tcp, mqtt, plcsim_advanced, s7_snap7  # noqa: E402,F401
+from . import mock, modbus_tcp, mqtt, omron_cxsim, plcsim_advanced, s7_snap7  # noqa: E402,F401
 
 # OPC UA is the primary integration path but pulls in a sizeable dependency.
 # A Modbus-only or CI-only install should not fail because it is absent.

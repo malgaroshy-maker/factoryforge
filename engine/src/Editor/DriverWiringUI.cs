@@ -16,9 +16,11 @@ public partial class DriverWiringUI : Control
     private readonly Dictionary<string, string> _mappings = new();
     private VBoxContainer _plcTagsList = null!;
     private VBoxContainer _simTagsList = null!;
+    private Label _leftTitle = null!;
     private Label _statusLabel = null!;
     private Label _commandLabel = null!;
     private string? _selectedPlcAddress;
+    private bool _useOmronAddressing = false;
 
     /// <summary>Where the wiring lives between sessions. <c>user://</c> is
     /// Godot's per-user data directory; the export prints the absolute path
@@ -94,13 +96,13 @@ public partial class DriverWiringUI : Control
         // Left Column: PLC Addresses
         var leftBox = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
         splitBox.AddChild(leftBox);
-        var leftTitle = new Label
+        _leftTitle = new Label
         {
             Text = "⚡ PLC / DRIVER SIGNALS (%I / %Q / OPC UA)",
             HorizontalAlignment = HorizontalAlignment.Center,
         };
-        leftTitle.AddThemeFontSizeOverride("font_size", 14);
-        leftBox.AddChild(leftTitle);
+        _leftTitle.AddThemeFontSizeOverride("font_size", 14);
+        leftBox.AddChild(_leftTitle);
 
         var leftScroll = new ScrollContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
         leftBox.AddChild(leftScroll);
@@ -142,11 +144,19 @@ public partial class DriverWiringUI : Control
 
         var autoMapBtn = new Button
         {
-            Text = " ⚡ Auto-Map Suggested Addresses ",
+            Text = " ⚡ Auto-Map IEC (%I/%Q) ",
             TooltipText = "Give every tag in this scene an IEC address, allocated in tag order",
         };
         autoMapBtn.Pressed += AutoMapByName;
         footer.AddChild(autoMapBtn);
+
+        var autoMapOmronBtn = new Button
+        {
+            Text = " ⚡ Auto-Map Omron (CIO) ",
+            TooltipText = "Give every tag in this scene an Omron CX-Simulator address (CIO 0.00 / 100.00 / D0)",
+        };
+        autoMapOmronBtn.Pressed += AutoMapOmron;
+        footer.AddChild(autoMapOmronBtn);
 
         var exportBtn = new Button
         {
@@ -193,10 +203,24 @@ public partial class DriverWiringUI : Control
         foreach (Node child in _plcTagsList.GetChildren()) child.QueueFree();
         foreach (Node child in _simTagsList.GetChildren()) child.QueueFree();
 
-        // The address column is generated from the scene's own tags. It used to
-        // be a hardcoded list of nine Siemens addresses describing the sorting
-        // demo, which meant a scene you built yourself had nothing to wire to.
-        var suggested = IoExport.SuggestIecAddresses(_tags);
+        // Kolom alamat di sebelah kiri disesuaikan dengan mode addressing yang aktif
+        Dictionary<string, string> suggested;
+        if (_useOmronAddressing)
+        {
+            suggested = IoExport.SuggestOmronAddresses(_tags);
+            if (_leftTitle is not null)
+            {
+                _leftTitle.Text = "⚡ PLC / DRIVER SIGNALS (Omron CIO / D)";
+            }
+        }
+        else
+        {
+            suggested = IoExport.SuggestIecAddresses(_tags);
+            if (_leftTitle is not null)
+            {
+                _leftTitle.Text = "⚡ PLC / DRIVER SIGNALS (%I / %Q / OPC UA)";
+            }
+        }
 
         foreach (var tag in _tags)
         {
@@ -278,6 +302,8 @@ public partial class DriverWiringUI : Control
     {
         if (_tags is null) return;
 
+        _useOmronAddressing = false;
+
         foreach (var (tagId, address) in IoExport.SuggestIecAddresses(_tags))
         {
             _mappings[tagId] = address;
@@ -285,6 +311,28 @@ public partial class DriverWiringUI : Control
 
         RebuildWiringList();
         _statusLabel.Text = $"Auto-mapped {_mappings.Count} tags to suggested IEC addresses";
+    }
+
+    /// <summary>
+    /// Memberi alamat Omron PLC (CIO 0.00 untuk input, CIO 100.00 untuk output, D0 untuk register)
+    /// ke setiap tag pada scene simulasi aktif.
+    /// </summary>
+    private void AutoMapOmron()
+    {
+        if (_tags is null)
+        {
+            return;
+        }
+
+        _useOmronAddressing = true;
+
+        foreach (var (tagId, address) in IoExport.SuggestOmronAddresses(_tags))
+        {
+            _mappings[tagId] = address;
+        }
+
+        RebuildWiringList();
+        _statusLabel.Text = $"Auto-mapped {_mappings.Count} tags to suggested Omron CX-Simulator addresses";
     }
 
     private void ClearAllMappings()
@@ -297,9 +345,7 @@ public partial class DriverWiringUI : Control
 
     /// <summary>
     /// Write the wiring out where the sidecar and the person building the PLC
-    /// side can both reach it. Until this existed the mappings lived in a
-    /// dictionary nothing outside this file ever read — the panel looked like it
-    /// configured something and configured nothing.
+    /// side can both reach it.
     /// </summary>
     private void ExportMappings()
     {
@@ -315,9 +361,18 @@ public partial class DriverWiringUI : Control
         }
 
         _statusLabel.Text = $"Wrote {mapPath} and {csvPath}";
-        _commandLabel.Text =
-            "python -m factoryforge_sidecar demo --driver opcua-client " +
-            $"--mapping \"{mapPath}\" -o url opc.tcp://<cpu-ip>:4840";
+        if (_useOmronAddressing)
+        {
+            _commandLabel.Text =
+                "python -m factoryforge_sidecar connect --driver omron-cxsim " +
+                $"--mapping \"{mapPath}\"";
+        }
+        else
+        {
+            _commandLabel.Text =
+                "python -m factoryforge_sidecar connect --driver opcua-client " +
+                $"--mapping \"{mapPath}\" -o url opc.tcp://<cpu-ip>:4840";
+        }
         GD.Print($"I/O exported:\n  {mapPath}\n  {csvPath}");
         DisplayServer.ClipboardSet(_commandLabel.Text);
     }
@@ -335,12 +390,17 @@ public partial class DriverWiringUI : Control
         foreach (var key in parsed.Keys)
         {
             string id = key.AsString();
-            // Leading underscore marks the comment keys the file carries for
-            // whoever edits it by hand; they are not tags.
             if (id.StartsWith("_")) continue;
 
             string address = parsed[key].AsString();
-            if (address.Length > 0) _mappings[id] = address;
+            if (address.Length > 0)
+            {
+                _mappings[id] = address;
+                if (address.StartsWith("D") || address.StartsWith("CIO") || address.StartsWith("W") || (char.IsDigit(address[0]) && address.Contains(".")))
+                {
+                    _useOmronAddressing = true;
+                }
+            }
         }
 
         GD.Print($"Loaded {_mappings.Count} I/O mappings from {MappingPath}");
